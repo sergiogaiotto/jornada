@@ -1,0 +1,105 @@
+# SDD §2.2 / §10.8 / §11 — ambiente dev completo
+# Sobe: db(pgvector), api, mock-sfmc, mock-datacloud, mailpit, langfuse + db-langfuse.
+# `web` (frontend Vite) entra a partir do MS3 (§9) — ver bloco comentado no fim.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: jornada
+      POSTGRES_PASSWORD: jornada
+      POSTGRES_DB: jornada
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jornada -d jornada"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false            # sem .env, valem os defaults dev do app/config.py
+    environment:
+      DATABASE_URL: postgresql+asyncpg://jornada:jornada@db:5432/jornada
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mock-sfmc:
+        condition: service_started
+      mock-datacloud:
+        condition: service_started
+      mailpit:
+        condition: service_started
+
+  mock-sfmc:                       # §11.1 — stub mínimo no M0; REST/SOAP completos no M9
+    build: ./mocks/sfmc-server
+    ports:
+      - "8080:8080"
+
+  mock-datacloud:                  # §11.2 — stub mínimo no M0; fixtures completas no M5
+    build: ./mocks/datacloud-server
+    ports:
+      - "8081:8081"
+
+  mailpit:                         # §11.3 — e-mails de notificação/link mágico em dev
+    image: axllent/mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  # --- Observabilidade (Langfuse self-hosted — §10.8) ---
+  db-langfuse:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - db-langfuse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  langfuse:
+    image: langfuse/langfuse:2
+    depends_on:
+      db-langfuse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@db-langfuse:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: dev-langfuse-secret     # somente dev; prod injeta via vault
+      SALT: dev-langfuse-salt                  # somente dev
+      TELEMETRY_ENABLED: "false"
+      # Bootstrap dev: projeto/chaves casando com o bloco Langfuse do .env.example
+      LANGFUSE_INIT_ORG_ID: jornada
+      LANGFUSE_INIT_ORG_NAME: Jornada
+      LANGFUSE_INIT_PROJECT_ID: jornada-dev
+      LANGFUSE_INIT_PROJECT_NAME: jornada-dev
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-dev
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-dev
+      LANGFUSE_INIT_USER_EMAIL: dev@jornada.local
+      LANGFUSE_INIT_USER_NAME: dev
+      LANGFUSE_INIT_USER_PASSWORD: jornada-dev
+    ports:
+      - "3000:3000"
+
+  # web:                           # habilitar no MS3+ (§9) quando frontend/ existir (§12)
+  #   build: ./frontend
+  #   ports:
+  #     - "5173:5173"
+
+volumes:
+  db-data:
+  db-langfuse-data:

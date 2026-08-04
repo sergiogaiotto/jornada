@@ -1,0 +1,57 @@
+# CI §13 — ruff + mypy + pytest (unit/contract/aceite) + validação compose.
+# Build do front e e2e compose entram quando frontend/ existir (MS3/MS8 — ver CHANGELOG-SDD.md).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov  # somente CI (gate de cobertura §13; não consta do §3.2)
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Ruff (format check)
+        run: ruff format --check .
+      - name: Mypy
+        run: mypy
+      - name: Pytest (unit/contract/aceite, sem integração) + cobertura >= 80%
+        run: >
+          python -m pytest -m "not integration"
+          --cov=app --cov=api --cov-report=term-missing --cov-fail-under=80
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        run: docker compose config -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build front (ativa quando frontend/package.json existir — MS3+)
+        if: ${{ hashFiles('frontend/package.json') != '' }}
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - name: Skip note
+        if: ${{ hashFiles('frontend/package.json') == '' }}
+        run: echo "frontend ainda não iniciado (MS3+ — SDD §9)"
+
+  # e2e-compose:   # ativar no MS8 (§13): docker compose up + Playwright jornada feliz OS-2026-0457

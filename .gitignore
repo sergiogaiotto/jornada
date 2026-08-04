@@ -1,0 +1,27 @@
+# Secrets — §10.3: secrets só via env/vault; .env nunca no repo
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Frontend
+node_modules/
+
+# IDE/OS
+.idea/
+.vscode/
+.DS_Store
