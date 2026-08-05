@@ -207,9 +207,7 @@ class ServicoSimulador:
         segmento = self._segmento_recontado(os_.id)
         priors = self._priors_vigentes(os_)
         briefing = os_.briefing or {}
-        ticket = _numero(valor_do_campo(briefing, "ticket_medio")) or float(
-            priors["ticket_medio"]
-        )
+        ticket = _numero(valor_do_campo(briefing, "ticket_medio")) or float(priors["ticket_medio"])
         verba = _numero(valor_do_campo(briefing, "verba"))
 
         ger = self._rng.gerador(seed)

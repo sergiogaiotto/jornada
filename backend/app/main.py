@@ -103,9 +103,7 @@ def create_app(*, demo: bool | None = None) -> FastAPI:
         from adapters.persistence.memoria import RepositorioOsMemoria
 
         repositorio = RepositorioOsMemoria()
-        semear_demo(
-            repositorio, tenant_id=settings.default_tenant, agora=datetime.now(UTC)
-        )
+        semear_demo(repositorio, tenant_id=settings.default_tenant, agora=datetime.now(UTC))
         app.state.repositorio_os = repositorio
 
     return app

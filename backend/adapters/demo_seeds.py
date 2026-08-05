@@ -319,9 +319,7 @@ def _semear_telemetria(
         _evento("conversion", _ts(i, _CONV_TRATADO + _CONV_HOLDOUT - 1), fonte="extract")
 
 
-def _propostas_demo(
-    os_: OS, jornada: JornadaVersao, agora: datetime
-) -> list[PropostaOtimizacao]:
+def _propostas_demo(os_: OS, jornada: JornadaVersao, agora: datetime) -> list[PropostaOtimizacao]:
     """2 propostas PENDENTES do optimize (mock T15) — diff/esforço/risco/score pelas
     MESMAS funções determinísticas do M11 (ranking.py/diff.py); decidir é humano."""
     base_p50 = {
@@ -384,8 +382,7 @@ def _propostas_demo(
         "Variante B com +9pp de abertura (significativo) na onda atual — promover "
         "para toda a audiência tratada.",
         grafo_b,
-        {"conversoes": 312.0, "custo": 4_246.3, "receita": 81_120.0, "roas": 19.1,
-         "lift_pp": 24.8},
+        {"conversoes": 312.0, "custo": 4_246.3, "receita": 81_120.0, "roas": 19.1, "lift_pp": 24.8},
         "verde",
     )
 
@@ -411,8 +408,7 @@ def _propostas_demo(
         "CTR do WhatsApp 30% abaixo do previsto no perfil de baixo engajamento — "
         "restringir ao decil superior corta 38% do custo do canal.",
         grafo_wa,
-        {"conversoes": 236.0, "custo": 2_633.1, "receita": 61_360.0, "roas": 18.3,
-         "lift_pp": 20.4},
+        {"conversoes": 236.0, "custo": 2_633.1, "receita": 61_360.0, "roas": 18.3, "lift_pp": 20.4},
         "verde",
     )
     return [proposta_b, proposta_wa]
@@ -435,8 +431,14 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             "agent_versions": {
                 nome: "1.0"
                 for nome in (
-                    "consultor", "engineer", "flow", "visual", "copy", "content",
-                    "insight", "optimize",
+                    "consultor",
+                    "engineer",
+                    "flow",
+                    "visual",
+                    "copy",
+                    "content",
+                    "insight",
+                    "optimize",
                 )
             },
             "policy_version": POLITICA_PUBLICADA["versao"],
@@ -451,16 +453,24 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
 
     # ------------------------------------------------------- esteira T4a (M2)
     etapas = (
-        ("briefing", "concluida"), ("discovery", "concluida"), ("audiencia", "concluida"),
-        ("criativos", "concluida"), ("configuracao", "concluida"), ("disparo", "concluida"),
+        ("briefing", "concluida"),
+        ("discovery", "concluida"),
+        ("audiencia", "concluida"),
+        ("criativos", "concluida"),
+        ("configuracao", "concluida"),
+        ("disparo", "concluida"),
         ("acompanhamento", "em_andamento"),
     )
     for ordem, (nome, estado) in enumerate(etapas, start=1):
         checklist: list[dict[str, Any]] = []
         if nome == "criativos":  # 4 subtarefas padrão (§8-M2-A1)
             checklist = [
-                {"item": item, "feito": True, "por": "analista@claro.com.br",
-                 "em": (agora - timedelta(days=40)).isoformat()}
+                {
+                    "item": item,
+                    "feito": True,
+                    "por": "analista@claro.com.br",
+                    "em": (agora - timedelta(days=40)).isoformat(),
+                }
                 for item in ("KV master", "Copy por canal", "HTML e-mail", "Template WhatsApp")
             ]
         repositorio.adicionar_etapa(
@@ -494,12 +504,24 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
         contagem_bruta=1_012_400,
         contagem_liquida=847_312,
         waterfall=[
-            {"etapa": "7 listas de supressão", "corte": 152_988, "restante": 859_412,
-             "motivo": "Guard determinístico (§8-M5)"},
-            {"etapa": "opt-in por canal", "corte": 10_100, "restante": 849_312,
-             "motivo": "sem opt-in em nenhum canal da campanha"},
-            {"etapa": "colisões do governor", "corte": 2_000, "restante": 847_312,
-             "motivo": "pressão de contato cross-campanha"},
+            {
+                "etapa": "7 listas de supressão",
+                "corte": 152_988,
+                "restante": 859_412,
+                "motivo": "Guard determinístico (§8-M5)",
+            },
+            {
+                "etapa": "opt-in por canal",
+                "corte": 10_100,
+                "restante": 849_312,
+                "motivo": "sem opt-in em nenhum canal da campanha",
+            },
+            {
+                "etapa": "colisões do governor",
+                "corte": 2_000,
+                "restante": 847_312,
+                "motivo": "pressão de contato cross-campanha",
+            },
         ],
         volume_abordagem={
             "email": {"n": 610_065, "pct": 72.0},
@@ -521,8 +543,12 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             os_id=os_.id,
             hash=hashlib.sha256(b"demo-certificado-457").hexdigest(),
             suprimidos={
-                "blacklist": 12_406, "fraude": 8_112, "nao_perturbe": 45_210,
-                "optout": 60_104, "procon": 3_208, "inadimplente": 12_880,
+                "blacklist": 12_406,
+                "fraude": 8_112,
+                "nao_perturbe": 45_210,
+                "optout": 60_104,
+                "procon": 3_208,
+                "inadimplente": 12_880,
                 "reprovado_credito": 11_068,
             },
             liquido=847_312,
@@ -630,12 +656,26 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             estado="em_rampa",
             breakers=dict(POLITICA_PUBLICADA["conteudo"]["breakers"]),
             eventos=[
-                {"tipo": "armado", "por": "lider@claro.com.br",
-                 "em": inicio_rampa.isoformat(), "marco_telemetria": marco},
-                {"tipo": "onda_avancada", "por": "lider@claro.com.br",
-                 "em": inicio_rampa.isoformat(), "onda": 1, "pct": 1.0},
-                {"tipo": "onda_avancada", "por": "lider@claro.com.br",
-                 "em": (agora - timedelta(days=13)).isoformat(), "onda": 2, "pct": 10.0},
+                {
+                    "tipo": "armado",
+                    "por": "lider@claro.com.br",
+                    "em": inicio_rampa.isoformat(),
+                    "marco_telemetria": marco,
+                },
+                {
+                    "tipo": "onda_avancada",
+                    "por": "lider@claro.com.br",
+                    "em": inicio_rampa.isoformat(),
+                    "onda": 1,
+                    "pct": 1.0,
+                },
+                {
+                    "tipo": "onda_avancada",
+                    "por": "lider@claro.com.br",
+                    "em": (agora - timedelta(days=13)).isoformat(),
+                    "onda": 2,
+                    "pct": 10.0,
+                },
             ],
         )
     )
