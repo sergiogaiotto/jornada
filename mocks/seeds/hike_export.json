@@ -1,0 +1,76 @@
+{
+  "origem": "hike",
+  "exportado_em": "2026-07-31T18:00:00Z",
+  "cards": [
+    {
+      "card_id": "HIKE-8842",
+      "titulo": "Retenção Pré-Pago Agosto",
+      "tshirt": "M",
+      "url": "https://hike.claro.com.br/cards/HIKE-8842",
+      "briefing": {"objetivo": "retencao", "publico": "pre-pago 90d sem recarga"},
+      "etapas": [
+        {
+          "nome": "briefing",
+          "estado": "concluida",
+          "sla_dias": 2,
+          "checklist": [
+            {"item": "Briefing recebido", "feito": true, "por": "ana.souza", "em": "2026-07-20T14:12:00Z"},
+            {"item": "Verba confirmada", "feito": true, "por": "ana.souza", "em": "2026-07-21T09:30:00Z"}
+          ]
+        },
+        {
+          "nome": "discovery",
+          "estado": "concluida",
+          "sla_dias": 3,
+          "checklist": [
+            {"item": "Histórico de campanhas levantado", "feito": true, "por": "bruno.lima", "em": "2026-07-24T16:45:00Z"}
+          ]
+        },
+        {"nome": "audiencia", "estado": "em_andamento", "sla_dias": 4}
+      ],
+      "historico": [
+        {"em": "2026-07-20T10:00:00Z", "evento": "card_criado", "por": "ana.souza"},
+        {"em": "2026-07-21T09:31:00Z", "evento": "etapa_concluida", "etapa": "briefing", "por": "ana.souza"},
+        {"em": "2026-07-24T16:46:00Z", "evento": "etapa_concluida", "etapa": "discovery", "por": "bruno.lima"},
+        {"em": "2026-07-25T08:05:00Z", "evento": "etapa_iniciada", "etapa": "audiencia", "por": "carla.mendes"}
+      ]
+    },
+    {
+      "card_id": "HIKE-8907",
+      "titulo": "Upgrade Fibra 500M",
+      "tshirt": "G",
+      "url": "https://hike.claro.com.br/cards/HIKE-8907",
+      "briefing": {"objetivo": "upsell", "oferta": "fibra 500M por 12 meses"},
+      "etapas": [
+        {
+          "nome": "briefing",
+          "estado": "concluida",
+          "sla_dias": 2,
+          "checklist": [
+            {"item": "Briefing recebido", "feito": true, "por": "diego.alves", "em": "2026-07-27T11:20:00Z"}
+          ]
+        },
+        {"nome": "discovery", "estado": "em_andamento", "sla_dias": 3}
+      ],
+      "historico": [
+        {"em": "2026-07-27T09:00:00Z", "evento": "card_criado", "por": "diego.alves"},
+        {"em": "2026-07-27T11:21:00Z", "evento": "etapa_concluida", "etapa": "briefing", "por": "diego.alves"},
+        {"em": "2026-07-28T10:00:00Z", "evento": "etapa_iniciada", "etapa": "discovery", "por": "elisa.rocha"}
+      ]
+    },
+    {
+      "card_id": "HIKE-8951",
+      "titulo": "Winback Pós-Pago",
+      "tshirt": "P",
+      "url": "https://hike.claro.com.br/cards/HIKE-8951",
+      "briefing": {"objetivo": "winback"},
+      "etapas": [
+        {"nome": "briefing", "estado": "em_andamento", "sla_dias": 1}
+      ],
+      "historico": [
+        {"em": "2026-07-30T15:40:00Z", "evento": "card_criado", "por": "fabio.nunes"},
+        {"em": "2026-07-30T15:55:00Z", "evento": "etapa_iniciada", "etapa": "briefing", "por": "fabio.nunes"}
+      ]
+    }
+  ]
+}

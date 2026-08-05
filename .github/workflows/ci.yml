@@ -29,9 +29,11 @@ jobs:
       - name: Mypy
         run: mypy
       - name: Pytest (unit/contract/aceite, sem integração) + cobertura >= 80%
+        # --cov inclui domain e application (M1): medir só app/api mascarava o núcleo
         run: >
           python -m pytest -m "not integration"
-          --cov=app --cov=api --cov-report=term-missing --cov-fail-under=80
+          --cov=app --cov=api --cov=domain --cov=application
+          --cov-report=term-missing --cov-fail-under=80
 
   compose-validate:
     runs-on: ubuntu-latest

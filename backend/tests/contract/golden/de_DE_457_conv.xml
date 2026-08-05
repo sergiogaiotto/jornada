@@ -1,0 +1,1 @@
+<CreateRequest xmlns="http://exacttarget.com/wsdl/partnerAPI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Objects xsi:type="DataExtension"><CustomerKey>DE_457_conv</CustomerKey><Name>DE_457_conv</Name><Fields><Field><Name>SubscriberKey</Name><FieldType>Text</FieldType></Field></Fields></Objects></CreateRequest>

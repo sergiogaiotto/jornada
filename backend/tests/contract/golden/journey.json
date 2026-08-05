@@ -1,0 +1,91 @@
+{
+  "activities": [
+    {
+      "arguments": {
+        "braços": [
+          {
+            "id": "tratado",
+            "pct": 90
+          },
+          {
+            "id": "holdout",
+            "pct": 10
+          }
+        ]
+      },
+      "key": "jrn-db9f9a02c298-n2",
+      "outcomes": [
+        {
+          "cond": "tratado",
+          "key": "e2",
+          "next": "jrn-db9f9a02c298-n3"
+        },
+        {
+          "cond": "holdout",
+          "key": "e3",
+          "next": "jrn-db9f9a02c298-n6"
+        }
+      ],
+      "type": "randomSplit"
+    },
+    {
+      "arguments": {
+        "duracao": "PT4H"
+      },
+      "key": "jrn-db9f9a02c298-n3",
+      "outcomes": [
+        {
+          "cond": null,
+          "key": "e4",
+          "next": "jrn-db9f9a02c298-n4"
+        }
+      ],
+      "type": "wait"
+    },
+    {
+      "arguments": {
+        "assetRef": "asset-email-457",
+        "optIn": true,
+        "throttlePorHora": 25000
+      },
+      "key": "jrn-db9f9a02c298-n4",
+      "outcomes": [
+        {
+          "cond": null,
+          "key": "e5",
+          "next": "jrn-db9f9a02c298-n5"
+        }
+      ],
+      "type": "emailSend"
+    },
+    {
+      "arguments": {
+        "deRef": "DE_457_conv",
+        "metrica": "conversion"
+      },
+      "key": "jrn-db9f9a02c298-n5",
+      "outcomes": [],
+      "type": "goal"
+    },
+    {
+      "arguments": {
+        "motivo": "holdout"
+      },
+      "key": "jrn-db9f9a02c298-n6",
+      "outcomes": [],
+      "type": "exit"
+    }
+  ],
+  "key": "jrn-db9f9a02c298",
+  "name": "OS-2026-0457",
+  "triggers": [
+    {
+      "arguments": {
+        "eventDefinitionKey": "jrn-db9f9a02c298-n1"
+      },
+      "key": "jrn-db9f9a02c298-n1",
+      "type": "APIEvent"
+    }
+  ],
+  "workflowApiVersion": 1.0
+}

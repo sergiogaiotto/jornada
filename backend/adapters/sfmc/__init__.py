@@ -1,1 +1,1 @@
-"""Adapter sfmc (implementado no modulo que o usa — §8)."""
+"""Adapter SFMC — `cliente.SfmcHttp` implementa SFMCPort (REST httpx + SOAP template)."""

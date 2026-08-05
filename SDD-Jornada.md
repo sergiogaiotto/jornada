@@ -195,6 +195,7 @@ create table jornada_versao (                 -- o TWIN: versões do grafo canô
   hash char(64) not null,                                       -- sha256 do JGC canonicalizado (RFC 8785)
   estado text default 'rascunho' check (estado in ('rascunho','simulado','aprovado','publicado','arquivado')),
   premissas jsonb default '[]', custo_projetado numeric(12,2),
+  simulacao jsonb, previsto jsonb,            -- saída do Ensaio Geral (§6) e Previsto congelado (emenda M8, migração 0005)
   unique(os_id, versao)
 );
 
@@ -210,7 +211,8 @@ create table aprovacao (                      -- link mágico
   token_hash char(64) unique not null, expira_em timestamptz not null, alcada text not null,
   decisao text check (decisao in ('aprovado','aprovado_ressalvas','reprovado')),
   decidido_em timestamptz, decidido_meta jsonb,                 -- ip, device, otp?
-  ressalvas jsonb default '[]'                                  -- viram pendências automaticamente
+  ressalvas jsonb default '[]',                                 -- viram pendências automaticamente
+  invalidada_em timestamptz, invalidada_motivo text             -- A4: custo >10% pós-aprovação (emenda M8 parte 2, migração 0006)
 );
 
 create table segmento (
@@ -357,7 +359,7 @@ create table domain_event (id bigint generated always as identity primary key, t
   os_id uuid, type text not null, payload jsonb, actor text, via_ai boolean default false,
   created_at timestamptz default now());
 ```
-Tabelas auxiliares (colunas óbvias, criar na migração do módulo que as usa): `criativo` (matriz canal×variante, estado por célula, kv_master_ref), `incidente` (sev1..3, kill/retomada 2 aprovadores), `notificacao`, `custo_realizado`, `hike_import_log`, `documento_portao` (docx gerados).
+Tabelas auxiliares (colunas óbvias, criar na migração do módulo que as usa): `criativo` (matriz canal×variante, estado por célula, kv_master_ref), `incidente` (sev1..3, kill/retomada 2 aprovadores), `notificacao`, `custo_realizado`, `hike_import_log`, `documento_portao` (docx gerados), `preflight_run` (bateria do pré-voo M9: itens pass/warn/fail com evidência + resultado verde/amarelo/vermelho por snapshot×ambiente).
 
 ---
 
@@ -407,7 +409,7 @@ Erros bloqueantes: nó órfão/braço sem destino; `channel.*` sem opt-in config
 - Execução: N=10.000 personas × K=500 runs Monte Carlo com relógio virtual (waits, quiet hours, throttle, STO amostrando distribuição de horários, frequency split via governor).
 - Saída (persistida em `jornada_versao` e congelada no snapshot como `previsto`): funil por nó/aresta, conversões/custo/receita/ROAS em **P10/P50/P90**, lift esperado + validação de poder (n mínimo por MDE), gargalos, pressão de contato.
 - NFR: 10k personas < 60 s (vetorizar com numpy; sem I/O no loop).
-- Semáforo: verde/amarelo/vermelho → vermelho bloqueia T9/T11; regra: vermelho se ROAS P50 < 1 ou poder insuficiente ou colisão crítica do governor.
+- Semáforo: verde/amarelo/vermelho → vermelho bloqueia T9/T11; regra (precedência do aceite §8-M8-A2 — emenda M8): vermelho se ROAS P50 < 1 ou colisão crítica do governor; poder insuficiente pinta o portão de experimento de vermelho e a simulação de amarelo; avisos (ex.: custo P50 > verba) também dão amarelo.
 
 ---
 

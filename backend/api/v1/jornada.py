@@ -1,0 +1,226 @@
+"""Rotas do M7 · Twin Canvas / T7 (SDD §8-M7) — tag OpenAPI `jornada`.
+
+`POST /os/{id}/jornada/gerar` (flow → JGC) · `PUT /jornadas/{id}/grafo` (valida §5.3;
+recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff proposto,
+NUNCA aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o
+compilador gerará — §5.4, determinístico).
+
+Erros: domínio → RFC-7807 (mapa do M1: NaoEncontrado→404, EstadoInvalido→409) +
+traduções deste router: GrafoInvalido→422 com `erros[{no, regra, mensagem}]`
+apontando o nó (A1/A3); SaidaDoFlowInvalida→422; LLMIndisponivel→503 degraded
+(§10.6 — gerar/ajustar exigem LLM; PUT/preview JAMAIS dependem). RBAC (§8-M0):
+mutações exigem analista|lider.
+"""
+
+import uuid
+from collections.abc import Callable, Coroutine
+from typing import Annotated, Any, cast
+
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field
+
+from adapters.relogio import RelogioSistema
+from api.v1.intake import get_llm, get_tracer
+from api.v1.os_governanca import (
+    Autenticado,
+    Escritor,
+    Tenant,
+    _problema_de_dominio,
+    get_repositorio_os,
+)
+from app.errors import problem_response
+from application.ports.llm import LLMIndisponivel
+from application.ports.repositorio_jornada import RepositorioJornada
+from application.ports.repositorio_os import RepositorioOs
+from application.services.jornada_service import ServicoJornada
+from domain.campanha.erros import ErroDominio
+from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
+
+
+class RotaJornada(APIRoute):
+    """Traduções do M7 ANTES do mapa genérico do M1 (padrão da RotaCriativo/M6)."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler_original = super().get_route_handler()
+
+        async def handler(request: Request) -> Response:
+            try:
+                return await handler_original(request)
+            except GrafoInvalido as exc:  # A1/A3: 422 apontando o nó
+                return problem_response(
+                    422,
+                    "Unprocessable Entity",
+                    detail=exc.motivo,
+                    instance=request.url.path,
+                    extra={"erros": exc.erros},
+                )
+            except SaidaDoFlowInvalida as exc:
+                return problem_response(
+                    422, "Unprocessable Entity", detail=exc.motivo, instance=request.url.path
+                )
+            except LLMIndisponivel as exc:  # §10.6
+                return problem_response(
+                    503,
+                    "Service Unavailable",
+                    detail=str(exc),
+                    instance=request.url.path,
+                    extra={"modo": "degraded"},
+                )
+            except ErroDominio as exc:
+                return _problema_de_dominio(exc, request.url.path)
+
+        return handler
+
+
+# ------------------------------------------------------------------ Dependências
+_relogio = RelogioSistema()
+
+
+def get_servico_jornada(request: Request) -> ServicoJornada:
+    """Mesma instância de repositório da OS (app.state) — RepositorioOsMemoria implementa
+    todas as portas (tipagem estrutural §2.1); o cast só informa o mypy."""
+    repositorio = get_repositorio_os(request)
+    return ServicoJornada(
+        cast(RepositorioJornada, repositorio),
+        cast(RepositorioOs, repositorio),
+        _relogio,
+        get_llm(request),
+        get_tracer(request),
+    )
+
+
+Servico = Annotated[ServicoJornada, Depends(get_servico_jornada)]
+
+# ------------------------------------------------- Contratos Pydantic (§1.3.2, §4.1)
+
+
+class JornadaOut(BaseModel):
+    """`jornada_versao` §4.1 — a versão do twin com hash canônico e taxímetro."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    os_id: uuid.UUID
+    versao: int
+    grafo: dict[str, Any]
+    hash: str
+    estado: str
+    premissas: list[str]
+    custo_projetado: float | None
+
+
+class TaximetroOut(BaseModel):
+    """Memória de cálculo do taxímetro (A2) — Σ(volume esperado × tarifa vigente)."""
+
+    custo_projetado: float
+    memoria: list[dict[str, Any]]
+    avisos: list[str]
+
+
+class GerarJornadaIn(BaseModel):
+    instrucoes: str = ""
+
+
+class GerarJornadaOut(BaseModel):
+    """Prévia do flow (§1.1.3): nova versão nasce `rascunho` — simular/aprovar vêm
+    depois (M8); `via_ai` + ledger `invocacao` (§4.1)."""
+
+    jornada: JornadaOut
+    resumo: str
+    taximetro: TaximetroOut
+    via_ai: bool = True
+    invocacao_id: uuid.UUID
+
+
+class GrafoIn(BaseModel):
+    grafo: dict[str, Any] = Field(min_length=1)
+
+
+class GrafoOut(BaseModel):
+    jornada: JornadaOut
+    taximetro: TaximetroOut
+
+
+class AjustarIn(BaseModel):
+    instrucoes: str = Field(min_length=1)
+
+
+class AjustarOut(BaseModel):
+    """Diff PROPOSTO (§8-M7): nunca aplicado — aplicar é PUT humano do grafo proposto."""
+
+    jornada_id: uuid.UUID
+    aplicado: bool
+    grafo_proposto: dict[str, Any]
+    diff: dict[str, Any]
+    premissas: list[str]
+    resumo: str
+    valido: bool
+    erros: list[dict[str, Any]]
+    custo_projetado_atual: float | None
+    custo_projetado_proposto: float
+    avisos: list[str]
+    via_ai: bool = True
+    invocacao_id: uuid.UUID
+
+
+# ------------------------------------------------------------------------- Rotas
+router = APIRouter(route_class=RotaJornada, tags=["jornada"])
+
+
+@router.post("/os/{os_id}/jornada/gerar", status_code=201, response_model=GerarJornadaOut)
+async def gerar_jornada(
+    os_id: uuid.UUID,
+    tenant: Tenant,
+    servico: Servico,
+    user: Escritor,
+    payload: GerarJornadaIn | None = None,
+) -> GerarJornadaOut:
+    """Flow (120b — §7.2) desenha o JGC a partir do briefing como PRÉVIA (§1.1.3);
+    `jgc_validate` (§5.3) e taxímetro (A2) são código — o agente não tem a palavra
+    final. Nova versão do twin em `rascunho` (§4.1)."""
+    jornada, saida, invocacao, taximetro = servico.gerar(
+        tenant, os_id, instrucoes=(payload.instrucoes if payload else ""), portador_id=user.id
+    )
+    return GerarJornadaOut(
+        jornada=JornadaOut.model_validate(jornada),
+        resumo=saida.resumo,
+        taximetro=TaximetroOut(custo_projetado=jornada.custo_projetado or 0.0, **taximetro),
+        invocacao_id=invocacao.id,
+    )
+
+
+@router.put("/jornadas/{jornada_id}/grafo", response_model=GrafoOut)
+async def atualizar_grafo(
+    jornada_id: uuid.UUID, payload: GrafoIn, tenant: Tenant, servico: Servico, user: Escritor
+) -> GrafoOut:
+    """Salva o grafo editado: valida §5.3 (422 apontando o nó — A1/A3) e RECALCULA o
+    taxímetro (A2). Caminho 100% determinístico — nunca depende de LLM (§10.6)."""
+    jornada, taximetro = servico.atualizar_grafo(
+        tenant, jornada_id, grafo=payload.grafo, actor=user.email
+    )
+    return GrafoOut(
+        jornada=JornadaOut.model_validate(jornada),
+        taximetro=TaximetroOut(custo_projetado=jornada.custo_projetado or 0.0, **taximetro),
+    )
+
+
+@router.post("/jornadas/{jornada_id}/ajustar", response_model=AjustarOut)
+async def ajustar_jornada(
+    jornada_id: uuid.UUID, payload: AjustarIn, tenant: Tenant, servico: Servico, user: Escritor
+) -> AjustarOut:
+    """Texto livre → diff proposto (§8-M7) — NUNCA aplica direto: humano aplica via
+    PUT do `grafo_proposto` (Aplicar/Rejeitar §1.1.3)."""
+    proposta, invocacao = servico.ajustar(
+        tenant, jornada_id, instrucoes=payload.instrucoes, portador_id=user.id
+    )
+    return AjustarOut(**proposta, invocacao_id=invocacao.id)
+
+
+@router.get("/jornadas/{jornada_id}/no/{no_id}/sfmc-preview")
+async def sfmc_preview(
+    jornada_id: uuid.UUID, no_id: str, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> dict[str, Any]:
+    """JSON determinístico que o compilador (M9 — §5.4) gerará para o nó, com
+    externalKey idempotente `jrn-{hash[0:12]}-{noId}`. LLM proibido neste caminho."""
+    return servico.sfmc_preview(tenant, jornada_id, no_id)

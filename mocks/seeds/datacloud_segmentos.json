@@ -1,0 +1,145 @@
+{
+  "descricao": "Fixtures do Data Cloud (§11.2): 4 segmentos publicados + contagens do relatório T5a (bruto→elegível→líquido→sobreposição + insumos de volume por canal). Frescor RELATIVO (republicado_ha_horas / atualizado_ha_horas) para determinismo; Hybris D-1 = 24h (§8-M5-A4). Colisões por canal vêm do governor (§8-M5-A2). Compartilhado pelo adapter de fixtures (backend) e pelo mock-datacloud (compose).",
+  "segmentos": [
+    {
+      "id": "DC-SEG-001",
+      "nome": "Pré-pago alto consumo dados",
+      "criterios_resumo": "ARPU dados > P75 e recarga últimos 30d",
+      "membros": 1240580,
+      "dmos": ["UnifiedIndividual", "ConsumoDados"],
+      "republicado_ha_horas": 6,
+      "ciclo": "diario",
+      "status": "ativo",
+      "relatorio": {
+        "elegivel": 1180200,
+        "supressoes": {
+          "blacklist": 11800,
+          "fraude": 4020,
+          "nao_perturbe": 51200,
+          "optout": 68400,
+          "procon": 2100,
+          "inadimplente": 96200,
+          "reprovado_credito": 31500
+        },
+        "sem_opt_in": 88400,
+        "sobreposicao": {"DC-SEG-002": 121040, "DC-SEG-004": 64300},
+        "canais": {
+          "email":    {"opt_in": 640000, "cap_excedente": 21000, "quiet_impactados": 0,     "colisoes": 15400},
+          "sms":      {"opt_in": 500000, "cap_excedente": 9000,  "quiet_impactados": 11000, "colisoes": 5200},
+          "push":     {"opt_in": 420000, "cap_excedente": 12000, "quiet_impactados": 8000,  "colisoes": 9800},
+          "whatsapp": {"opt_in": 260000, "cap_excedente": 3000,  "quiet_impactados": 2600,  "colisoes": 2400}
+        },
+        "frescor": {
+          "data_cloud": {"atualizado_ha_horas": 6},
+          "hybris_base_clientes": {"atualizado_ha_horas": 24},
+          "governor_colisoes": {"atualizado_ha_horas": 2}
+        }
+      }
+    },
+    {
+      "id": "DC-SEG-002",
+      "nome": "Pós-pago elegível upgrade 5G",
+      "criterios_resumo": "aparelho 5G e plano 4G há mais de 6 meses",
+      "membros": 847312,
+      "dmos": ["UnifiedIndividual", "Aparelho", "Plano"],
+      "republicado_ha_horas": 12,
+      "ciclo": "diario",
+      "status": "ativo",
+      "relatorio": {
+        "elegivel": 812400,
+        "supressoes": {
+          "blacklist": 8100,
+          "fraude": 2300,
+          "nao_perturbe": 34600,
+          "optout": 46800,
+          "procon": 1400,
+          "inadimplente": 62100,
+          "reprovado_credito": 21100
+        },
+        "sem_opt_in": 45120,
+        "sobreposicao": {"DC-SEG-001": 121040, "DC-SEG-003": 38900},
+        "canais": {
+          "email":    {"opt_in": 470000, "cap_excedente": 16000, "quiet_impactados": 0,    "colisoes": 12800},
+          "sms":      {"opt_in": 350000, "cap_excedente": 7000,  "quiet_impactados": 8400, "colisoes": 4100},
+          "push":     {"opt_in": 320000, "cap_excedente": 9800,  "quiet_impactados": 6200, "colisoes": 7300},
+          "whatsapp": {"opt_in": 195000, "cap_excedente": 2600,  "quiet_impactados": 1900, "colisoes": 1700}
+        },
+        "frescor": {
+          "data_cloud": {"atualizado_ha_horas": 12},
+          "hybris_base_clientes": {"atualizado_ha_horas": 24},
+          "governor_colisoes": {"atualizado_ha_horas": 2}
+        }
+      }
+    },
+    {
+      "id": "DC-SEG-003",
+      "nome": "Churn risk score alto",
+      "criterios_resumo": "score churn >= 0.7 nos últimos 7 dias",
+      "membros": 312044,
+      "dmos": ["UnifiedIndividual", "ScoreChurn"],
+      "republicado_ha_horas": 24,
+      "ciclo": "semanal",
+      "status": "ativo",
+      "relatorio": {
+        "elegivel": 297500,
+        "supressoes": {
+          "blacklist": 3100,
+          "fraude": 900,
+          "nao_perturbe": 12800,
+          "optout": 17300,
+          "procon": 600,
+          "inadimplente": 22900,
+          "reprovado_credito": 7800
+        },
+        "sem_opt_in": 16900,
+        "sobreposicao": {"DC-SEG-002": 38900},
+        "canais": {
+          "email":    {"opt_in": 172000, "cap_excedente": 5800, "quiet_impactados": 0,    "colisoes": 4700},
+          "sms":      {"opt_in": 128000, "cap_excedente": 2500, "quiet_impactados": 3100, "colisoes": 1500},
+          "push":     {"opt_in": 118000, "cap_excedente": 3600, "quiet_impactados": 2300, "colisoes": 2700},
+          "whatsapp": {"opt_in": 71000,  "cap_excedente": 900,  "quiet_impactados": 700,  "colisoes": 600}
+        },
+        "frescor": {
+          "data_cloud": {"atualizado_ha_horas": 24},
+          "hybris_base_clientes": {"atualizado_ha_horas": 24},
+          "governor_colisoes": {"atualizado_ha_horas": 2}
+        }
+      }
+    },
+    {
+      "id": "DC-SEG-004",
+      "nome": "Banda larga sem TV assinada",
+      "criterios_resumo": "cliente banda larga sem produto TV",
+      "membros": 566901,
+      "dmos": ["UnifiedIndividual", "Produtos"],
+      "republicado_ha_horas": 48,
+      "ciclo": "semanal",
+      "status": "republicando",
+      "relatorio": {
+        "elegivel": 540300,
+        "supressoes": {
+          "blacklist": 5600,
+          "fraude": 1700,
+          "nao_perturbe": 23400,
+          "optout": 31600,
+          "procon": 1100,
+          "inadimplente": 41800,
+          "reprovado_credito": 14200
+        },
+        "sem_opt_in": 30700,
+        "sobreposicao": {"DC-SEG-001": 64300},
+        "canais": {
+          "email":    {"opt_in": 310000, "cap_excedente": 10400, "quiet_impactados": 0,    "colisoes": 8600},
+          "sms":      {"opt_in": 232000, "cap_excedente": 4600,  "quiet_impactados": 5600, "colisoes": 2800},
+          "push":     {"opt_in": 214000, "cap_excedente": 6500,  "quiet_impactados": 4200, "colisoes": 4900},
+          "whatsapp": {"opt_in": 129000, "cap_excedente": 1700,  "quiet_impactados": 1300, "colisoes": 1100}
+        },
+        "frescor": {
+          "data_cloud": {"atualizado_ha_horas": 48},
+          "hybris_base_clientes": {"atualizado_ha_horas": 24},
+          "governor_colisoes": {"atualizado_ha_horas": 2}
+        }
+      }
+    }
+  ]
+}

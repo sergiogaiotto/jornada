@@ -1,0 +1,58 @@
+{
+  "descricao": "Fixtures de fonte da validação campo-a-campo (§8-M4/§11): evidência simulada por campo do briefing. Frescor relativo (atualizado_ha_horas) para checagem determinística; Hybris D-1 = 24h (§8-M5-A4).",
+  "fontes": {
+    "objetivo": {
+      "fonte": "plano_comercial_2026",
+      "contagem": 1,
+      "schema": [
+        {"campo": "objetivo", "tipo": "text"},
+        {"campo": "kpi_primario", "tipo": "text"}
+      ],
+      "atualizado_ha_horas": 72,
+      "sla_frescor_horas": 720
+    },
+    "publico": {
+      "fonte": "hybris_base_clientes",
+      "contagem": 847312,
+      "schema": [
+        {"campo": "contato_hash", "tipo": "char(64)"},
+        {"campo": "plano", "tipo": "text"},
+        {"campo": "opt_in_email", "tipo": "boolean"},
+        {"campo": "opt_in_sms", "tipo": "boolean"}
+      ],
+      "atualizado_ha_horas": 24,
+      "sla_frescor_horas": 48
+    },
+    "oferta": {
+      "fonte": "catalogo_ofertas",
+      "contagem": 12,
+      "schema": [
+        {"campo": "oferta_id", "tipo": "text"},
+        {"campo": "vigencia", "tipo": "daterange"},
+        {"campo": "elegibilidade", "tipo": "jsonb"}
+      ],
+      "atualizado_ha_horas": 6,
+      "sla_frescor_horas": 24
+    },
+    "verba": {
+      "fonte": "orcamento_marketing",
+      "contagem": 1,
+      "schema": [
+        {"campo": "centro_custo", "tipo": "text"},
+        {"campo": "verba_aprovada", "tipo": "numeric(12,2)"}
+      ],
+      "atualizado_ha_horas": 48,
+      "sla_frescor_horas": 168
+    },
+    "janela": {
+      "fonte": "calendario_comercial",
+      "contagem": 1,
+      "schema": [
+        {"campo": "janela", "tipo": "daterange"},
+        {"campo": "blackout", "tipo": "boolean"}
+      ],
+      "atualizado_ha_horas": 12,
+      "sla_frescor_horas": 168
+    }
+  }
+}

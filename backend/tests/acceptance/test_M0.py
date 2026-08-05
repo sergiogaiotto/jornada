@@ -36,10 +36,11 @@ def test_M0_A2(client: TestClient) -> None:
 
 
 def test_M0_A2_com_header_passa_do_middleware(client: TestClient) -> None:
-    """Com X-Tenant presente o middleware libera (404 problem+json — rota M1 ainda não existe)."""
+    """Com X-Tenant presente o middleware libera — a rota M1 responde 401 (Bearer ausente),
+    provando que o 400 de tenant não interceptou (era 404 antes do M1 — CHANGELOG-SDD.md)."""
     resposta = client.get("/api/v1/os", headers={"X-Tenant": "torre-movel"})
 
-    assert resposta.status_code == 404
+    assert resposta.status_code == 401
     assert resposta.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 
 

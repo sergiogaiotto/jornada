@@ -1,0 +1,27 @@
+{
+  "descricao": "Read model de ativação para o DRY-RUN de recontagem (§8-M5): contagens da segmentação do Estúdio SQL. Frescor RELATIVO por fonte (atualizado_ha_horas) para checagem determinística — Hybris D-1 = 24h (§8-M5-A4). Colisões por canal vêm do governor (§8-M5-A2).",
+  "estudio_sql": {
+    "bruto": 1203450,
+    "supressoes": {
+      "blacklist": 12400,
+      "fraude": 3210,
+      "nao_perturbe": 45800,
+      "optout": 61240,
+      "procon": 1950,
+      "inadimplente": 88320,
+      "reprovado_credito": 27610
+    },
+    "sem_opt_in": 74300,
+    "canais": {
+      "email":    {"opt_in": 705000, "cap_excedente": 22000, "quiet_impactados": 0,     "colisoes": 18400},
+      "sms":      {"opt_in": 512000, "cap_excedente": 8500,  "quiet_impactados": 12300, "colisoes": 6200},
+      "push":     {"opt_in": 448000, "cap_excedente": 15200, "quiet_impactados": 9800,  "colisoes": 11500},
+      "whatsapp": {"opt_in": 301000, "cap_excedente": 4100,  "quiet_impactados": 3200,  "colisoes": 2900}
+    },
+    "frescor": {
+      "hybris_base_clientes": {"atualizado_ha_horas": 24},
+      "telemetria_ens": {"atualizado_ha_horas": 1},
+      "governor_colisoes": {"atualizado_ha_horas": 2}
+    }
+  }
+}

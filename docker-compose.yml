@@ -40,13 +40,15 @@ services:
       mailpit:
         condition: service_started
 
-  mock-sfmc:                       # §11.1 — stub mínimo no M0; REST/SOAP completos no M9
+  mock-sfmc:                       # §11.1 — completo: token + REST/SOAP + chaos (pré-M9)
     build: ./mocks/sfmc-server
     ports:
       - "8080:8080"
 
-  mock-datacloud:                  # §11.2 — stub mínimo no M0; fixtures completas no M5
-    build: ./mocks/datacloud-server
+  mock-datacloud:                  # §11.2 — completo no M5 (seeds compartilhadas em mocks/seeds)
+    build:
+      context: ./mocks
+      dockerfile: datacloud-server/Dockerfile
     ports:
       - "8081:8081"
 

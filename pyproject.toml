@@ -20,8 +20,17 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: exige docker compose up (excluidos com -m 'not integration')",
+]
+
+[tool.coverage.report]
+# Gate §13 mede código executável: stubs `...` de Protocols (ports §2.1) e blocos
+# TYPE_CHECKING não contam (nunca executam por construção).
+exclude_also = [
+    '^\s*\.\.\.$',
+    'if TYPE_CHECKING:',
 ]
 
 [tool.mypy]

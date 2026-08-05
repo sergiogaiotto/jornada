@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "backend/domain/jornada/jgc.schema.json",
+  "title": "JGC — Journey Graph Canônico (SDD §5)",
+  "description": "Fonte da verdade do twin (§5): grafo canônico JSON versionado; sha256 do JGC canonicalizado (RFC 8785) = hash da versão. Tipos de nó FECHADOS (§5.2): o validador rejeita tipo fora da lista.",
+  "type": "object",
+  "required": ["jgcVersion", "meta", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "jgcVersion": { "const": "1.0" },
+    "meta": {
+      "type": "object",
+      "required": ["osCodigo", "tenant", "reentrada"],
+      "properties": {
+        "osCodigo": { "type": "string" },
+        "tenant": { "type": "string" },
+        "reentrada": { "enum": ["nao", "apos_saida", "qualquer_momento"] },
+        "quietHours": {
+          "type": ["object", "null"],
+          "properties": {
+            "inicio": { "type": "string" },
+            "fim": { "type": "string" }
+          }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "edge": {
+      "type": "object",
+      "required": ["id", "from", "to"],
+      "properties": {
+        "id": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "cond": { "type": ["string", "null"] }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "type", "data"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": {
+          "enum": [
+            "entrySource",
+            "randomSplit",
+            "decisionSplit",
+            "engagementSplit",
+            "frequencySplit",
+            "sto",
+            "wait",
+            "channel.email",
+            "channel.sms",
+            "channel.push",
+            "channel.whatsapp",
+            "channel.rcs",
+            "updateContact",
+            "goal",
+            "exit",
+            "exception"
+          ]
+        },
+        "data": { "type": "object" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "entrySource" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/entrySource" } } } },
+        { "if": { "properties": { "type": { "const": "randomSplit" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/randomSplit" } } } },
+        { "if": { "properties": { "type": { "const": "decisionSplit" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/decisionSplit" } } } },
+        { "if": { "properties": { "type": { "const": "engagementSplit" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/engagementSplit" } } } },
+        { "if": { "properties": { "type": { "const": "frequencySplit" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/frequencySplit" } } } },
+        { "if": { "properties": { "type": { "const": "sto" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/sto" } } } },
+        { "if": { "properties": { "type": { "const": "wait" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/wait" } } } },
+        { "if": { "properties": { "type": { "pattern": "^channel\\." } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/channel" } } } },
+        { "if": { "properties": { "type": { "const": "updateContact" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/updateContact" } } } },
+        { "if": { "properties": { "type": { "const": "goal" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/goal" } } } },
+        { "if": { "properties": { "type": { "const": "exit" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/exit" } } } },
+        { "if": { "properties": { "type": { "const": "exception" } } }, "then": { "properties": { "data": { "$ref": "#/$defs/data/exception" } } } }
+      ]
+    },
+    "data": {
+      "entrySource": {
+        "type": "object",
+        "required": ["deRef", "modo"],
+        "properties": {
+          "deRef": { "type": "string" },
+          "modo": { "enum": ["fire_once", "scheduled"] },
+          "agenda": { "type": ["string", "object", "null"] },
+          "reentrada": { "enum": ["nao", "apos_saida", "qualquer_momento"] }
+        }
+      },
+      "randomSplit": {
+        "type": "object",
+        "required": ["braços"],
+        "properties": {
+          "braços": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["id", "pct"],
+              "properties": {
+                "id": { "type": "string" },
+                "pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+              }
+            }
+          }
+        }
+      },
+      "decisionSplit": {
+        "type": "object",
+        "required": ["regras"],
+        "properties": {
+          "regras": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["expr", "to"],
+              "properties": {
+                "expr": { "type": "string" },
+                "to": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "engagementSplit": {
+        "type": "object",
+        "required": ["metrica", "janela"],
+        "properties": {
+          "metrica": { "enum": ["open", "click"] },
+          "janela": { "type": "string" }
+        }
+      },
+      "frequencySplit": {
+        "type": "object",
+        "required": ["classes", "fonte"],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "enum": ["saturado", "ok", "sub"] }
+          },
+          "fonte": { "const": "governor" }
+        }
+      },
+      "sto": {
+        "type": "object",
+        "required": ["janelaHoras", "fallback"],
+        "properties": {
+          "janelaHoras": { "type": "number", "exclusiveMinimum": 0 },
+          "fallback": { "type": "string" }
+        }
+      },
+      "wait": {
+        "type": "object",
+        "anyOf": [{ "required": ["duracao"] }, { "required": ["ate"] }],
+        "properties": {
+          "duracao": { "type": "string", "description": "ISO 8601 (ex.: P2D, PT12H)" },
+          "ate": { "type": "string", "description": "atributo com o instante alvo" }
+        }
+      },
+      "channel": {
+        "type": "object",
+        "required": ["assetRef"],
+        "properties": {
+          "assetRef": { "type": "string" },
+          "throttlePorHora": { "type": "number", "exclusiveMinimum": 0 },
+          "custoUnit": { "type": ["number", "null"], "description": "lookup tarifa_canal (§4.1) — o taxímetro NÃO confia neste campo" },
+          "optIn": { "type": ["string", "boolean"], "description": "opt-in configurado do canal — obrigatório (§5.3)" }
+        }
+      },
+      "updateContact": {
+        "type": "object",
+        "required": ["deRef", "valores"],
+        "properties": {
+          "deRef": { "type": "string" },
+          "valores": { "type": "object" }
+        }
+      },
+      "goal": {
+        "type": "object",
+        "required": ["metrica", "deRef"],
+        "properties": {
+          "metrica": { "type": "string" },
+          "deRef": { "type": "string" }
+        }
+      },
+      "exit": {
+        "type": "object",
+        "required": ["motivo"],
+        "properties": { "motivo": { "type": "string" } }
+      },
+      "exception": {
+        "type": "object",
+        "required": ["payloadOriginal"],
+        "properties": { "payloadOriginal": {} }
+      }
+    }
+  }
+}

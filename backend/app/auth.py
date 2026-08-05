@@ -2,7 +2,9 @@
 
 Dev: um token estático por usuário seed ("dev-<papel>"), papéis:
 solicitante | analista | lider | aprovador | dpo | admin.
-Prod trocará por JWT (APP_SECRET) sem mudar as assinaturas das dependências.
+Portal do Solicitante (§8-M3): token de portal ("portal via link com token, sem login
+pleno") — dev usa o token estático `portal-dev`; prod trocará por link mágico assinado
+com APP_SECRET sem mudar as assinaturas das dependências.
 """
 
 import uuid
@@ -39,6 +41,17 @@ def _dev_user(papel: str) -> Usuario:
 # Tokens estáticos de dev (usuários seed) — ex.: `Authorization: Bearer dev-admin`
 DEV_TOKENS: dict[str, Usuario] = {f"dev-{papel}": _dev_user(papel) for papel in PAPEIS}
 
+# Token de PORTAL (§8-M3): acesso do solicitante via link, sem login pleno — só intake.
+PORTAL_TOKENS: dict[str, Usuario] = {
+    "portal-dev": Usuario(
+        id=uuid.uuid5(uuid.NAMESPACE_URL, "jornada/portal/solicitante"),
+        tenant_id="torre-movel",
+        nome="Solicitante (Portal)",
+        email="portal@dev.jornada.local",
+        papeis=("solicitante",),
+    )
+}
+
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -56,6 +69,27 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return DEV_TOKENS[credentials.credentials]
+
+
+async def get_portador(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> Usuario:
+    """Portador do pedido (§8-M3): token de PORTAL ou credencial plena de dev.
+
+    O token de portal NÃO passa em `get_current_user`/`require_role` — vale apenas nas
+    rotas de intake que declaram esta dependência (portal sem login pleno).
+    """
+    if credentials is not None and credentials.scheme.lower() == "bearer":
+        token = credentials.credentials
+        if token in PORTAL_TOKENS:
+            return PORTAL_TOKENS[token]
+        if token in DEV_TOKENS:
+            return DEV_TOKENS[token]
+    raise HTTPException(
+        status_code=401,
+        detail="Credencial Bearer ausente ou inválida (token de portal ou login pleno).",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def require_role(*papeis: str) -> Callable[..., Awaitable[Usuario]]:
