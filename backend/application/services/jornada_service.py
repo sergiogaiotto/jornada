@@ -11,9 +11,17 @@
   direto (§1.1.3: prévia com Aplicar/Rejeitar; aplicar = PUT do grafo proposto).
 - `sfmc_preview` (GET /jornadas/{id}/no/{noId}/sfmc-preview): JSON determinístico que o
   compilador (M9 — §5.4) gerará, com externalKey idempotente.
+- Versionamento/exportação (emenda §8-M7 2026-08-05 — 100% determinístico, ZERO LLM):
+  `listar_versoes` (GET /os/{id}/jornadas — resumo ordenado por versao),
+  `versao_especifica` (GET /jornadas/{id}), `restaurar` (POST /jornadas/{id}/restaurar
+  — clona como NOVA versão rascunho: versões NUNCA são editadas retroativamente),
+  `diff_versoes` (GET /jornadas/{a}/diff/{b} — domain/jornada/diff.py) e `exportar`
+  (GET /jornadas/{id}/export?formato=json|xml — domain/jornada/exportacao.py:
+  JSON = import nativo do JB; XML = auditoria corporativa com manifest + XSD).
 Eventos (§2.3): agent.invoked · jornada.versao_criada · jornada.grafo_atualizado.
 """
 
+import copy
 import uuid
 from datetime import datetime
 from typing import Any
@@ -30,7 +38,7 @@ from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import experimento_travado
 from domain.governanca.politicas import POLITICA_PUBLICADA
-from domain.jornada import taximetro
+from domain.jornada import exportacao, taximetro
 from domain.jornada.canonico import hash_jgc
 from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
@@ -117,6 +125,7 @@ class ServicoJornada:
             hash=hash_jgc(grafo),
             premissas=list(saida.premissas),
             custo_projetado=float(custo),
+            created_at=fim,
         )
         self._repo.adicionar_jornada(jornada)
         invocacao = self._registrar_invocacao(
@@ -253,6 +262,99 @@ class ServicoJornada:
         """JSON que o compilador (M9) gerará para o nó (§5.4) — determinístico."""
         jornada, _ = self._jornada_da_os(tenant_id, jornada_id)
         return preview_do_no(jornada.grafo, jornada.hash, no_id)  # nó ausente → 404
+
+    # ------------------------------------------------------- GET /os/{id}/jornadas
+    def listar_versoes(self, tenant_id: str, os_id: uuid.UUID) -> list[JornadaVersao]:
+        """Todas as versões do twin da OS em ordem de `versao` (§4.1) — o T7 mostra a
+        linha do tempo; OS sem versão devolve lista vazia (a OS existe). ZERO LLM."""
+        os_ = self._exigir_os(tenant_id, os_id)
+        return self._repo.listar_jornadas(os_.id)
+
+    # --------------------------------------------------------- GET /jornadas/{id}
+    def versao_especifica(self, tenant_id: str, jornada_id: uuid.UUID) -> JornadaVersao:
+        """Versão específica COMPLETA (grafo incluso) — leitura determinística."""
+        jornada, _ = self._jornada_da_os(tenant_id, jornada_id)
+        return jornada
+
+    # ------------------------------------------------ POST /jornadas/{id}/restaurar
+    def restaurar(
+        self, tenant_id: str, jornada_id: uuid.UUID, *, actor: str
+    ) -> tuple[JornadaVersao, dict[str, Any]]:
+        """Clona a versão como NOVA versão `rascunho` — versões NUNCA são editadas
+        retroativamente (§1.2 non-goals). Grafo (deepcopy) e hash idênticos aos da
+        origem; taxímetro RECALCULADO (tarifa/volume vigentes — A2); simulação e
+        previsto NÃO acompanham (Ensaio Geral pertence ao snapshot da origem §6)."""
+        origem, os_ = self._jornada_da_os(tenant_id, jornada_id)
+        grafo = copy.deepcopy(origem.grafo)
+        custo, memoria, avisos = self._taximetro(grafo, os_.id)
+        nova = JornadaVersao(
+            id=uuid.uuid4(),
+            os_id=os_.id,
+            versao=self._repo.proxima_versao(os_.id),
+            grafo=grafo,
+            hash=origem.hash,  # mesmo grafo ⇒ mesmo hash canônico (canonico.py)
+            premissas=list(origem.premissas),
+            custo_projetado=float(custo),
+            created_at=self._relogio.agora(),
+        )
+        self._repo.adicionar_jornada(nova)
+        self._evento(
+            os_,
+            "jornada.versao_criada",
+            {
+                "jornada_id": str(nova.id),
+                "versao": nova.versao,
+                "hash": nova.hash,
+                "custo_projetado": nova.custo_projetado,
+                "restaurada_de": {"jornada_id": str(origem.id), "versao": origem.versao},
+            },
+            actor=actor,
+        )
+        return nova, {"memoria": memoria, "avisos": avisos}
+
+    # ---------------------------------------------- GET /jornadas/{a}/diff/{b}
+    def diff_versoes(
+        self, tenant_id: str, jornada_a: uuid.UUID, jornada_b: uuid.UUID
+    ) -> dict[str, Any]:
+        """Diff estrutural entre duas versões da MESMA OS (domain/jornada/diff.py:
+        nós/arestas adicionados·removidos·alterados + meta) — versões de OSs
+        diferentes não são comparáveis (409)."""
+        de, os_de = self._jornada_da_os(tenant_id, jornada_a)
+        para, os_para = self._jornada_da_os(tenant_id, jornada_b)
+        if os_de.id != os_para.id:
+            raise EstadoInvalido(
+                f"Diff exige versões da MESMA OS — {jornada_a} pertence a {os_de.codigo} "
+                f"e {jornada_b} a {os_para.codigo} (§8-M7)."
+            )
+        return {
+            "de": {"id": str(de.id), "versao": de.versao, "hash": de.hash},
+            "para": {"id": str(para.id), "versao": para.versao, "hash": para.hash},
+            **diff_grafos(de.grafo, para.grafo),
+        }
+
+    # ------------------------------------- GET /jornadas/{id}/export?formato=json|xml
+    def exportar(
+        self, tenant_id: str, jornada_id: uuid.UUID, *, formato: str
+    ) -> tuple[bytes, str, str]:
+        """Exportação determinística (ZERO LLM §10.6) → (bytes, media type, filename).
+
+        `json` = spec de interaction do JB (import nativo — REST
+        /interaction/v1/interactions, via compilador M9); `xml` = MESMA spec canônica
+        com manifest (geradoEm via ClockPort) validável pelo journey_export.xsd —
+        integração/auditoria corporativa (o JB não importa XML). Ver exportacao.py.
+        """
+        jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
+        base = f"jornada-{os_.codigo}-v{jornada.versao}"
+        if formato == "json":
+            return (
+                exportacao.export_json(jornada.grafo, jornada.hash),
+                ("application/json"),
+                f"{base}.json",
+            )
+        conteudo = exportacao.export_xml(
+            jornada.grafo, jornada.hash, versao=jornada.versao, gerado_em=self._relogio.agora()
+        )
+        return conteudo, "application/xml", f"{base}.xml"
 
     # ----------------------------------------------------------------- privados
     @staticmethod

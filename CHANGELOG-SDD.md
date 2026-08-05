@@ -3,6 +3,41 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — M7 · Versionamento & exportação da jornada (emenda §8-M7 + §4.1)
+Emenda §1.3.3 — endpoints novos no router `jornada`, todos **determinísticos, ZERO
+LLM** (§10.6; caminho de leitura/derivação — nada é gerado por agente):
+- **Endpoints (§8-M7):** `GET /os/{id}/jornadas` (lista resumida em ordem de
+  `versao`: id, versao, estado, hash, custo_projetado, created_at — sem grafo; OS sem
+  versão → `[]`) · `GET /jornadas/{id}` (versão específica completa) ·
+  `POST /jornadas/{id}/restaurar` (clona como NOVA versão `rascunho`: grafo deepcopy
+  e hash IDÊNTICOS à origem, taxímetro recalculado A2, simulação/previsto não
+  acompanham — **versões nunca são editadas retroativamente**, §1.2 non-goals; evento
+  `jornada.versao_criada` com `restaurada_de`) · `GET /jornadas/{a}/diff/{b}`
+  (reusa `domain/jornada/diff.py` — o MESMO diff do ajustar/M11; OSs diferentes →
+  409) · `GET /jornadas/{id}/export?formato=json|xml` (download Content-Disposition).
+- **Exportação (`domain/jornada/exportacao.py`):** JSON = spec de interaction do
+  Journey Builder (REST `/interaction/v1/interactions`) montada REAPROVEITANDO o
+  compilador M9 (`compilar_recursos` §5.4): key `jrn-{hash[0:12]}`, activities com
+  externalKeys idempotentes §5.4.1, triggers, goals (derivados das activities
+  `type=goal`, preservando a lista de activities dos golden M9-A2). XML = a MESMA
+  spec em serialização determinística/canônica (`<Interaction><Activities><Activity
+  type=...>`), validada contra `backend/domain/jornada/journey_export.xsd` no aceite
+  B5, com `<Manifest>` embutido (hash JGC, versao, geradoEm via ClockPort, plataforma
+  Jornada). **Documentação honesta:** o import nativo do JB é JSON; o XML+XSD atende
+  integração/auditoria corporativa. Nó `exception` → 422 com `nos` (padrão M9);
+  relógio injetável no router (`app.state.relogio`, padrão do M11) prova o
+  determinismo byte a byte do XML.
+- **§4.1 (DDL) + migração `0010_m7_versionamento`:** `jornada_versao` ganha
+  `created_at timestamptz default now()` (a lista resumida expõe quando cada versão
+  nasceu; instante vem do ClockPort §2.1).
+- **Aceites (robustez é LEI):** `test_M7_B1` (lista ordenada, contrato fechado do
+  resumo, `[]` sem versão, 404 OS inexistente) · `B2` (restaurar: nova versão
+  rascunho, grafo idêntico + hash igual, origem intocada, RBAC 403, 404) · `B3`
+  (diff acusa adicionado/alterado/removido em nós E arestas; diff consigo mesmo
+  vazio; cross-OS 409) · `B4` (export JSON = interaction completa, determinística,
+  formato inválido 422) · `B5` (XML válido contra o XSD via lxml, byte a byte com
+  mesmo grafo+clock; clock diferente muda só o `geradoEm`). Suíte: 158 → 163 verdes.
+
 ## 2026-08-05 — UAT-UI: correções (lote frontend A16/A14/A12/A10/A6)
 Complemento de frontend do mesmo UAT (relatório em `docs/UAT-VPS-2026-08-05.md`);
 nenhuma mudança de contrato de API além da emenda §8-M7 já registrada abaixo (A14).

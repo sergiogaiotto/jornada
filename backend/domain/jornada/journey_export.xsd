@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Schema do export XML da jornada (SDD §8-M7, emenda 2026-08-05).
+  Contrato canônico de GET /jornadas/{id}/export?formato=xml — a MESMA spec de
+  interaction do export JSON (compilador M9 §5.4), serializada como
+  <Interaction><Activities><Activity type=...> com <Manifest> embutido
+  (hash JGC, versao, geradoEm via ClockPort, plataforma Jornada).
+  Nota honesta: o import nativo do Journey Builder é JSON — este XML+XSD atende
+  integração/auditoria corporativa. Teste M7-B5 valida o XML gerado contra este XSD.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           elementFormDefault="unqualified" attributeFormDefault="unqualified">
+
+  <xs:simpleType name="Sha256Hex">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-f]{64}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- externalKey idempotente §5.4.1: jrn-{hash[0:12]} (journey) ou jrn-{hash[0:12]}-{noId} -->
+  <xs:simpleType name="ChaveJourney">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="jrn-[0-9a-f]{12}(-.+)?"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="ArgumentsType">
+    <xs:sequence>
+      <xs:element name="Argument" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:simpleContent>
+            <xs:extension base="xs:string">
+              <xs:attribute name="nome" type="xs:string" use="required"/>
+            </xs:extension>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="OutcomesType">
+    <xs:sequence>
+      <xs:element name="Outcome" minOccurs="0" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:attribute name="key" type="xs:string" use="required"/>
+          <xs:attribute name="next" type="ChaveJourney" use="required"/>
+          <xs:attribute name="cond" type="xs:string"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Interaction">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Manifest">
+          <xs:complexType>
+            <xs:attribute name="hashJgc" type="Sha256Hex" use="required"/>
+            <xs:attribute name="versao" type="xs:positiveInteger" use="required"/>
+            <xs:attribute name="geradoEm" type="xs:dateTime" use="required"/>
+            <xs:attribute name="plataforma" type="xs:string" use="required" fixed="Jornada"/>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Triggers">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Trigger" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Arguments" type="ArgumentsType"/>
+                  </xs:sequence>
+                  <xs:attribute name="key" type="ChaveJourney" use="required"/>
+                  <xs:attribute name="type" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Activities">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Activity" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Arguments" type="ArgumentsType"/>
+                    <xs:element name="Outcomes" type="OutcomesType"/>
+                  </xs:sequence>
+                  <xs:attribute name="key" type="ChaveJourney" use="required"/>
+                  <xs:attribute name="type" type="xs:string" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="Goals">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Goal" minOccurs="0" maxOccurs="unbounded">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="Arguments" type="ArgumentsType"/>
+                  </xs:sequence>
+                  <xs:attribute name="key" type="ChaveJourney" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="key" type="ChaveJourney" use="required"/>
+      <xs:attribute name="name" type="xs:string" use="required"/>
+      <xs:attribute name="workflowApiVersion" type="xs:decimal" use="required"/>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

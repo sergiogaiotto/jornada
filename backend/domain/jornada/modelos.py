@@ -54,6 +54,8 @@ class JornadaVersao:
     # M8 (migração 0005 — emenda §4.1): saída do Ensaio Geral (§6) e Previsto congelado
     simulacao: dict[str, Any] | None = None  # funil, P10/P50/P90, poder, semáforo (§6)
     previsto: dict[str, Any] | None = None  # régua do pós-disparo (§1.1.2)
+    # M7 versionamento (migração 0010 — emenda §4.1): quando a versão nasceu (ClockPort)
+    created_at: datetime | None = None
 
 
 @dataclass

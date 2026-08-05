@@ -9,14 +9,20 @@ experimento do A3 nasce pelo próprio `POST /experimentos` (M8 parte 2 — já t
 
 import json
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lxml import etree
 
 from adapters.llm.fake import LLMFake
 from app.errors import PROBLEM_CONTENT_TYPE
 from domain.audiencia.modelos import Segmento
+from domain.jornada.sfmc_preview import external_key
+
+XSD_PATH = Path(__file__).resolve().parents[2] / "domain" / "jornada" / "journey_export.xsd"
 
 TENANT = "torre-movel"
 VOLUME_LIQUIDO = 50_000
@@ -363,6 +369,233 @@ def test_M7_get_jornada_ultima_versao(client: TestClient, app: FastAPI) -> None:
     ausente = client.get(f"/api/v1/os/{outra['id']}/jornada", headers=_h())
     assert ausente.status_code == 404
     assert ausente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
+# ------------------- Versionamento & exportação (emenda §8-M7 2026-08-05) — B1..B5
+
+
+class _RelogioFixo:
+    """Dublê do ClockPort (§2.1 — padrão do M11): o determinismo do export XML é
+    função do RELÓGIO injetado (`app.state.relogio`), nunca do wall time."""
+
+    def __init__(self, instante: datetime) -> None:
+        self._instante = instante
+
+    def agora(self) -> datetime:
+        return self._instante
+
+
+def _grafo_modificado(os_codigo: str) -> dict[str, Any]:
+    """Variante do JGC de referência p/ o diff (B3): n2 alterado (80/20), n4
+    (whatsapp) REMOVIDO, n7 (sms) ADICIONADO no lugar — e4/e5 religadas via n7."""
+    grafo = _grafo(os_codigo)
+    for no in grafo["nodes"]:
+        if no["id"] == "n2":
+            no["data"]["braços"] = [{"id": "tratado", "pct": 80}, {"id": "holdout", "pct": 20}]
+    grafo["nodes"] = [n for n in grafo["nodes"] if n["id"] != "n4"] + [
+        {"id": "n7", "type": "channel.sms", "data": {"assetRef": "asset-sms-1", "optIn": True}}
+    ]
+    for aresta in grafo["edges"]:
+        if aresta["id"] == "e4":
+            aresta["to"] = "n7"  # n3 → n7
+        if aresta["id"] == "e5":
+            aresta["from"] = "n7"  # n7 → n5
+    return grafo
+
+
+def test_M7_B1(client: TestClient, app: FastAPI) -> None:
+    """B1: `GET /os/{id}/jornadas` lista TODAS as versões em ordem de `versao`,
+    resumidas (id, versao, estado, hash, custo, created — SEM grafo)."""
+    os_, corpo = _gerar_jornada(client, app)
+    v1 = corpo["jornada"]
+    restaurada = client.post(f"/api/v1/jornadas/{v1['id']}/restaurar", headers=_h())
+    assert restaurada.status_code == 201, restaurada.text
+
+    resposta = client.get(f"/api/v1/os/{os_['id']}/jornadas", headers=_h())
+    assert resposta.status_code == 200, resposta.text
+    versoes = resposta.json()
+    assert [v["versao"] for v in versoes] == [1, 2]  # ordem de versao (§4.1)
+    assert versoes[0]["id"] == v1["id"]
+    for versao in versoes:  # resumo: contrato fechado, sem o grafo (payload leve)
+        assert set(versao) == {"id", "versao", "estado", "hash", "custo_projetado", "created_at"}
+        assert versao["created_at"] is not None
+    assert versoes[0]["hash"] == versoes[1]["hash"]  # restaurada = mesmo grafo (B2)
+    assert versoes[1]["estado"] == "rascunho"
+
+    # OS existente sem versão → lista vazia (não 404 — a OS existe)
+    outra = _criar_os_com_segmento(client, app)
+    vazia = client.get(f"/api/v1/os/{outra['id']}/jornadas", headers=_h())
+    assert vazia.status_code == 200 and vazia.json() == []
+
+    # OS inexistente → 404 problem+json
+    ausente = client.get(f"/api/v1/os/{uuid.uuid4()}/jornadas", headers=_h())
+    assert ausente.status_code == 404
+    assert ausente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
+def test_M7_B2(client: TestClient, app: FastAPI) -> None:
+    """B2: `POST /jornadas/{id}/restaurar` clona como NOVA versão `rascunho` com
+    grafo idêntico e hash igual — versões NUNCA são editadas retroativamente."""
+    _, corpo = _gerar_jornada(client, app)
+    v1 = corpo["jornada"]
+
+    resposta = client.post(f"/api/v1/jornadas/{v1['id']}/restaurar", headers=_h())
+    assert resposta.status_code == 201, resposta.text
+    nova = resposta.json()["jornada"]
+    assert nova["id"] != v1["id"]  # NOVA versão — a origem permanece intocada
+    assert nova["versao"] == 2 and nova["estado"] == "rascunho"
+    assert nova["grafo"] == v1["grafo"] and nova["hash"] == v1["hash"]
+    assert nova["custo_projetado"] == 16_267.50  # taxímetro RECALCULADO (A2)
+    assert resposta.json()["taximetro"]["custo_projetado"] == 16_267.50
+
+    # a v1 persistida segue exatamente como estava (imutabilidade retroativa)
+    persistida = app.state.repositorio_os.obter_jornada(uuid.UUID(v1["id"]))
+    assert persistida.versao == 1 and persistida.grafo == v1["grafo"]
+
+    # `GET /jornadas/{id}` devolve a versão específica completa (grafo incluso)
+    especifica = client.get(f"/api/v1/jornadas/{v1['id']}", headers=_h())
+    assert especifica.status_code == 200 and especifica.json()["grafo"] == v1["grafo"]
+
+    # restaurar exige papel de escrita (RBAC §8-M0) e 404 para id desconhecido
+    proibido = client.post(f"/api/v1/jornadas/{v1['id']}/restaurar", headers=_h("dev-solicitante"))
+    assert proibido.status_code == 403
+    ausente = client.post(f"/api/v1/jornadas/{uuid.uuid4()}/restaurar", headers=_h())
+    assert ausente.status_code == 404
+    assert ausente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
+def test_M7_B3(client: TestClient, app: FastAPI) -> None:
+    """B3: `GET /jornadas/{a}/diff/{b}` acusa nó adicionado (n7), alterado (n2) e
+    removido (n4) + arestas religadas — o MESMO diff.py do ajustar/M11."""
+    os_, corpo = _gerar_jornada(client, app)
+    v1 = corpo["jornada"]
+    v2_id = client.post(f"/api/v1/jornadas/{v1['id']}/restaurar", headers=_h()).json()["jornada"][
+        "id"
+    ]
+    salvo = client.put(
+        f"/api/v1/jornadas/{v2_id}/grafo",
+        json={"grafo": _grafo_modificado(os_["codigo"])},
+        headers=_h(),
+    )
+    assert salvo.status_code == 200, salvo.text
+
+    resposta = client.get(f"/api/v1/jornadas/{v1['id']}/diff/{v2_id}", headers=_h())
+    assert resposta.status_code == 200, resposta.text
+    diff = resposta.json()
+    assert diff["de"] == {"id": v1["id"], "versao": 1, "hash": v1["hash"]}
+    assert diff["para"]["versao"] == 2 and diff["para"]["hash"] != v1["hash"]
+    assert diff["nodes"]["adicionados"] == ["n7"]
+    assert diff["nodes"]["removidos"] == ["n4"]
+    assert diff["nodes"]["alterados"] == ["n2"]
+    assert diff["edges"]["alterados"] == ["e4", "e5"]  # religadas via n7
+    assert diff["edges"]["adicionados"] == [] and diff["edges"]["removidos"] == []
+    assert diff["meta_alterada"] is False
+
+    # diff de uma versão com ela mesma → vazio (sanidade do determinismo)
+    identico = client.get(f"/api/v1/jornadas/{v1['id']}/diff/{v1['id']}", headers=_h()).json()
+    assert identico["nodes"] == {"adicionados": [], "removidos": [], "alterados": []}
+
+    # versões de OSs DIFERENTES não são comparáveis → 409 problem+json
+    _, outro_corpo = _gerar_jornada(client, app)
+    cruzado = client.get(
+        f"/api/v1/jornadas/{v1['id']}/diff/{outro_corpo['jornada']['id']}", headers=_h()
+    )
+    assert cruzado.status_code == 409
+    assert cruzado.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
+def test_M7_B4(client: TestClient, app: FastAPI) -> None:
+    """B4: export JSON = spec de interaction do JB (import nativo — REST
+    /interaction/v1/interactions) com TODAS as activities do grafo, externalKeys
+    idempotentes (§5.4.1), triggers dos entrySources e goals."""
+    os_, corpo = _gerar_jornada(client, app)
+    jornada = corpo["jornada"]
+    hash12 = jornada["hash"][:12]
+
+    resposta = client.get(f"/api/v1/jornadas/{jornada['id']}/export?formato=json", headers=_h())
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.headers["content-type"].startswith("application/json")
+    assert (
+        resposta.headers["content-disposition"]
+        == f'attachment; filename="jornada-{os_["codigo"]}-v1.json"'
+    )
+    interaction = resposta.json()
+    assert interaction["key"] == f"jrn-{hash12}"
+    assert interaction["name"] == os_["codigo"]
+    # triggers = entrySources; activities = TODOS os demais nós, com externalKey §5.4.1
+    assert [t["key"] for t in interaction["triggers"]] == [external_key(jornada["hash"], "n1")]
+    assert {a["key"] for a in interaction["activities"]} == {
+        external_key(jornada["hash"], no) for no in ("n2", "n3", "n4", "n5", "n6")
+    }
+    por_no = {a["key"]: a for a in interaction["activities"]}
+    email = por_no[external_key(jornada["hash"], "n3")]
+    assert email["type"] == "emailSend"
+    assert email["outcomes"] == [
+        {"key": "e4", "next": external_key(jornada["hash"], "n4"), "cond": None}
+    ]
+    assert interaction["goals"] == [
+        {
+            "key": external_key(jornada["hash"], "n5"),
+            "arguments": {"metrica": "conversion", "deRef": "DE_conv"},
+        }
+    ]
+
+    # determinístico pelo grafo sozinho: segunda chamada devolve bytes IDÊNTICOS
+    assert (
+        resposta.content
+        == client.get(f"/api/v1/jornadas/{jornada['id']}/export?formato=json", headers=_h()).content
+    )
+
+    # formato fora de json|xml → 422 (contrato fechado)
+    invalido = client.get(f"/api/v1/jornadas/{jornada['id']}/export?formato=yaml", headers=_h())
+    assert invalido.status_code == 422
+
+
+def test_M7_B5(client: TestClient, app: FastAPI) -> None:
+    """B5: export XML válido contra journey_export.xsd e DETERMINÍSTICO byte a byte
+    com mesmo grafo+clock (ClockPort fixado via app.state.relogio — §2.1)."""
+    os_, corpo = _gerar_jornada(client, app)
+    jornada = corpo["jornada"]
+    instante = datetime(2026, 8, 5, 12, 0, 0, tzinfo=UTC)
+    app.state.relogio = _RelogioFixo(instante)
+
+    url = f"/api/v1/jornadas/{jornada['id']}/export?formato=xml"
+    resposta = client.get(url, headers=_h())
+    assert resposta.status_code == 200, resposta.text
+    assert resposta.headers["content-type"].startswith("application/xml")
+    assert (
+        resposta.headers["content-disposition"]
+        == f'attachment; filename="jornada-{os_["codigo"]}-v1.xml"'
+    )
+
+    # mesmo grafo + mesmo clock ⇒ MESMOS bytes (determinismo é contrato, não sorte)
+    assert resposta.content == client.get(url, headers=_h()).content
+
+    # XML VÁLIDO contra o XSD canônico (domain/jornada/journey_export.xsd)
+    esquema = etree.XMLSchema(etree.parse(str(XSD_PATH)))
+    documento = etree.fromstring(resposta.content)
+    esquema.assertValid(documento)
+
+    # manifest embutido: hash JGC, versao, geradoEm (ClockPort) e plataforma
+    manifesto = documento.find("Manifest")
+    assert manifesto.get("hashJgc") == jornada["hash"]
+    assert manifesto.get("versao") == "1"
+    assert manifesto.get("geradoEm") == instante.isoformat()
+    assert manifesto.get("plataforma") == "Jornada"
+
+    # a MESMA spec do JSON: key e activities idênticas às do export JSON (B4)
+    assert documento.get("key") == f"jrn-{jornada['hash'][:12]}"
+    atividades = documento.find("Activities")
+    assert [a.get("key") for a in atividades] == [
+        external_key(jornada["hash"], no) for no in ("n2", "n3", "n4", "n5", "n6")
+    ]
+    assert [g.get("key") for g in documento.find("Goals")] == [external_key(jornada["hash"], "n5")]
+
+    # clock diferente ⇒ SÓ o geradoEm muda (o conteúdo segue canônico)
+    app.state.relogio = _RelogioFixo(datetime(2026, 8, 6, 9, 30, 0, tzinfo=UTC))
+    outro = client.get(url, headers=_h())
+    assert outro.content != resposta.content
+    esquema.assertValid(etree.fromstring(outro.content))
 
 
 def test_M7_gerar_degradado_503_e_put_sem_llm(client: TestClient, app: FastAPI) -> None:
