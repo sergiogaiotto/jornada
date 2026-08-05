@@ -8,16 +8,24 @@
  * de nós/arestas com undo/redo, inspetor por tipo §5.2, lint local §5.3 e salvar
  * via PUT (que invalida a simulação). Sem versão: gerar com Flow OU começar do zero
  * (POST /os/{id}/jornada — emenda §8-M7, determinístico).
+ * Versionamento/exportação (emenda §8-M7): header com a linha do tempo de versões
+ * (versão antiga abre SOMENTE LEITURA + "Restaurar como nova versão"), "Comparar
+ * com…" pinta o diff do BE no próprio canvas (CanvasDiff), Exportar baixa JSON
+ * (import nativo JB) ou XML (auditoria) com toast de hash/manifest; modo Simulação
+ * sobrepõe os volumes P50 da última simulação por nó/aresta (overlaySimulacao).
  */
 import "@xyflow/react/dist/style.css";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Background, Controls, ReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
+import { CanvasDiff } from "../canvas/CanvasDiff";
 import { EditorJornada } from "../canvas/EditorJornada";
+import { HeaderVersoes } from "../canvas/HeaderVersoes";
 import { type ProblemaLint } from "../canvas/lint";
+import { aplicarOverlaySimulacao } from "../canvas/overlaySimulacao";
 import { BadgeViaAi } from "../components/ai/BadgeViaAi";
 import { ChipsPremissas } from "../components/ai/ChipsPremissas";
 import { Copiloto } from "../components/ai/Copiloto";
@@ -25,10 +33,18 @@ import { PreviaDiff, type ItemDiff } from "../components/ai/PreviaDiff";
 import { BannerErro, EstadoVazio, TituloTela } from "../components/ui/basics";
 import { jgcParaFlow, ROTULO_CANAL } from "../components/twin/jgcParaFlow";
 import { NoJb } from "../components/twin/NoJb";
-import { ApiError, get, post, put } from "../lib/api";
+import { ApiError, baixar, get, post, put } from "../lib/api";
 import { fmtBRL, fmtCompacto, fmtTarifa } from "../lib/format";
 import { usePainelContextual } from "../lib/hooks";
-import type { AjustarOut, GerarJornadaOut, GrafoJgc, GrafoOut, JornadaOut } from "../lib/types";
+import type {
+  AjustarOut,
+  DiffVersoesOut,
+  GerarJornadaOut,
+  GrafoJgc,
+  GrafoOut,
+  JornadaOut,
+  JornadaResumoOut,
+} from "../lib/types";
 import { useProducao } from "../stores/producao";
 
 const TIPOS_DE_NO = { jb: NoJb };
@@ -55,6 +71,8 @@ export function Twin() {
   const estado = useProducao((s) => s.jornadas[osId]);
   const setJornada = useProducao((s) => s.setJornada);
   const segmento = useProducao((s) => s.segmentos[osId]);
+  const ensaio = useProducao((s) => s.ensaios[osId]);
+  const queryClient = useQueryClient();
 
   const [modo, setModo] = useState<Modo>("desenho");
   const [instrucoes, setInstrucoes] = useState(
@@ -63,9 +81,20 @@ export function Twin() {
   const [ajuste, setAjuste] = useState("");
   const [proposta, setProposta] = useState<AjustarOut | null>(null);
   const [noSelecionado, setNoSelecionado] = useState<string | null>(null);
+  /** versão da linha do tempo em exibição (null = última — a única editável) */
+  const [versaoVistaId, setVersaoVistaId] = useState<string | null>(null);
+  /** "Comparar com…": versão do diff visual pintado no canvas */
+  const [compararComId, setCompararComId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   const jornada = estado?.jornada;
   const taximetro = estado?.taximetro;
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   /**
    * A14 (UAT): ao montar, carrega a ÚLTIMA versão persistida do twin
@@ -96,6 +125,40 @@ export function Twin() {
     }
   }, [ultimaVersao.data, estado, osId, setJornada]);
 
+  /** Linha do tempo do twin (emenda §8-M7): dropdown de versões do header. */
+  const versoes = useQuery({
+    queryKey: ["os", osId, "jornadas"],
+    queryFn: ({ signal }) => get<JornadaResumoOut[]>(`/os/${osId}/jornadas`, signal),
+    enabled: Boolean(osId) && Boolean(jornada),
+  });
+  const invalidarVersoes = () =>
+    void queryClient.invalidateQueries({ queryKey: ["os", osId, "jornadas"] });
+
+  /** Versão antiga selecionada → abre SOMENTE LEITURA (GET /jornadas/{id}). */
+  const vendoAntiga = Boolean(versaoVistaId && jornada && versaoVistaId !== jornada.id);
+  const versaoAntiga = useQuery({
+    queryKey: ["jornadas", versaoVistaId],
+    queryFn: ({ signal }) => get<JornadaOut>(`/jornadas/${versaoVistaId}`, signal),
+    enabled: vendoAntiga,
+  });
+  const jornadaExibida = vendoAntiga ? (versaoAntiga.data ?? null) : (jornada ?? null);
+
+  /** "Comparar com…" — grafo da outra versão (fantasmas) + diff do BE (diff.py). */
+  const comparada = useQuery({
+    queryKey: ["jornadas", compararComId],
+    queryFn: ({ signal }) => get<JornadaOut>(`/jornadas/${compararComId}`, signal),
+    enabled: Boolean(compararComId),
+  });
+  const diffVersoes = useQuery({
+    queryKey: ["jornadas", compararComId, "diff", jornadaExibida?.id],
+    queryFn: ({ signal }) =>
+      get<DiffVersoesOut>(`/jornadas/${compararComId}/diff/${jornadaExibida?.id}`, signal),
+    enabled: Boolean(compararComId && jornadaExibida && compararComId !== jornadaExibida.id),
+  });
+  const comparacaoAtiva = Boolean(
+    compararComId && jornadaExibida && comparada.data && diffVersoes.data,
+  );
+
   const gerar = useMutation({
     mutationFn: () => post<GerarJornadaOut>(`/os/${osId}/jornada/gerar`, { instrucoes }),
     onSuccess: (saida) => {
@@ -106,6 +169,9 @@ export function Twin() {
       });
       setProposta(null);
       setNoSelecionado(null);
+      setVersaoVistaId(null);
+      setCompararComId(null);
+      invalidarVersoes();
     },
   });
 
@@ -125,6 +191,7 @@ export function Twin() {
         resumo: estado?.resumo,
       });
       setProposta(null);
+      invalidarVersoes();
     },
   });
 
@@ -138,6 +205,7 @@ export function Twin() {
         taximetro: saida.taximetro,
         resumo: estado?.resumo,
       });
+      invalidarVersoes();
     },
   });
 
@@ -149,6 +217,38 @@ export function Twin() {
       setJornada(osId, { jornada: saida.jornada, taximetro: saida.taximetro });
       setProposta(null);
       setNoSelecionado(null);
+      setVersaoVistaId(null);
+      setCompararComId(null);
+      invalidarVersoes();
+    },
+  });
+
+  /** Restaurar versão antiga (emenda §8-M7): clona como NOVA versão rascunho —
+   * versões NUNCA são sobrescritas; a linha do tempo ganha uma entrada. */
+  const restaurar = useMutation({
+    mutationFn: (id: string) => post<GrafoOut>(`/jornadas/${id}/restaurar`),
+    onSuccess: (saida, origemId) => {
+      const origem = versoes.data?.find((v) => v.id === origemId);
+      setJornada(osId, { jornada: saida.jornada, taximetro: saida.taximetro });
+      setVersaoVistaId(null);
+      setCompararComId(null);
+      setNoSelecionado(null);
+      setToast(
+        `Restaurada${origem ? ` a v${origem.versao}` : ""} como NOVA versão v${saida.jornada.versao} (rascunho) — restaurar nunca sobrescreve.`,
+      );
+      invalidarVersoes();
+    },
+  });
+
+  /** Exportar (emenda §8-M7): download autenticado + toast com hash/manifest.
+   * JSON = spec de import NATIVO do JB · XML = integração/auditoria (manifest+XSD). */
+  const exportar = useMutation({
+    mutationFn: (formato: "json" | "xml") =>
+      baixar(`/jornadas/${jornadaExibida?.id}/export?formato=${formato}`),
+    onSuccess: ({ filename, bytes }) => {
+      setToast(
+        `↓ ${filename} (${fmtCompacto(bytes)} bytes) · manifest: v${jornadaExibida?.versao} · hash ${jornadaExibida?.hash.slice(0, 12)}…`,
+      );
     },
   });
 
@@ -165,21 +265,39 @@ export function Twin() {
   );
 
   const preview = useQuery({
-    queryKey: ["jornadas", jornada?.id, "sfmc-preview", noSelecionado],
+    queryKey: ["jornadas", jornadaExibida?.id, "sfmc-preview", noSelecionado],
     queryFn: ({ signal }) =>
       get<Record<string, unknown>>(
-        `/jornadas/${jornada?.id}/no/${noSelecionado}/sfmc-preview`,
+        `/jornadas/${jornadaExibida?.id}/no/${noSelecionado}/sfmc-preview`,
         signal,
       ),
-    enabled: Boolean(jornada?.id && noSelecionado),
+    enabled: Boolean(jornadaExibida?.id && noSelecionado),
   });
 
   const fluxo = useMemo(
     () =>
-      jornada
-        ? jgcParaFlow(jornada.grafo, taximetro?.memoria ?? [], segmento?.contagem_liquida)
+      jornadaExibida
+        ? jgcParaFlow(
+            jornadaExibida.grafo,
+            vendoAntiga ? [] : (taximetro?.memoria ?? []),
+            segmento?.contagem_liquida,
+          )
         : { nos: [], arestas: [] },
-    [jornada, taximetro, segmento?.contagem_liquida],
+    [jornadaExibida, vendoAntiga, taximetro, segmento?.contagem_liquida],
+  );
+
+  /** Última simulação (Ensaio Geral §6) VÁLIDA para a versão exibida — o id da
+   * jornada precisa bater (salvar/restaurar geram versão nova sem simulação). */
+  const simulacaoAtual =
+    jornadaExibida && ensaio && ensaio.id === jornadaExibida.id
+      ? (ensaio.simulacao ?? null)
+      : null;
+  const fluxoComOverlay = useMemo(
+    () =>
+      modo === "simulacao" && simulacaoAtual
+        ? aplicarOverlaySimulacao(fluxo, simulacaoAtual)
+        : fluxo,
+    [modo, simulacaoAtual, fluxo],
   );
 
   /** Taxímetro agregado por canal (rodapé): Σ volume × tarifa vigente (A2). */
@@ -194,7 +312,7 @@ export function Twin() {
     return [...mapa.entries()];
   }, [taximetro]);
 
-  const noJgc = jornada?.grafo.nodes.find((n) => n.id === noSelecionado) ?? null;
+  const noJgc = jornadaExibida?.grafo.nodes.find((n) => n.id === noSelecionado) ?? null;
   const itemMemoria =
     taximetro?.memoria.find((m) => m.no === noSelecionado) ?? null;
   const errosPut = errosDeValidacao(aplicar.error);
@@ -314,6 +432,34 @@ export function Twin() {
       {comecarDoZero.error != null && (
         <BannerErro erro={comecarDoZero.error} contexto="Começar do zero" />
       )}
+      {versaoAntiga.error != null && (
+        <BannerErro erro={versaoAntiga.error} contexto="Abrir versão da linha do tempo" />
+      )}
+      {comparada.error != null && (
+        <BannerErro erro={comparada.error} contexto="Comparar com versão" />
+      )}
+      {diffVersoes.error != null && (
+        <BannerErro erro={diffVersoes.error} contexto="Diff entre versões (§8-M7)" />
+      )}
+      {restaurar.error != null && (
+        <BannerErro erro={restaurar.error} contexto="Restaurar como nova versão" />
+      )}
+      {exportar.error != null && (
+        <BannerErro erro={exportar.error} contexto="Exportar jornada (§5.4)" />
+      )}
+      {toast && (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-good/50 bg-good-soft px-3 py-1.5 text-[12px] text-ink">
+          <span className="min-w-0 flex-1">{toast}</span>
+          <button
+            type="button"
+            aria-label="Fechar aviso"
+            className="text-muted hover:text-ink"
+            onClick={() => setToast(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {salvar.error != null && problemasServidor.length === 0 && (
         <BannerErro erro={salvar.error} contexto="Salvar grafo (jgc_validate §5.3)" />
       )}
@@ -392,7 +538,77 @@ export function Twin() {
       {/* ------------------------------------------------------------- canvas */}
       {jornada && (
         <>
-          {modo === "desenho" ? (
+          {/* header de versionamento/exportação (emenda §8-M7) */}
+          <HeaderVersoes
+            versoes={versoes.data ?? []}
+            exibidaId={jornadaExibida?.id ?? jornada.id}
+            ultimaId={jornada.id}
+            compararComId={compararComId}
+            exportando={exportar.isPending}
+            onVerVersao={(id) => {
+              setVersaoVistaId(id === jornada.id ? null : id);
+              setCompararComId(null);
+              setNoSelecionado(null);
+            }}
+            onCompararCom={setCompararComId}
+            onExportar={(formato) => exportar.mutate(formato)}
+          />
+
+          {vendoAntiga && jornadaExibida && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-warn-line bg-warn-bg px-3 py-1.5 text-[12px] text-warn">
+              <b>
+                versão v{jornadaExibida.versao} · {jornadaExibida.estado} — somente leitura
+              </b>
+              <span>custo projetado {fmtBRL(jornadaExibida.custo_projetado ?? 0)}</span>
+              <button
+                type="button"
+                className="mbtn-gh ml-auto !px-2 !py-0.5 !text-[11px]"
+                disabled={restaurar.isPending}
+                title="POST /jornadas/{id}/restaurar — clona como NOVA versão rascunho; nunca sobrescreve (§1.2)"
+                onClick={() => restaurar.mutate(jornadaExibida.id)}
+              >
+                {restaurar.isPending ? "Restaurando…" : "⎌ Restaurar como nova versão"}
+              </button>
+            </div>
+          )}
+
+          {comparacaoAtiva && jornadaExibida && comparada.data && diffVersoes.data ? (
+            /* DIFF VISUAL (emenda §8-M7): pinta o diff do BE no próprio canvas */
+            <CanvasDiff
+              exibido={jornadaExibida.grafo}
+              comparado={comparada.data.grafo}
+              diff={diffVersoes.data}
+              rotuloExibida={`v${jornadaExibida.versao}`}
+              rotuloComparada={`v${comparada.data.versao}`}
+              onFechar={() => setCompararComId(null)}
+            />
+          ) : compararComId && (comparada.isLoading || diffVersoes.isLoading) ? (
+            <EstadoVazio>Calculando o diff entre as versões…</EstadoVazio>
+          ) : vendoAntiga ? (
+            jornadaExibida ? (
+              /* versão antiga: canvas somente leitura (restaurar para editar) */
+              <div className="mcard relative h-[440px] overflow-hidden p-0">
+                <ReactFlow
+                  nodes={fluxo.nos}
+                  edges={fluxo.arestas}
+                  nodeTypes={TIPOS_DE_NO}
+                  fitView
+                  minZoom={0.4}
+                  maxZoom={1.6}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  deleteKeyCode={null}
+                  onNodeClick={(_, no) => setNoSelecionado(no.id)}
+                  onPaneClick={() => setNoSelecionado(null)}
+                >
+                  <Background gap={12} size={1} color="#DDE4EA" />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              </div>
+            ) : (
+              <EstadoVazio>Abrindo a versão selecionada…</EstadoVazio>
+            )
+          ) : modo === "desenho" ? (
             /* EDITOR nível Journey Builder (src/canvas/): paleta, CRUD, undo/redo,
                inspetor §5.2, lint §5.3, MiniMap, auto-layout e salvar (PUT). */
             <EditorJornada
@@ -404,15 +620,41 @@ export function Twin() {
             />
           ) : (
             <>
-              <div className="mb-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
-                {modo === "simulacao"
-                  ? "Modo Simulação: o funil P10/P50/P90 do Ensaio Geral (T8) pinta as arestas — rode a simulação para dar vida a este modo."
-                  : "Modo Dinâmico: telemetria ENS pinta o funil em tempo real após o lançamento (T12/T13)."}
-              </div>
+              {modo === "simulacao" && simulacaoAtual ? (
+                <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
+                  <span className="mchip-b">
+                    ▶ simulação de{" "}
+                    {new Date(simulacaoAtual.executada_em).toLocaleString("pt-BR")} · seed{" "}
+                    {simulacaoAtual.parametros.seed} · {simulacaoAtual.runs} runs
+                  </span>
+                  <span>
+                    volumes P50 por nó; arestas com contagem e espessura proporcional —
+                    destino com várias entradas rateia por igual (≈)
+                  </span>
+                </div>
+              ) : modo === "simulacao" ? (
+                <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
+                  <span>
+                    Sem simulação para esta versão do twin — rode o Ensaio Geral (T8) para
+                    dar vida a este modo.
+                  </span>
+                  <Link
+                    to={`/os/${osId}/simulacao`}
+                    className="mbtn !px-2.5 !py-1 !text-[11px]"
+                  >
+                    Abrir o Ensaio Geral →
+                  </Link>
+                </div>
+              ) : (
+                <div className="mb-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
+                  Modo Dinâmico: telemetria ENS pinta o funil em tempo real após o
+                  lançamento (T12/T13).
+                </div>
+              )}
               <div className="mcard relative h-[440px] overflow-hidden p-0">
                 <ReactFlow
-                  nodes={fluxo.nos}
-                  edges={fluxo.arestas}
+                  nodes={fluxoComOverlay.nos}
+                  edges={fluxoComOverlay.arestas}
                   nodeTypes={TIPOS_DE_NO}
                   fitView
                   minZoom={0.4}
@@ -440,7 +682,8 @@ export function Twin() {
             <span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-jb-exit align-middle" />Meta / Exit</span>
           </div>
 
-          {/* --------------------------------------- ajuste por texto livre */}
+          {/* ------- ajuste por texto livre (só na última versão, fora do diff) */}
+          {!vendoAntiga && !comparacaoAtiva && (
           <div className="mcard mt-3">
             <div className="mb-1 text-[10px] font-bold uppercase tracking-[.08em] text-faint">
               Ajustar por texto livre — o Flow propõe um DIFF; aplicar é humano (§1.1.3)
@@ -486,11 +729,12 @@ export function Twin() {
               </div>
             )}
           </div>
+          )}
         </>
       )}
 
       {/* -------------------------------------------- TAXÍMETRO fixo no rodapé */}
-      {taximetro && (
+      {taximetro && !vendoAntiga && (
         <div className="sticky bottom-0 z-10 mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-claro px-4 py-2 text-[12px] text-claro-pale shadow-card">
           <b className="tracking-wide text-claro-pale">TAXÍMETRO</b>
           {porCanal.map(([canal, v]) => (

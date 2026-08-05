@@ -3,6 +3,35 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — M7 · UI de versionamento, diff visual, export e overlay de simulação no T7
+SEM mudança de contrato (nenhum endpoint novo — consome as emendas §8-M7 já
+registradas abaixo). Frontend do canvas T7 (`frontend/src/canvas/` + `pages/Twin.tsx`):
+- **Versões (header do canvas):** dropdown da linha do tempo (`GET /os/{id}/jornadas`
+  — "v2 · rascunho (atual)", "v1 · publicado"); versão antiga abre SOMENTE LEITURA com
+  banner + "Restaurar como nova versão" (`POST /jornadas/{id}/restaurar`; toast deixa
+  explícito que restaurar cria versão nova, nunca sobrescreve).
+- **Diff visual (`CanvasDiff.tsx` + `diffVisual.ts`):** "Comparar com…" pinta o diff
+  do BE (`GET /jornadas/{a}/diff/{b}`, direção de=comparada→para=exibida) no PRÓPRIO
+  canvas: anel verde = adicionado, fantasma vermelho translúcido = removido (o nó da
+  outra versão entra num grafo de união só para ser visto), âmbar = alterado; painel
+  lateral lista as mudanças, clique centraliza o item.
+- **Exportar (header):** dropdown "JSON (spec de import) ↓" (import NATIVO do JB) e
+  "XML (Journey Builder) ↓" (integração/auditoria com manifest+XSD) — download
+  autenticado via `lib/api.baixar` (Bearer/X-Tenant impedem `<a href>`), toast com
+  filename + versão + hash[0:12].
+- **Modo Simulação (`overlaySimulacao.ts`):** volumes P50 da ÚLTIMA simulação por
+  nó (badge "X · P50") e por aresta (contagem + espessura proporcional; destino com
+  várias entradas rateia por igual, marcado "≈" — o motor §6 não expõe volume por
+  aresta); badge "simulação de <data> · seed N · K runs"; sem simulação válida para a
+  versão exibida → CTA para o Ensaio Geral (T8). A simulação vem do estado da SPA
+  (`ensaios`) e só vale quando o id da jornada bate (salvar/restaurar invalidam).
+- **Guia (conteudo.ts · twin):** campos novos (Paleta, Versões, Comparar, Exportar) e
+  pegadinhas ("salvar invalida a simulação", "restaurar cria versão nova",
+  "import nativo do JB é o JSON; XML é integração/auditoria", "pcts do split somam 100").
+- **Gates:** `npm run build` verde; pytest 165 verdes; ruff limpo. Smoke manual via
+  uvicorn+vite: linha do tempo, read-only+restaurar (v3 criada), diff pintado (Δ/＋/−),
+  export com Content-Disposition, overlay pós-Ensaio com seed 42 · 500 runs.
+
 ## 2026-08-05 — M7 · Editor "começar do zero" (emenda §8-M7)
 Emenda §1.3.3 — endpoint novo no router `jornada`, **determinístico, ZERO LLM**
 (§10.6), porta de entrada do editor visual T7 quando o usuário dispensa o Flow:

@@ -91,6 +91,30 @@ export const patch = <T>(path: string, body?: unknown) =>
 
 export const put = <T>(path: string, body?: unknown) => api<T>(path, { method: "PUT", body });
 
+/**
+ * Download autenticado (Content-Disposition — ex.: `GET /jornadas/{id}/export`):
+ * o Bearer + X-Tenant impedem um <a href> simples; baixa o blob e dispara o save.
+ * Devolve o nome do arquivo (do header) e o tamanho em bytes para o toast.
+ */
+export async function baixar(path: string): Promise<{ filename: string; bytes: number }> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Authorization: `Bearer ${devToken()}`, "X-Tenant": tenant() },
+  });
+  if (!res.ok) throw new ApiError(await problemDe(res));
+  const blob = await res.blob();
+  const disposicao = res.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? "export";
+  const url = URL.createObjectURL(blob);
+  const ancora = document.createElement("a");
+  ancora.href = url;
+  ancora.download = filename;
+  document.body.appendChild(ancora);
+  ancora.click();
+  ancora.remove();
+  URL.revokeObjectURL(url);
+  return { filename, bytes: blob.size };
+}
+
 /** Mensagem apresentável de qualquer erro (ApiError → detail RFC-7807). */
 export function mensagemDeErro(erro: unknown): string {
   if (erro instanceof ApiError) return erro.message;

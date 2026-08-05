@@ -343,6 +343,26 @@ export interface JornadaOut {
   estado: string;
   premissas: string[];
   custo_projetado: number | null;
+  created_at?: string | null;
+}
+
+/** Item de `GET /os/{id}/jornadas` (emenda §8-M7): linha do tempo SEM grafo. */
+export interface JornadaResumoOut {
+  id: string;
+  versao: number;
+  estado: string;
+  hash: string;
+  custo_projetado: number | null;
+  created_at: string | null;
+}
+
+/** `GET /jornadas/{a}/diff/{b}` (emenda §8-M7) — mesmo diff.py do ajustar/M11. */
+export interface DiffVersoesOut {
+  de: { id: string; versao: number; hash: string };
+  para: { id: string; versao: number; hash: string };
+  nodes: DiffIds;
+  edges: DiffIds;
+  meta_alterada: boolean;
 }
 
 /** Item da memória do taxímetro (§8-M7-A2): volume × tarifa por nó de canal. */
