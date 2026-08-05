@@ -74,6 +74,18 @@ export interface SaudeOut {
 }
 
 // ---------------------------------------------------------------- M3 · Intake
+export type EstadoPedido = "rascunho" | "completo" | "convertido" | "arquivado";
+
+/** Os 5 campos obrigatórios do pedido (espelho de CAMPOS_OBRIGATORIOS §8-M3) —
+ * ordem canônica = ordem em que `faltantes` é reportado pelo backend. */
+export const CAMPOS_PEDIDO: { campo: string; rotulo: string; dica: string }[] = [
+  { campo: "objetivo", rotulo: "Objetivo", dica: "o que a campanha precisa alcançar" },
+  { campo: "publico", rotulo: "Público", dica: "quem será abordado" },
+  { campo: "oferta", rotulo: "Oferta", dica: "o que será ofertado" },
+  { campo: "verba", rotulo: "Verba", dica: "orçamento (ex.: R$ 500 mil)" },
+  { campo: "janela", rotulo: "Janela", dica: "período do disparo (ex.: 01–15/09)" },
+];
+
 export interface PedidoOut {
   id: string;
   tenant_id: string;
@@ -81,8 +93,20 @@ export interface PedidoOut {
   conteudo: Briefing;
   completude: number;
   faltantes: string[];
-  estado: "rascunho" | "completo" | "convertido";
+  estado: EstadoPedido;
   os_id: string | null;
+  updated_at: string | null;
+}
+
+/** Item de `GET /pedidos` (emenda §8-M3): resumo SEM `conteudo`. */
+export interface PedidoResumo {
+  id: string;
+  solicitante: Record<string, unknown>;
+  completude: number;
+  faltantes: string[];
+  estado: EstadoPedido;
+  os_id: string | null;
+  updated_at: string | null;
 }
 
 export interface MensagemOut {
@@ -90,7 +114,7 @@ export interface MensagemOut {
   conteudo: Briefing;
   completude: number;
   faltantes: string[];
-  estado: "rascunho" | "completo" | "convertido";
+  estado: EstadoPedido;
 }
 
 export interface BriefingOut {

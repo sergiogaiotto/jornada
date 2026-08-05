@@ -74,6 +74,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Home do portfólio: KPIs, kanban por fase e saúde derivada de cada campanha (OS).",
     oQueE: [
       "O Cockpit é a porta de entrada da plataforma: todas as campanhas (OSs) do tenant aparecem num kanban organizado pelas 8 fases do ciclo de vida — de Pensada a Encerrada. No topo, quatro KPIs resumem o dia: quantas estão no ar, aguardando aprovação, em risco e no ciclo.",
+      "Campanha nova nasce aqui: o botão \"+ Nova Campanha\" (também disponível na busca ⌘K) cria um pedido rascunho com você como solicitante e abre a Sala de Ideação em modo pedido. Acima do kanban, o bloco \"Pedidos em aberto\" mostra a fila do intake — completude, faltantes e estado de cada pedido, com ações Abrir e Arquivar.",
       "Selecionar um card coloca aquela OS \"em foco\": o menu lateral inteiro passa a apontar para ela e o painel direito mostra fase, saúde e as últimas ações — inclusive as feitas por agentes de IA, marcadas com o badge via_ai clicável.",
       "A saúde que você vê aqui nunca é digitada por ninguém: ela é derivada em tempo real de pendências bloqueantes abertas e SLAs estourados. Não existe botão para \"pintar de verde\".",
     ],
@@ -100,6 +101,8 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       },
     ],
     campos: [
+      { campo: "+ Nova Campanha", significado: "Cria um pedido rascunho (você como solicitante) e abre a Sala de Ideação em modo pedido — também na busca ⌘K." },
+      { campo: "Pedidos em aberto", significado: "Fila do intake acima do kanban: solicitante, completude, faltantes, estado (rascunho/completo/convertido) e ações Abrir/Arquivar." },
       { campo: "KPIs do topo", significado: "No ar · Aguardando aprovação · Em risco · No ciclo — contagens do portfólio hoje." },
       { campo: "Kanban por fase", significado: "Colunas Pensada…Encerrada; cada card é uma OS." },
       { campo: "Card da OS", significado: "Código, nome, t-shirt (P/M/G/GG), fase e saúde derivada." },
@@ -107,6 +110,8 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Digest do copiloto", significado: "Resumo \"Hoje no portfólio\" — leitura, nunca ação automática." },
     ],
     casosDeUso: [
+      "Criar uma campanha do zero com \"+ Nova Campanha\" — conversando ou preenchendo os 5 campos direto.",
+      "Retomar um pedido parado na fila \"Pedidos em aberto\" (ou arquivar o que não vai adiante).",
       "Começar o dia identificando o que está \"Em risco\" e por quê.",
       "Selecionar a OS em que vai trabalhar — isso habilita todas as telas do menu.",
       "Acompanhar a distribuição do portfólio por fase (funil de campanhas).",
@@ -122,7 +127,8 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Saúde nunca é editável — se está \"em risco\", a causa é uma pendência bloqueante aberta ou SLA estourado; resolva a causa, não procure um botão.",
       "Sem OS selecionada, as telas de OS ficam desabilitadas no menu (esmaecidas) — selecione um card primeiro.",
       "Ambiente demo roda com repositórios em memória: redeploy/restart apaga OSs criadas por você; só a OS-2026-0457 volta pelas seeds.",
-      "Não existe (ainda) botão \"criar campanha\" na UI — a porta de entrada v1 é o portal do pedido/API (achado A3 do UAT).",
+      "Pedido convertido não se edita nem se arquiva — ele vira rastro de governança (pedido→OS); a edição continua no briefing da OS.",
+      "Arquivar é SOFT: o pedido some da fila mas continua legível pela API — não é exclusão.",
     ],
     relacionados: ["briefing", "workflow", "monitor"],
   },
@@ -134,9 +140,10 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     descricao:
       "Conversa com o Consultor de Campanhas e briefing dinâmico de 14 campos com prévia/diff Aplicar/Rejeitar.",
     oQueE: [
-      "A Sala de Ideação é onde a campanha ganha forma: à esquerda, uma conversa livre com o Consultor de Campanhas (agente de IA no perfil 120B); à direita, o briefing da OS com seus 14 campos, um medidor de completude e a lista do que ainda falta.",
-      "O Consultor lê sua mensagem, extrai/infere campos e devolve uma prévia de diff: valor atual vs valor inferido, com as premissas usadas. Nada entra no briefing sem você clicar Aplicar — este é o contrato de UX da IA em toda a plataforma (IA copilota, humano aprova).",
-      "Campos preenchidos por inferência ficam em âmbar (inferido) até serem confirmados por um humano, quando ficam verdes.",
+      "A Sala de Ideação é onde a campanha ganha forma: à esquerda, uma conversa livre com o Consultor de Campanhas (agente de IA no perfil 120B); à direita, o briefing com medidor de completude e a lista do que ainda falta.",
+      "Ela funciona em DOIS modos. Modo pedido (\"+ Nova Campanha\" no Cockpit): à direita ficam os 5 campos obrigatórios (objetivo, público, oferta, verba, janela) com estado visível — vazio, inferido (âmbar) ou confirmado (verde) — e EDIÇÃO INLINE: clique no campo, digite e salve; quem prefere formulário a conversa preenche direto. Com 100% de completude aparece o CTA \"Converter em OS\" (nome + t-shirt).",
+      "Modo OS (briefing de uma OS existente): o Consultor lê sua mensagem, extrai/infere campos e devolve uma prévia de diff — valor atual vs inferido, com premissas. Nada entra no briefing sem você clicar Aplicar (contrato de UX da IA: copilota propõe, humano aprova).",
+      "Nos dois modos, campos preenchidos por inferência ficam em âmbar (inferido) até um humano confirmar, quando ficam verdes. Os chips de faltantes do medidor são clicáveis e levam o foco direto ao campo.",
     ],
     fundamentos: [
       {
@@ -152,7 +159,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "Pedido → OS",
         definicao:
-          "O fluxo formal nasce de um pedido (portal do solicitante); converter pedido em OS exige completude = 100%.",
+          "O fluxo formal nasce de um pedido (criado na app pelo \"+ Nova Campanha\"); converter pedido em OS exige completude = 100% — calculada por código sobre os 5 campos obrigatórios.",
       },
       {
         termo: "inferido: true",
@@ -161,19 +168,24 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       },
     ],
     campos: [
-      { campo: "Conversa", significado: "Mensagens livres para o Consultor; cada resposta pode trazer uma prévia de diff." },
-      { campo: "Prévia/diff", significado: "Campo, valor atual vs inferido, premissas em chips e botões Aplicar/Rejeitar." },
-      { campo: "Briefing (14 campos)", significado: "Objetivo, oferta, público, verba, janela etc. — âmbar = inferido, verde = confirmado." },
-      { campo: "Completude / faltantes", significado: "Percentual preenchido e exatamente quais campos faltam." },
+      { campo: "Conversa", significado: "Mensagens livres para o Consultor; cada resposta pode trazer inferências (modo pedido: entram em âmbar; modo OS: viram prévia de diff)." },
+      { campo: "5 campos do pedido (modo pedido)", significado: "Objetivo, público, oferta, verba, janela — estado vazio/inferido/confirmado e edição inline (clicar → editar → salvar)." },
+      { campo: "Medidor de completude", significado: "Barra + % vivo no painel direito; faltantes são chips clicáveis que focam o campo." },
+      { campo: "Converter em OS", significado: "Aparece com 100% de completude: escolha nome e t-shirt (P/M/G/GG) e a OS nasce com o briefing herdado." },
+      { campo: "Prévia/diff (modo OS)", significado: "Campo, valor atual vs inferido, premissas em chips e botões Aplicar/Rejeitar." },
+      { campo: "Briefing (14 campos, modo OS)", significado: "Objetivo, oferta, público, verba, janela etc. — âmbar = inferido, verde = confirmado." },
       { campo: "Badge via_ai", significado: "Clicável: abre a invocação (prompt, evidências, quem aceitou)." },
     ],
     casosDeUso: [
+      "Criar uma campanha do zero pelo \"+ Nova Campanha\" e preencher os 5 campos conversando OU digitando direto (edição inline).",
       "Dar partida numa campanha a partir de um texto corrido de necessidade.",
-      "Completar rapidamente os faltantes apontados pelo medidor de completude.",
+      "Completar rapidamente os faltantes clicando nos chips do medidor de completude.",
+      "Converter o pedido completo em OS com nome e t-shirt escolhidos.",
       "Pedir recomendação consultiva (ex.: vale estender o público?) e avaliar a prévia.",
       "Revisar e confirmar, campo a campo, o que a IA inferiu.",
     ],
     exemplo: [
+      "Campanha nova: no Cockpit, clique \"+ Nova Campanha\" — preencha os 5 campos (conversando ou clicando para editar inline) até 100% e converta em OS.",
       "Na OS-2026-0457, abra Briefing · Ideação.",
       "Escreva: \"vale a pena estender para o público controle com ARPU > 60? o que recomenda?\".",
       "O Consultor responde (~10 s no hub real) com uma prévia de diff no campo público — valor atual vs inferido, premissas e o selo \"IA copilota · humano aprova\".",
@@ -181,10 +193,11 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Confirme o campo à direita para ele ficar verde — só então a Validação o considera decidido.",
     ],
     pegadinhas: [
+      "Pedido CONVERTIDO não se edita mais aqui — a edição continua no briefing da OS; e ARQUIVAR é soft: o pedido sai da fila do Cockpit mas segue legível (não é exclusão).",
       "Aplicar ≠ confirmar: o campo continua \"inferido\" (âmbar) até um humano confirmar — e a Validação/GO cobram isso.",
       "A extração é sensível à forma da frase (achado A1): rotule os valores (\"Verba: R$ 500 mil · Janela: 01–15/09\") para extração 100%.",
-      "Converter um pedido em OS exige completude = 100 — não adianta forçar com faltantes abertos.",
-      "Nenhuma resposta do agente altera o briefing sozinha; se algo mudou, houve um Aplicar humano — confira no via_ai.",
+      "Converter um pedido em OS exige completude = 100 — não adianta forçar com faltantes abertos (o backend nega com 409).",
+      "Nenhuma resposta do agente altera o briefing sozinha; se algo mudou, houve um Aplicar humano (modo OS) ou a inferência ficou em âmbar aguardando confirmação (modo pedido) — confira no via_ai.",
     ],
     relacionados: ["validacao", "warroom", "cockpit"],
   },
@@ -1234,6 +1247,7 @@ export function chaveDaRota(pathname: string): ChaveGuia {
   if (pathname === "/") return "cockpit";
   if (pathname.startsWith("/atelie")) return "atelie";
   if (pathname.startsWith("/aprovacao")) return "aprovacao";
+  if (pathname.startsWith("/pedidos")) return "briefing"; // Sala de Ideação em modo pedido
   const sub = pathname.split("/")[3];
   if (sub && sub in CONTEUDO_GUIA) return sub as ChaveGuia;
   return "cockpit";

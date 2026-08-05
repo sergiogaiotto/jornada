@@ -20,6 +20,16 @@ export function tenant(): string {
   return localStorage.getItem("jornada.tenant") ?? TENANT_PADRAO;
 }
 
+/**
+ * Bloco `solicitante` do pedido (§4.1) para o usuário logado — dev: derivado do
+ * token estático `dev-<papel>` (espelha o usuário seed do backend, app/auth.py).
+ */
+export function solicitanteAtual(): Record<string, unknown> {
+  const papel = devToken().replace(/^dev-/, "");
+  const nome = `Dev ${papel.charAt(0).toUpperCase()}${papel.slice(1)}`;
+  return { nome, area: papel, origem: "app" };
+}
+
 export class ApiError extends Error {
   readonly problem: Problem;
 

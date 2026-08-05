@@ -49,6 +49,9 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route path="/" element={<Cockpit />} />
 
+        {/* Sala de Ideação em modo pedido — "+ Nova Campanha" (§8-M3) */}
+        <Route path="/pedidos/:id" element={<Ideacao modo="pedido" />} />
+
         <Route path="/os/:id" element={<EscopoOs />}>
           <Route index element={<Navigate to="briefing" replace />} />
           <Route path="briefing" element={<Ideacao />} />

@@ -9,7 +9,14 @@ import {
 } from "react";
 
 import { get } from "./api";
-import type { BriefingOut, OsOut, SaudeOut, WorkflowOut } from "./types";
+import type {
+  BriefingOut,
+  OsOut,
+  PedidoOut,
+  PedidoResumo,
+  SaudeOut,
+  WorkflowOut,
+} from "./types";
 import { useUi } from "../stores/ui";
 
 export function useOsLista() {
@@ -39,6 +46,23 @@ export function useBriefing(id: string | null | undefined) {
   return useQuery({
     queryKey: ["os", id, "briefing"],
     queryFn: ({ signal }) => get<BriefingOut>(`/os/${id}/briefing`, signal),
+    enabled: Boolean(id),
+  });
+}
+
+/** Fila de pedidos do tenant (GET /pedidos — arquivados fora por padrão, §8-M3). */
+export function usePedidos() {
+  return useQuery({
+    queryKey: ["pedidos"],
+    queryFn: ({ signal }) => get<PedidoResumo[]>("/pedidos", signal),
+  });
+}
+
+/** Detalhe completo de um pedido (GET /pedidos/{id} — arquivado segue legível). */
+export function usePedido(id: string | null | undefined) {
+  return useQuery({
+    queryKey: ["pedidos", id],
+    queryFn: ({ signal }) => get<PedidoOut>(`/pedidos/${id}`, signal),
     enabled: Boolean(id),
   });
 }

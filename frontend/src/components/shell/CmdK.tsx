@@ -1,13 +1,20 @@
-/** Paleta ⌘K (SDD §12: "teclas ⌘K busca") — navega para OSs e telas. */
+/** Paleta ⌘K (SDD §12: "teclas ⌘K busca") — navega para OSs e telas; e cria
+ * a "+ Nova Campanha" (pedido rascunho → Sala de Ideação em modo pedido, §8-M3). */
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { post, solicitanteAtual } from "../../lib/api";
 import { useOsLista } from "../../lib/hooks";
+import type { PedidoOut } from "../../lib/types";
 import { useUi } from "../../stores/ui";
 
 interface Alvo {
   rotulo: string;
-  href: string;
+  /** rota a navegar — ausente quando o alvo é uma ação */
+  href?: string;
+  /** ação especial (ex.: nova campanha) executada no lugar da navegação */
+  acao?: () => void;
 }
 
 export function CmdK() {
@@ -15,7 +22,17 @@ export function CmdK() {
   const setAberto = useUi((s) => s.setCmdkAberto);
   const [busca, setBusca] = useState("");
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: oss } = useOsLista();
+
+  const novaCampanha = () => {
+    void post<PedidoOut>("/pedidos", { solicitante: solicitanteAtual(), conteudo: {} }).then(
+      (pedido) => {
+        void queryClient.invalidateQueries({ queryKey: ["pedidos"], exact: true });
+        navigate(`/pedidos/${pedido.id}`);
+      },
+    );
+  };
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -31,6 +48,7 @@ export function CmdK() {
 
   const alvos = useMemo<Alvo[]>(() => {
     const fixos: Alvo[] = [
+      { rotulo: "+ Nova Campanha — criar pedido e abrir a Sala de Ideação", acao: novaCampanha },
       { rotulo: "Cockpit — portfólio", href: "/" },
       { rotulo: "Ateliê de Agentes", href: "/atelie" },
     ];
@@ -65,7 +83,9 @@ export function CmdK() {
           onChange={(e) => setBusca(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && filtrados[0]) {
-              navigate(filtrados[0].href);
+              const alvo = filtrados[0];
+              if (alvo.href) navigate(alvo.href);
+              else alvo.acao?.();
               setAberto(false);
               setBusca("");
             }
@@ -75,12 +95,13 @@ export function CmdK() {
         />
         <ul className="max-h-72 overflow-y-auto py-1">
           {filtrados.map((a) => (
-            <li key={a.href + a.rotulo}>
+            <li key={(a.href ?? "acao") + a.rotulo}>
               <button
                 type="button"
                 className="block w-full px-4 py-2 text-left text-[13px] text-steel hover:bg-blue-soft"
                 onClick={() => {
-                  navigate(a.href);
+                  if (a.href) navigate(a.href);
+                  else a.acao?.();
                   setAberto(false);
                   setBusca("");
                 }}
