@@ -340,12 +340,13 @@ create table tarifa_canal (
   tenant_id text not null, canal text not null, custo_unit numeric(10,6) not null,
   vigencia daterange not null, primary key (tenant_id, canal, vigencia)
 );
-create table pedido (                         -- intake do Consultor (T2/portal)
+create table pedido (                         -- intake do Consultor (T2; criação na app)
   id uuid primary key default gen_random_uuid(), tenant_id text not null,
   solicitante jsonb not null, conteudo jsonb not null default '{}',
   completude numeric(4,1) default 0, faltantes text[] default '{}',
-  estado text default 'rascunho' check (estado in ('rascunho','completo','convertido')),
-  os_id uuid references os
+  -- emenda 2026-08-05 (CRUD §8-M3): + 'arquivado' (soft) e created/updated_at (migração 0011)
+  estado text default 'rascunho' check (estado in ('rascunho','completo','convertido','arquivado')),
+  os_id uuid references os, created_at timestamptz default now(), updated_at timestamptz default now()
 );
 create table dc_segment_cache (               -- T5a (consulta, não cópia)
   id text primary key, tenant_id text not null, nome text, criterios_resumo text,
@@ -475,8 +476,8 @@ Repo, docker-compose (db+api+web+mocks+mailpit), config, migração 0001, auth d
 **A1** etapa Criativos criada com 4 subtarefas padrão. **A2** etapa com dependência insatisfeita não vai a `em_andamento` (409). **A3** import de fixture `mocks/seeds/hike_export.json` cria 3 OSs com histórico preservado.
 
 ### M3 · Intake & Consultor (T2 + Portal do Solicitante)
-`POST /pedidos` (portal via link com token, sem login pleno) · `POST /pedidos/{id}/mensagem` (conversa com consultor; retorna conteúdo atualizado + completude + faltantes) · `POST /pedidos/{id}/converter` (→ OS com briefing pré-preenchido; campos `inferido:true` até confirmação) · `GET /os/{id}/briefing` · `PATCH .../briefing/{campo}` (confirmar/editar).
-**A1** pedido sem verba/janela → completude<100 e faltantes lista exatamente esses campos. **A2** converter exige completude=100. **A3** toda inferência do consultor carrega `via_ai` + evidências (precedentes).
+`POST /pedidos` (criação NA APP — emenda 2026-08-05: o Portal do Solicitante foi aposentado; o token de portal segue aceito como auth de link, sem login pleno) · `POST /pedidos/{id}/mensagem` (conversa com consultor; retorna conteúdo atualizado + completude + faltantes; retry §7.3 sem inferências PRESERVA a resposta da 1ª chamada — a resposta ao reprompt do sistema não vaza) · `POST /pedidos/{id}/converter` (→ OS com briefing pré-preenchido; campos `inferido:true` até confirmação) · CRUD (emenda 2026-08-05): `GET /pedidos` (lista do tenant, mais recente primeiro: id, solicitante, completude, faltantes, estado, os_id, updated_at — sem `conteudo`; arquivados fora por padrão, `?arquivados=true` inclui; login pleno) · `GET /pedidos/{id}` (detalhe completo) · `PATCH /pedidos/{id}/campos` `{campo: valor}` (edição manual direta → `inferido:false`, completude recalculada por código; convertido/arquivado → 409; analista|lider) · `POST /pedidos/{id}/arquivar` (soft e idempotente; convertido → 409; arquivado bloqueia mensagem/edição/conversão; analista|lider) · `GET /os/{id}/briefing` · `PATCH .../briefing/{campo}` (confirmar/editar).
+**A1** pedido sem verba/janela → completude<100 e faltantes lista exatamente esses campos. **A2** converter exige completude=100. **A3** toda inferência do consultor carrega `via_ai` + evidências (precedentes). **A4** retry §7.3 esgotado sem inferências → a resposta exibida (e o ledger `invocacao`) é a da 1ª chamada; o reprompt "SISTEMA:" jamais vaza ao solicitante. **B1** `GET /pedidos` lista o resumo do tenant (isolado por tenant; sem `conteudo`; login pleno). **B2** `PATCH /pedidos/{id}/campos` rebaixa a `inferido:false` e recalcula completude/faltantes/estado por CÓDIGO; convertido → 409. **B3** arquivar é soft (fora da lista padrão, legível por id) e idempotente; convertido → 409.
 
 ### M4 · Validação campo-a-campo & War Room (T3/T4)
 `POST /os/{id}/validacoes/{campo}` (executa checagem automática contra fonte: contagem, schema, frescor; retorna evidência) · `POST .../validacoes/{campo}/pendencia` · threads: `POST /os/{id}/threads` ancoradas em campo · `POST /os/{id}/go` (GO: congela SLAs+versões em `os.frozen`, fase→criada).

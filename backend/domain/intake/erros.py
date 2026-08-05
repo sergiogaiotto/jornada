@@ -1,8 +1,8 @@
 """Erros do domínio intake — especializam a hierarquia de domain/campanha/erros.py.
 
 Herdam de classes já mapeadas para HTTP no router (api/v1/os_governanca.py), portanto
-nenhum mapa novo é necessário: ConversaoIncompleta/PedidoJaConvertido→409 (EstadoInvalido)
-· CampoBriefingDesconhecido→404 (NaoEncontrado).
+nenhum mapa novo é necessário: ConversaoIncompleta/PedidoJaConvertido/PedidoArquivado→409
+(EstadoInvalido) · CampoBriefingDesconhecido→404 (NaoEncontrado).
 """
 
 from domain.campanha.erros import EstadoInvalido, NaoEncontrado
@@ -18,6 +18,10 @@ class ConversaoIncompleta(EstadoInvalido):
 
 class PedidoJaConvertido(EstadoInvalido):
     """Pedido `convertido` é terminal: nova conversão/conversa → 409."""
+
+
+class PedidoArquivado(EstadoInvalido):
+    """Pedido `arquivado` (soft — §8-M3 CRUD) não conversa, não edita, não converte (409)."""
 
 
 class CampoBriefingDesconhecido(NaoEncontrado):

@@ -1,19 +1,25 @@
-"""Rotas do M3 · Intake & Consultor / T2 + Portal (SDD §8-M3) — tag OpenAPI `intake`.
+"""Rotas do M3 · Intake & Consultor / T2 (SDD §8-M3) — tag OpenAPI `intake`.
 
-`POST /pedidos` (portal via link com token, sem login pleno) · `POST /pedidos/{id}/mensagem`
-(conversa com o consultor; devolve conteúdo atualizado + completude + faltantes) ·
+`POST /pedidos` (criação NA APP — o Portal do Solicitante foi aposentado; o token de
+portal segue aceito como auth de link) · `POST /pedidos/{id}/mensagem` (conversa com o
+consultor; devolve conteúdo atualizado + completude + faltantes) ·
 `POST /pedidos/{id}/converter` (exige completude=100 → cria OS com briefing `inferido:true`)
-· `GET /os/{id}/briefing` · `PATCH /os/{id}/briefing/{campo}` (confirmar/editar).
+· CRUD (emenda §8-M3): `GET /pedidos` (resumo do tenant; `?arquivados=true` inclui os
+arquivados) · `GET /pedidos/{id}` · `PATCH /pedidos/{id}/campos` (edição manual direta →
+`inferido:false`, completude por código) · `POST /pedidos/{id}/arquivar` (soft; convertido
+→ 409) · `GET /os/{id}/briefing` · `PATCH /os/{id}/briefing/{campo}` (confirmar/editar).
 
 Erros: domínio → RFC-7807 via `RotaComErrosDeDominio` (intake herda o mapa:
-ConversaoIncompleta/PedidoJaConvertido→409, CampoBriefingDesconhecido→404);
+ConversaoIncompleta/PedidoJaConvertido/PedidoArquivado→409, CampoBriefingDesconhecido→404);
 `LLMIndisponivel` → 503 `degraded` (§10.6) traduzido aqui. RBAC: pedidos/mensagem
-aceitam token de portal (get_portador); converter e PATCH briefing exigem analista|lider.
+aceitam token de portal (get_portador); GET lista/detalhe exigem login pleno; converter,
+PATCH campos, arquivar e PATCH briefing exigem analista|lider.
 LLM: SEMPRE via LLMPort — em teste o app injeta o fake em `app.state.llm` (§1.3.5).
 """
 
 import uuid
 from collections.abc import Callable, Coroutine
+from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -113,6 +119,9 @@ class PedidoCriar(BaseModel):
     conteudo: dict[str, Any] = Field(default_factory=dict)  # plano: {campo: valor}
 
 
+EstadoPedido = Literal["rascunho", "completo", "convertido", "arquivado"]  # ESTADOS_PEDIDO §4.1
+
+
 class PedidoOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -122,8 +131,24 @@ class PedidoOut(BaseModel):
     conteudo: dict[str, Any]
     completude: float
     faltantes: list[str]
-    estado: Literal["rascunho", "completo", "convertido"]
+    estado: EstadoPedido
     os_id: uuid.UUID | None
+    updated_at: datetime | None
+
+
+class PedidoResumo(BaseModel):
+    """Item de `GET /pedidos` (emenda §8-M3): resumo SEM `conteudo` (a lista da app
+    mostra fila de trabalho; o detalhe vem em `GET /pedidos/{id}`)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    solicitante: dict[str, Any]
+    completude: float
+    faltantes: list[str]
+    estado: EstadoPedido
+    os_id: uuid.UUID | None
+    updated_at: datetime | None
 
 
 class MensagemIn(BaseModel):
@@ -137,7 +162,7 @@ class MensagemOut(BaseModel):
     conteudo: dict[str, Any]
     completude: float
     faltantes: list[str]
-    estado: Literal["rascunho", "completo", "convertido"]
+    estado: EstadoPedido
 
 
 class ConverterIn(BaseModel):
@@ -170,6 +195,47 @@ async def criar_pedido(
         tenant, solicitante=payload.solicitante, conteudo=payload.conteudo
     )
     return PedidoOut.model_validate(pedido)
+
+
+@router.get("/pedidos", response_model=list[PedidoResumo])
+async def listar_pedidos(
+    tenant: Tenant, servico: Servico, _user: Autenticado, arquivados: bool = False
+) -> list[PedidoResumo]:
+    """CRUD (emenda §8-M3): fila de trabalho da app, mais recente primeiro; arquivados
+    (soft) ficam fora por padrão — `?arquivados=true` os inclui. Login pleno."""
+    pedidos = servico.listar_pedidos(tenant, incluir_arquivados=arquivados)
+    return [PedidoResumo.model_validate(pedido) for pedido in pedidos]
+
+
+@router.get("/pedidos/{pedido_id}", response_model=PedidoOut)
+async def obter_pedido(
+    pedido_id: uuid.UUID, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> PedidoOut:
+    """Detalhe completo (com `conteudo`); arquivado continua legível (soft)."""
+    return PedidoOut.model_validate(servico.obter_pedido(tenant, pedido_id))
+
+
+@router.patch("/pedidos/{pedido_id}/campos", response_model=PedidoOut)
+async def editar_campos_do_pedido(
+    pedido_id: uuid.UUID,
+    payload: dict[str, Any],
+    tenant: Tenant,
+    servico: Servico,
+    user: Escritor,
+) -> PedidoOut:
+    """Edição manual direta `{campo: valor}` — cada campo vira `inferido:false`;
+    completude/faltantes recalculados por CÓDIGO (§8-M3). Convertido/arquivado → 409."""
+    pedido = servico.editar_campos(tenant, pedido_id, payload, actor=user.email)
+    return PedidoOut.model_validate(pedido)
+
+
+@router.post("/pedidos/{pedido_id}/arquivar", response_model=PedidoOut)
+async def arquivar_pedido(
+    pedido_id: uuid.UUID, tenant: Tenant, servico: Servico, user: Escritor
+) -> PedidoOut:
+    """Arquivamento SOFT e idempotente; convertido → 409 (o rastro pedido→OS é
+    história de governança, não se arquiva)."""
+    return PedidoOut.model_validate(servico.arquivar(tenant, pedido_id, actor=user.email))
 
 
 @router.post("/pedidos/{pedido_id}/mensagem", response_model=MensagemOut)

@@ -19,7 +19,7 @@ from typing import Any
 # em que `faltantes` é reportado.
 CAMPOS_OBRIGATORIOS: tuple[str, ...] = ("objetivo", "publico", "oferta", "verba", "janela")
 
-ESTADOS_PEDIDO: tuple[str, ...] = ("rascunho", "completo", "convertido")
+ESTADOS_PEDIDO: tuple[str, ...] = ("rascunho", "completo", "convertido", "arquivado")
 
 
 @dataclass

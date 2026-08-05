@@ -20,6 +20,7 @@ tocar domínio nem serviços (hexagonal §2.1).
 
 import itertools
 import uuid
+from datetime import UTC, datetime
 
 from domain.agentes.modelos import AgenteEvidence, Invocacao
 from domain.atelie.modelos import Agente, HarnessCase, HarnessRun, SkillVersao
@@ -166,6 +167,14 @@ class RepositorioOsMemoria:
     def obter_pedido(self, tenant_id: str, pedido_id: uuid.UUID) -> Pedido | None:
         pedido = self._pedidos.get(pedido_id)
         return pedido if pedido is not None and pedido.tenant_id == tenant_id else None
+
+    def listar_pedidos(self, tenant_id: str) -> list[Pedido]:
+        # mais recente primeiro (fila de trabalho da app); updated_at nunca é None em
+        # pedidos criados pelo serviço — o fallback é só robustez contra dados crus
+        epoca = datetime.min.replace(tzinfo=UTC)
+        pedidos = [p for p in self._pedidos.values() if p.tenant_id == tenant_id]
+        pedidos.sort(key=lambda p: p.updated_at or p.created_at or epoca, reverse=True)
+        return pedidos
 
     def salvar_pedido(self, pedido: Pedido) -> None:
         self._pedidos[pedido.id] = pedido

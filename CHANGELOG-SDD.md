@@ -3,6 +3,35 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — M3 · CRUD de pedidos + fix A2-vazamento do retry §7.3 (emenda §8-M3 + §4.1)
+Emenda §1.3.3 — o Portal do Solicitante NÃO existe mais; a criação de pedidos vive na
+app (o token de portal segue aceito como auth de link nas rotas de intake). Achado do
+UAT: não existia lista de pedidos. Endpoints novos no router `intake`, todos
+**determinísticos, ZERO LLM**:
+- **Endpoints (§8-M3):** `GET /pedidos` (resumo do tenant, mais recente primeiro:
+  id, solicitante, completude, faltantes, estado, os_id, updated_at — sem `conteudo`;
+  arquivados fora por padrão, `?arquivados=true` inclui; login pleno) ·
+  `GET /pedidos/{id}` (detalhe completo; arquivado segue legível) ·
+  `PATCH /pedidos/{id}/campos` `{campo: valor}` (edição manual direta → `inferido:false`
+  preservando evidências para auditoria; completude/faltantes/estado recalculados por
+  CÓDIGO §8-M3; convertido/arquivado → 409; RBAC analista|lider; evento
+  `pedido.campos_editados`) · `POST /pedidos/{id}/arquivar` (SOFT e idempotente;
+  convertido → 409 — rastro pedido→OS é governança; arquivado bloqueia
+  mensagem/edição/conversão com 409 `PedidoArquivado`; evento `pedido.arquivado`).
+- **§4.1 (`pedido`, migração 0011):** CHECK de `estado` ganha `'arquivado'`;
+  colunas `created_at`/`updated_at` (convenção §4 — o DDL original não as tinha e a
+  lista expõe `updated_at`).
+- **FIX A2-vazamento (retry §7.3):** quando o reforço de contrato esgota SEM
+  inferências, `consultor_service.conversar` agora PRESERVA a resposta original da
+  1ª chamada (API e ledger `invocacao`) — a resposta ao reprompt "SISTEMA:" não
+  vaza mais ao solicitante; reforço que devolve inferências segue valendo.
+  `LLMFake` ganhou `respostas` sequenciais (a última se repete) para exercitar o loop.
+- **Aceites (robustez é LEI):** `test_M3_A4` (resposta preservada na API e no ledger,
+  3 chamadas = 1+max_retries, contraprova do reforço bem-sucedido) · `test_M3_B1`
+  (lista resumo, isolamento por tenant, 404 alheio, RBAC 401 portal) · `test_M3_B2`
+  (recalcula por código, reabre faltante ao esvaziar, 401/403/409) · `test_M3_B3`
+  (soft+idempotente, `?arquivados=true`, bloqueios 409, RBAC). Suíte: 165 → 169 verdes.
+
 ## 2026-08-05 — M7 · UI de versionamento, diff visual, export e overlay de simulação no T7
 SEM mudança de contrato (nenhum endpoint novo — consome as emendas §8-M7 já
 registradas abaixo). Frontend do canvas T7 (`frontend/src/canvas/` + `pages/Twin.tsx`):

@@ -8,6 +8,12 @@
   com trace_id = invocacao.id (§10.8). LLM indisponível → LLMIndisponivel (API: 503).
 - `converter` (POST /pedidos/{id}/converter): exige completude=100 (A2 → 409); cria OS
   com briefing pré-preenchido — campos `inferido:true` até confirmação (A3).
+- CRUD (emenda §8-M3 — o Portal do Solicitante foi aposentado; a criação vive na app):
+  `listar_pedidos` (GET /pedidos — arquivados fora por padrão) · `obter_pedido`
+  (GET /pedidos/{id}) · `editar_campos` (PATCH /pedidos/{id}/campos — edição manual
+  direta vira `inferido:false`; completude recalculada por CÓDIGO) · `arquivar`
+  (POST /pedidos/{id}/arquivar — soft e idempotente; convertido → 409; arquivado
+  bloqueia conversa/edição/conversão).
 - `obter_briefing`/`editar_briefing` (GET/PATCH /os/{id}/briefing[/{campo}]): confirmar
   ou editar um campo torna-o `inferido:false` (toque humano = confirmação).
 """
@@ -29,6 +35,7 @@ from domain.intake import completude as regras_completude
 from domain.intake.erros import (
     CampoBriefingDesconhecido,
     ConversaoIncompleta,
+    PedidoArquivado,
     PedidoJaConvertido,
 )
 from domain.intake.modelos import Pedido
@@ -83,6 +90,7 @@ class ServicoConsultor:
             raise PedidoJaConvertido(
                 f"Pedido {pedido_id} já convertido em OS; converse pela OS (§8-M3)."
             )
+        self._exigir_nao_arquivado(pedido)
         skill = agente_consultor.carregar_skill()
         mensagens = agente_consultor.montar_mensagens(
             skill, pedido.conteudo, pedido.faltantes, mensagem
@@ -92,6 +100,7 @@ class ServicoConsultor:
         saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         # §7.3: modelo que conversa sem preencher `inferencias` recebe reforço de
         # contrato (achado da validação com o hub real — FakeLLM nunca exercitava).
+        saida_original = saida  # 1ª resposta ao SOLICITANTE — é a que ele pode ver (A4)
         max_retries = int(skill.meta.get("max_retries", 2))
         tentativa = 0
         while (
@@ -117,6 +126,10 @@ class ServicoConsultor:
             ]
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
             saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
+        if tentativa and not saida.inferencias:
+            # A4 (fix vazamento): reforço esgotado SEM inferências → preserva a resposta
+            # original da 1ª chamada; a resposta ao reprompt "SISTEMA:" jamais vaza.
+            saida = saida_original
         fim = self._relogio.agora()
 
         for inf in saida.inferencias:  # A3: inferido:true + evidências (precedentes)
@@ -161,6 +174,7 @@ class ServicoConsultor:
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(f"Pedido {pedido_id} já convertido (os_id={pedido.os_id}).")
+        self._exigir_nao_arquivado(pedido)
         regras_completude.atualizar(pedido)  # nunca confia em estado gravado: recalcula
         if pedido.completude < 100.0:
             raise ConversaoIncompleta(
@@ -188,6 +202,63 @@ class ServicoConsultor:
             actor,
         )
         return os_
+
+    # ------------------------------------------------- CRUD de pedidos (emenda §8-M3)
+    def listar_pedidos(self, tenant_id: str, *, incluir_arquivados: bool = False) -> list[Pedido]:
+        """GET /pedidos — lista do tenant, mais recente primeiro; arquivados (soft)
+        ficam FORA por padrão (`incluir_arquivados=True` os traz de volta)."""
+        pedidos = self._repo.listar_pedidos(tenant_id)
+        if incluir_arquivados:
+            return pedidos
+        return [p for p in pedidos if p.estado != "arquivado"]
+
+    def obter_pedido(self, tenant_id: str, pedido_id: uuid.UUID) -> Pedido:
+        """GET /pedidos/{id} — pedido completo (arquivado continua legível: soft)."""
+        return self._exigir_pedido(tenant_id, pedido_id)
+
+    def editar_campos(
+        self, tenant_id: str, pedido_id: uuid.UUID, campos: dict[str, Any], *, actor: str
+    ) -> Pedido:
+        """PATCH /pedidos/{id}/campos — edição manual direta `{campo: valor}`.
+
+        Cada campo editado vira `inferido:false` (toque humano = confirmação, A3);
+        evidências de inferência anterior são preservadas para auditoria. Completude e
+        faltantes são SEMPRE recalculados por código (§8-M3). Convertido/arquivado → 409
+        (após conversão a edição é no briefing da OS)."""
+        pedido = self._exigir_pedido(tenant_id, pedido_id)
+        if pedido.estado == "convertido":
+            raise PedidoJaConvertido(
+                f"Pedido {pedido_id} já convertido; edite pelo briefing da OS {pedido.os_id}."
+            )
+        self._exigir_nao_arquivado(pedido)
+        for campo, valor in campos.items():
+            entrada = pedido.conteudo.get(campo)
+            nova: dict[str, Any] = dict(entrada) if isinstance(entrada, dict) else {}
+            nova["valor"] = valor
+            nova["inferido"] = False
+            pedido.conteudo[campo] = nova
+        regras_completude.atualizar(pedido)  # completude é CÓDIGO, nunca LLM (§8-M3)
+        pedido.updated_at = self._relogio.agora()
+        self._repo.salvar_pedido(pedido)
+        if campos:
+            self._evento_pedido(pedido, "pedido.campos_editados", {"campos": sorted(campos)}, actor)
+        return pedido
+
+    def arquivar(self, tenant_id: str, pedido_id: uuid.UUID, *, actor: str) -> Pedido:
+        """POST /pedidos/{id}/arquivar — soft e idempotente; convertido → 409 (o rastro
+        pedido→OS é história de governança, não se arquiva)."""
+        pedido = self._exigir_pedido(tenant_id, pedido_id)
+        if pedido.estado == "convertido":
+            raise PedidoJaConvertido(
+                f"Pedido {pedido_id} já convertido (os_id={pedido.os_id}); não se arquiva."
+            )
+        if pedido.estado == "arquivado":
+            return pedido  # idempotente (mutações aceitam repetição — convenções §8)
+        pedido.estado = "arquivado"
+        pedido.updated_at = self._relogio.agora()
+        self._repo.salvar_pedido(pedido)
+        self._evento_pedido(pedido, "pedido.arquivado", {}, actor)
+        return pedido
 
     # -------------------------------------------------------------- Briefing
     def obter_briefing(self, tenant_id: str, os_id: uuid.UUID) -> dict[str, Any]:
@@ -232,6 +303,29 @@ class ServicoConsultor:
         if pedido is None:
             raise NaoEncontrado(f"Pedido {pedido_id} não encontrado no tenant {tenant_id!r}.")
         return pedido
+
+    def _exigir_nao_arquivado(self, pedido: Pedido) -> None:
+        if pedido.estado == "arquivado":
+            raise PedidoArquivado(
+                f"Pedido {pedido.id} está arquivado (soft): não conversa, não edita, "
+                "não converte (§8-M3 CRUD)."
+            )
+
+    def _evento_pedido(
+        self, pedido: Pedido, tipo: str, payload: dict[str, Any], actor: str
+    ) -> None:
+        """Outbox de pedido (§2.3): os_id pode ser None antes da conversão."""
+        self._repo.adicionar_evento(
+            EventoDominio(
+                tenant_id=pedido.tenant_id,
+                os_id=pedido.os_id,
+                type=tipo,
+                payload={"pedido_id": str(pedido.id), **payload},
+                actor=actor,
+                via_ai=False,
+                created_at=self._relogio.agora(),
+            )
+        )
 
     def _registrar_invocacao(
         self,

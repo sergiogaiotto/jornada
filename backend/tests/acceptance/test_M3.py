@@ -225,6 +225,248 @@ def test_M3_A3(client: TestClient, app: FastAPI) -> None:
     assert inexistente.status_code == 404
 
 
+def test_M3_A4(client: TestClient, app: FastAPI) -> None:
+    """A4 (fix vazamento do retry §7.3): quando o reforço de contrato esgota SEM
+    inferências, a resposta exibida ao solicitante é a da 1ª chamada — a resposta ao
+    reprompt "SISTEMA:" JAMAIS vaza (nem na API, nem no ledger `invocacao`)."""
+    original = "Ótima pergunta! Para planejar a verba, começo pelo histórico de campanhas."
+    vazada = "Entendido, SISTEMA: não há campos de briefing para extrair (inferencias: [])."
+    fake = LLMFake(
+        respostas=[
+            json.dumps({"resposta": original, "inferencias": []}, ensure_ascii=False),
+            json.dumps({"resposta": vazada, "inferencias": []}, ensure_ascii=False),
+        ]
+    )
+    app.state.llm = fake
+
+    pedido = _criar_pedido(client, CONTEUDO_PARCIAL)
+    resposta = client.post(
+        f"/api/v1/pedidos/{pedido['id']}/mensagem",
+        # ≥20 chars + faltantes não vazios → dispara o reforço §7.3
+        json={"mensagem": "Como devo pensar a verba ideal para essa campanha de upgrade?"},
+        headers=_h("portal-dev"),
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+
+    # o reforço rodou até o teto (1 original + max_retries=2 do SKILL.md)...
+    assert len(fake.chamadas) == 3
+    assert "SISTEMA:" in json.dumps(fake.chamadas[-1]["mensagens"], ensure_ascii=False)
+    # ...mas a resposta preservada é a ORIGINAL; a resposta ao reprompt não aparece
+    assert corpo["resposta"] == original
+    assert corpo["resposta"] != vazada and "SISTEMA" not in corpo["resposta"]
+    # nada foi inferido: completude/faltantes seguem do código determinístico
+    assert corpo["completude"] == 60.0 and corpo["faltantes"] == ["verba", "janela"]
+    # ledger espelha o que o usuário viu (resposta original, zero inferências)
+    invocacao = app.state.repositorio_os.listar_invocacoes(TENANT)[0]
+    assert invocacao.output["resposta"] == original
+    assert invocacao.output["inferencias"] == []
+
+    # contraprova: retry que DEVOLVE inferências segue valendo (a saída do reforço vale)
+    fake2 = LLMFake(
+        respostas=[
+            json.dumps({"resposta": original, "inferencias": []}, ensure_ascii=False),
+            _resposta_consultor(
+                verba={"valor": "R$ 500.000", "evidencias": ["informado pelo solicitante"]},
+                janela={"valor": "01/10 a 15/10", "evidencias": ["informado pelo solicitante"]},
+            ),
+        ]
+    )
+    app.state.llm = fake2
+    outro = _criar_pedido(client, CONTEUDO_PARCIAL)
+    ok = client.post(
+        f"/api/v1/pedidos/{outro['id']}/mensagem",
+        json={"mensagem": "Verba de R$ 500 mil e janela de 01/10 a 15/10, pode registrar."},
+        headers=_h("portal-dev"),
+    )
+    assert ok.status_code == 200, ok.text
+    assert len(fake2.chamadas) == 2  # parou no 1º reforço bem-sucedido
+    assert ok.json()["completude"] == 100.0
+    assert ok.json()["conteudo"]["verba"]["inferido"] is True
+
+
+def test_M3_B1(client: TestClient) -> None:
+    """B1 (CRUD): GET /pedidos lista o resumo do tenant (id, solicitante, completude,
+    faltantes, estado, os_id, updated_at — SEM conteudo), isolado por tenant e com
+    login pleno; GET /pedidos/{id} devolve o detalhe completo."""
+    parcial = _criar_pedido(client, CONTEUDO_PARCIAL)
+    completo = _criar_pedido(client, CONTEUDO_COMPLETO)
+    # pedido de OUTRO tenant não pode aparecer na lista de torre-movel
+    outro_tenant = client.post(
+        "/api/v1/pedidos",
+        json={"solicitante": {"nome": "Beto"}, "conteudo": {}},
+        headers={"X-Tenant": "outra-torre", "Authorization": "Bearer portal-dev"},
+    )
+    assert outro_tenant.status_code == 201
+
+    lista = client.get("/api/v1/pedidos", headers=_h("dev-analista"))
+    assert lista.status_code == 200, lista.text
+    corpo = lista.json()
+    ids = [item["id"] for item in corpo]
+    assert parcial["id"] in ids and completo["id"] in ids
+    assert outro_tenant.json()["id"] not in ids  # isolamento por tenant
+
+    item = next(i for i in corpo if i["id"] == parcial["id"])
+    assert set(item) == {
+        "id",
+        "solicitante",
+        "completude",
+        "faltantes",
+        "estado",
+        "os_id",
+        "updated_at",
+    }  # resumo achado no UAT — sem `conteudo`
+    assert item["solicitante"] == {"nome": "Ana Lima", "area": "Marketing"}
+    assert item["completude"] == 60.0 and item["faltantes"] == ["verba", "janela"]
+    assert item["estado"] == "rascunho" and item["os_id"] is None
+    assert item["updated_at"] is not None
+
+    # detalhe completo (com conteudo); id de outro tenant → 404
+    detalhe = client.get(f"/api/v1/pedidos/{parcial['id']}", headers=_h("dev-analista"))
+    assert detalhe.status_code == 200
+    assert detalhe.json()["conteudo"]["objetivo"]["valor"] == CONTEUDO_PARCIAL["objetivo"]
+    alheio = client.get(f"/api/v1/pedidos/{outro_tenant.json()['id']}", headers=_h("dev-analista"))
+    assert alheio.status_code == 404
+
+    # RBAC: a lista é da APP (login pleno) — token de portal → 401
+    assert client.get("/api/v1/pedidos", headers=_h("portal-dev")).status_code == 401
+    assert (
+        client.get(f"/api/v1/pedidos/{parcial['id']}", headers=_h("portal-dev")).status_code == 401
+    )
+
+
+def test_M3_B2(client: TestClient) -> None:
+    """B2 (CRUD): PATCH /pedidos/{id}/campos — edição manual direta vira
+    `inferido:false` e completude/faltantes/estado são recalculados por CÓDIGO;
+    convertido → 409; RBAC de escrita (analista|lider)."""
+    pedido = _criar_pedido(client, CONTEUDO_PARCIAL)
+
+    ok = client.patch(
+        f"/api/v1/pedidos/{pedido['id']}/campos",
+        json={"verba": "R$ 300.000", "janela": "01/11 a 15/11"},
+        headers=_h("dev-analista"),
+    )
+    assert ok.status_code == 200, ok.text
+    corpo = ok.json()
+    assert corpo["completude"] == 100.0 and corpo["faltantes"] == []
+    assert corpo["estado"] == "completo"  # recalculado por código, nunca LLM
+    assert corpo["conteudo"]["verba"] == {"valor": "R$ 300.000", "inferido": False}
+    assert corpo["conteudo"]["objetivo"]["valor"] == CONTEUDO_PARCIAL["objetivo"]
+
+    # editar de volta para vazio REABRE o faltante (recalculo honesto, sem racha)
+    reaberto = client.patch(
+        f"/api/v1/pedidos/{pedido['id']}/campos",
+        json={"verba": ""},
+        headers=_h("dev-analista"),
+    )
+    assert reaberto.status_code == 200
+    assert reaberto.json()["completude"] == 80.0
+    assert reaberto.json()["faltantes"] == ["verba"]
+    assert reaberto.json()["estado"] == "rascunho"
+
+    # RBAC: portal → 401; solicitante pleno não escreve → 403
+    assert (
+        client.patch(
+            f"/api/v1/pedidos/{pedido['id']}/campos",
+            json={"verba": "R$ 1"},
+            headers=_h("portal-dev"),
+        ).status_code
+        == 401
+    )
+    assert (
+        client.patch(
+            f"/api/v1/pedidos/{pedido['id']}/campos",
+            json={"verba": "R$ 1"},
+            headers=_h("dev-solicitante"),
+        ).status_code
+        == 403
+    )
+
+    # convertido → 409 (depois da conversão a edição é no briefing da OS)
+    convertivel = _criar_pedido(client, CONTEUDO_COMPLETO)
+    assert (
+        client.post(
+            f"/api/v1/pedidos/{convertivel['id']}/converter", json={}, headers=_h("dev-analista")
+        ).status_code
+        == 201
+    )
+    depois = client.patch(
+        f"/api/v1/pedidos/{convertivel['id']}/campos",
+        json={"verba": "R$ 1"},
+        headers=_h("dev-analista"),
+    )
+    assert depois.status_code == 409
+    assert depois.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
+def test_M3_B3(client: TestClient) -> None:
+    """B3 (CRUD): arquivar é SOFT (some da lista padrão, segue legível por id) e
+    idempotente; convertido → 409; arquivado bloqueia conversa/edição/conversão."""
+    pedido = _criar_pedido(client, CONTEUDO_PARCIAL)
+
+    ok = client.post(f"/api/v1/pedidos/{pedido['id']}/arquivar", headers=_h("dev-analista"))
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["estado"] == "arquivado"
+
+    # soft: fora da lista padrão, dentro com ?arquivados=true, legível por id
+    padrao = client.get("/api/v1/pedidos", headers=_h("dev-analista")).json()
+    assert pedido["id"] not in [item["id"] for item in padrao]
+    com_arquivados = client.get(
+        "/api/v1/pedidos", params={"arquivados": "true"}, headers=_h("dev-analista")
+    ).json()
+    assert pedido["id"] in [item["id"] for item in com_arquivados]
+    detalhe = client.get(f"/api/v1/pedidos/{pedido['id']}", headers=_h("dev-analista"))
+    assert detalhe.status_code == 200 and detalhe.json()["estado"] == "arquivado"
+
+    # idempotente (mutações aceitam repetição — convenções §8)
+    de_novo = client.post(f"/api/v1/pedidos/{pedido['id']}/arquivar", headers=_h("dev-analista"))
+    assert de_novo.status_code == 200 and de_novo.json()["estado"] == "arquivado"
+
+    # arquivado bloqueia conversa, edição e conversão (409)
+    assert (
+        client.post(
+            f"/api/v1/pedidos/{pedido['id']}/mensagem",
+            json={"mensagem": "olá"},
+            headers=_h("portal-dev"),
+        ).status_code
+        == 409
+    )
+    assert (
+        client.patch(
+            f"/api/v1/pedidos/{pedido['id']}/campos",
+            json={"verba": "R$ 1"},
+            headers=_h("dev-analista"),
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            f"/api/v1/pedidos/{pedido['id']}/converter", json={}, headers=_h("dev-analista")
+        ).status_code
+        == 409
+    )
+
+    # convertido não se arquiva (rastro pedido→OS é governança) → 409
+    convertido = _criar_pedido(client, CONTEUDO_COMPLETO)
+    assert (
+        client.post(
+            f"/api/v1/pedidos/{convertido['id']}/converter", json={}, headers=_h("dev-analista")
+        ).status_code
+        == 201
+    )
+    negado = client.post(f"/api/v1/pedidos/{convertido['id']}/arquivar", headers=_h("dev-analista"))
+    assert negado.status_code == 409
+    assert negado.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+    # RBAC: token de portal não arquiva (401)
+    assert (
+        client.post(
+            f"/api/v1/pedidos/{pedido['id']}/arquivar", headers=_h("portal-dev")
+        ).status_code
+        == 401
+    )
+
+
 def test_M3_llm_indisponivel_responde_503_degraded(client: TestClient, app: FastAPI) -> None:
     """§10.6: hub indisponível → agente responde 503 `degraded` (problem+json); o caminho
     determinístico (criação/conversão) segue funcionando sem LLM."""

@@ -48,8 +48,9 @@ def calcular(conteudo: dict[str, Any]) -> tuple[float, list[str]]:
 def atualizar(pedido: Pedido) -> None:
     """Recalcula completude/faltantes e deriva o estado rascunho|completo.
 
-    `convertido` é terminal (mudança de estado é do serviço de conversão, não daqui).
+    `convertido` e `arquivado` são terminais (mudança de estado é do serviço —
+    conversão/arquivamento — não daqui; recálculo jamais "desarquiva").
     """
     pedido.completude, pedido.faltantes = calcular(pedido.conteudo)
-    if pedido.estado != "convertido":
+    if pedido.estado not in ("convertido", "arquivado"):
         pedido.estado = "completo" if pedido.completude >= 100.0 else "rascunho"
