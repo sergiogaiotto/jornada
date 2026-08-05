@@ -197,6 +197,7 @@ class ServicoPortoes(_Base):
         if jornada is None or not jornada.simulacao:
             return {
                 "estado": PENDENTE,
+                "id": str(experimento.id),
                 "n_minimo": experimento.n_minimo,
                 "motivo": "Rode o Ensaio Geral (§6) para validar o poder do experimento.",
             }
@@ -204,12 +205,14 @@ class ServicoPortoes(_Base):
         if not poder.get("aplicavel"):
             return {
                 "estado": PENDENTE,
+                "id": str(experimento.id),
                 "n_minimo": experimento.n_minimo,
                 "motivo": "Simulação corrente anterior ao pré-registro — re-simule.",
             }
         estado = VERDE if poder.get("portao") == VERDE else VERMELHO
         return {
             "estado": estado,
+            "id": str(experimento.id),  # T15: alvo de POST /experimentos/{id}/apurar
             "n_minimo": poder.get("n_minimo"),
             "n_disponivel": poder.get("n_disponivel"),
             "poder": poder.get("poder"),

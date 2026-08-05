@@ -23,7 +23,9 @@ from app.main import create_app, ping_db
 
 @pytest.fixture()
 def app() -> FastAPI:
-    application = create_app()
+    # demo=False: os aceites M0–M12 valem sobre repositório VAZIO (as seeds §11.4 são
+    # cobertas por tests/acceptance/test_seeds_demo.py com create_app(demo=True)).
+    application = create_app(demo=False)
     application.dependency_overrides[ping_db] = lambda: "ok"  # dublê: compose up / db saudável
     application.state.llm = LLMFake()  # §1.3.5: hub real jamais em teste
     application.state.tracer = TracerLangfuse(  # §10.8: LANGFUSE_ENABLED=false em teste

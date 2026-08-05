@@ -6,6 +6,7 @@ erros RFC-7807, auth Bearer dev. `GET /healthz` fora do prefixo (ops).
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
@@ -53,7 +54,10 @@ async def ping_llm() -> str:
         return "skip"
 
 
-def create_app() -> FastAPI:
+def create_app(*, demo: bool | None = None) -> FastAPI:
+    """`demo` (§11.4): None = automático (DEMO_MODE=true e APP_ENV=dev carregam as
+    seeds da OS-2026-0457); os testes de aceite criam o app com `demo=False` — os
+    aceites M0–M12 valem com e sem seeds (as seeds só ADICIONAM dados demo)."""
     settings = get_settings()  # valida config no startup (ex.: APP_SECRET em prod — §10.3)
     app = FastAPI(
         title="Jornada",
@@ -92,7 +96,18 @@ def create_app() -> FastAPI:
         """M0-A1: `{db: ok, llm: skip|ok}` em <2s com o compose de pé."""
         return {"db": db, "llm": llm}
 
-    _ = settings
+    if demo if demo is not None else (settings.demo_mode and settings.app_env == "dev"):
+        # Seeds DEMO_MODE (§11.4): repo em memória já semeado com a OS-2026-0457
+        # ponta a ponta — imports tardios evitam custo quando demo está desligado.
+        from adapters.demo_seeds import semear_demo
+        from adapters.persistence.memoria import RepositorioOsMemoria
+
+        repositorio = RepositorioOsMemoria()
+        semear_demo(
+            repositorio, tenant_id=settings.default_tenant, agora=datetime.now(UTC)
+        )
+        app.state.repositorio_os = repositorio
+
     return app
 
 

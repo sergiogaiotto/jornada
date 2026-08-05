@@ -24,6 +24,7 @@ from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import Experimento, experimento_travado
 from domain.governanca.politicas import POLITICA_PUBLICADA
+from domain.intake.completude import valor_do_campo
 from domain.jornada.erros import GrafoInvalido
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.validacao import validar_grafo
@@ -206,8 +207,10 @@ class ServicoSimulador:
         segmento = self._segmento_recontado(os_.id)
         priors = self._priors_vigentes(os_)
         briefing = os_.briefing or {}
-        ticket = float(briefing.get("ticket_medio") or priors["ticket_medio"])
-        verba = float(briefing["verba"]) if briefing.get("verba") else None
+        ticket = _numero(valor_do_campo(briefing, "ticket_medio")) or float(
+            priors["ticket_medio"]
+        )
+        verba = _numero(valor_do_campo(briefing, "verba"))
 
         ger = self._rng.gerador(seed)
         personas = self._personas.gerar(
@@ -310,3 +313,28 @@ class ServicoSimulador:
                 created_at=self._relogio.agora(),
             )
         )
+
+
+def _numero(valor: Any) -> float | None:
+    """Coerção tolerante de campo do briefing para número (auditoria MS8).
+
+    O briefing §4.1 guarda `{valor, inferido}` e o valor pode vir humano
+    ("R$ 500.000", "R$ 1.234,56") — o simulador precisa do float; não-numérico → None
+    (verba ausente não bloqueia o Ensaio; ticket cai nos priors)."""
+    if isinstance(valor, dict):
+        valor = valor.get("valor")
+    if valor is None or isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip().removeprefix("R$").strip()
+    if "," in texto:  # pt-BR: "." é milhar, "," é decimal
+        texto = texto.replace(".", "").replace(",", ".")
+    elif texto.count(".") == 1 and len(texto.rsplit(".", 1)[1]) == 3:
+        texto = texto.replace(".", "")  # "500.000" é milhar, não decimal
+    elif texto.count(".") > 1:
+        texto = texto.replace(".", "")
+    try:
+        return float(texto)
+    except ValueError:
+        return None

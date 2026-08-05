@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-page font-sans text-ink text-[14px] leading-relaxed;
+  }
+}
+
+@layer components {
+  /* cartão padrão do centro operacional (mock .mcard) */
+  .mcard {
+    @apply rounded-lg border border-line bg-white px-4 py-3;
+  }
+  /* linha de campo (mock .mfield) */
+  .mfield {
+    @apply mb-2 flex items-start justify-between gap-3 rounded-md border border-linesoft bg-white px-3 py-2;
+  }
+  /* rótulo de seção do painel contextual (mock .ctx .ct) */
+  .ctx-title {
+    @apply mb-1 mt-4 text-[10px] font-bold uppercase tracking-[.1em] text-faint first:mt-0;
+  }
+  /* chips de estado (mock .mchip) */
+  .mchip {
+    @apply inline-block whitespace-nowrap rounded-full px-2 py-px text-[11px] font-bold align-middle;
+  }
+  .mchip-g { @apply mchip bg-good-soft text-good; }
+  .mchip-b { @apply mchip bg-blue-soft text-blue; }
+  .mchip-w { @apply mchip bg-warn-soft text-warn; }
+  .mchip-r { @apply mchip bg-crit-soft text-crit; }
+  .mchip-n { @apply mchip bg-linesoft text-slatex; }
+  .mchip-v { @apply mchip bg-viol-soft text-viol; }
+  /* botões (mock .mbtn) */
+  .mbtn {
+    @apply inline-flex items-center gap-1 rounded-md bg-blue px-3 py-1.5 text-[12px] font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-[#C7D0DA] disabled:opacity-100;
+  }
+  .mbtn-gh {
+    @apply inline-flex items-center gap-1 rounded-md border border-line2 bg-white px-3 py-1.5 text-[12px] font-bold text-steel transition-colors hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .mbtn-rd { @apply mbtn bg-crit; }
+  .mbtn-gd { @apply mbtn bg-good; }
+  /* barra de progresso (mock .mbar) */
+  .mbar {
+    @apply my-1 h-[7px] overflow-hidden rounded bg-[#E9EEF3];
+  }
+  .mbar > i {
+    @apply block h-full rounded bg-blue;
+  }
+}

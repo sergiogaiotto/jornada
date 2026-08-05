@@ -3,6 +3,87 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — MS8 · Auditoria final (build + pytest + smoke e2e da jornada feliz) — notas
+- **Build/pytest:** `npm run build` (tsc -b + vite) verde; pytest 131 verdes (130 do
+  MS0–MS8 + 1 regressão nova abaixo). Cobertura e gates do §13 inalterados.
+- **Smoke e2e — ESCOLHA REGISTRADA (§13/MS8):** executado via **chamadas HTTP REAIS
+  às rotas** (uvicorn local :8000 + `vite preview` :4173 com proxy `/api` validado),
+  NÃO via Playwright (browsers não instalados nesta máquina; a verificação visual das
+  telas foi feita manualmente no browser sobre o preview). Duas portas dubladas
+  exatamente como o SDD manda para ambiente sem rede: `app.state.llm` = `LLMFake`
+  com a resposta enlatada do flow (§1.3.5 — único adapter de LLM permitido fora do
+  hub) e `app.state.sfmc_port` = mock-sfmc §11.1 in-process (o MESMO mock que o
+  compose sobe como container). Jornada feliz completa numa OS NOVA nascida do
+  intake: T1 (cockpit) → T2 (pedido 100% → converter, fase pensada) → T3/T4 (5
+  validações `ok` → GO, fase criada + .docx) → T5 (Data Cloud `usar` → Guard
+  certifica, 7 listas) → T7 (flow → JGC v1 válido + taxímetro) → T8 (simular
+  semáforo verde → congelar previsto) → T9/T10 (snapshot → link mágico → página SEM
+  Bearer → decidir aprovado) → T11 (plan 8 recursos → apply ok no mock-sfmc) → T12
+  (armar → onda 1 → onda 2, breakers limpos) → T13 (monitor 200; na OS demo §11.4 o
+  monitor traz previsto×realizado com os números calibrados das seeds).
+- **Fix de auditoria (`application/services/simulador_service.py`):** `simular`
+  estourava 500 (`float(dict)`) em OS nascida do intake REAL — o briefing §4.1 guarda
+  `{valor, inferido}` e a verba vem humana ("R$ 500.000"); os aceites M8 semeavam OS
+  sem briefing e nunca exercitavam o caminho. Novo helper puro `_numero` (forma §4.1
+  + moeda pt-BR; não-numérico → None — verba ausente não bloqueia o Ensaio, ticket
+  cai nos priors) usado para `ticket_medio` e `verba`; regressão em
+  `tests/unit/test_simulador_numero.py`. Nenhum contrato alterado.
+
+## 2026-08-05 — MS8 · Frontend SPA — 18 telas do §12 fiéis aos mocks — notas de implementação
+- **Entrega (`frontend/` — Vite+React+TS, Tailwind, TanStack Query, zustand,
+  @xyflow/react, Recharts — stack fechada do §12):** SPA completa com as 18 telas dos
+  mocks: T1 Cockpit (kanban por fase + saúde derivada) · T2 Sala de Ideação (conversa
+  + briefing estruturado ao vivo, inferido em âmbar até confirmação) · T3 Validação
+  campo-a-campo (veredito + evidência da fonte) · T4 War Room (threads ancoradas +
+  portão GO) · T4a Esteira (7 etapas + checklist de criativos) · T5 Audiência
+  (Estúdio SQL + waterfall + certificado do Guard) · T5a Data Cloud (relatório +
+  usar segmento) · T6 Criativo (matriz canal×variante + KV master) · T7 Twin/Canvas
+  (@xyflow/react, nós tipados na paleta Journey Builder) · T8 Ensaio Geral (funil
+  P10/P50/P90 + semáforo + comparar cenários + congelar previsto) · T9 Portões ·
+  T10 Aprovação standalone `/aprovacao/:token` (SEM shell, token é a credencial) ·
+  T11 Pré-voo & Drift · T12 Lançamento (armar/ondas/kill/retomar + breakers) ·
+  T13 Monitor (previsto fantasma × realizado sólido, Recharts) · T14 Pergunte aos
+  Dados (camada semântica, SQL público + downgrade a próximo do congelado) ·
+  T15 Otimização & Retro (propostas com diff/impacto/score, apuração do experimento,
+  aprendizados) · T16 Ateliê (agentes/skills/harness/publicar/dry-run + auditoria).
+- **Fidelidade visual (REFERÊNCIA OBRIGATÓRIA = mocks das 18 telas):** tokens
+  extraídos dos mocks para o `tailwind.config.js` — chrome vermelho Claro `#D0271C`
+  (topbar + rail colapsável) e `#A81E14` (item ativo/pills), centro operacional em
+  `#F3F5F8`, painel direito do copiloto, paleta Journey Builder no canvas
+  (`jb-entry #2E844A` · `jb-msg #0B827C` · `jb-flow #DD7A01` · `jb-ein #9050E9` ·
+  `jb-upd #0176D3`) e paleta de gráficos CVD-safe (ch1..ch4) no previsto×realizado.
+- **Contrato de consumo:** SOMENTE os endpoints do §8 via `/api/v1` (proxy Vite →
+  localhost:8000; `vite preview` herda o proxy), header `X-Tenant` + Bearer dev
+  (`dev-<papel>`, trocável via localStorage sem rebuild), erros RFC-7807 tipados
+  (`ApiError.degradado` → 503 `modo: degraded` §10.6 vira modo manual na UI).
+- **Decisão de estado (consequência do §8):** artefatos SEM endpoint de leitura no
+  §8 (jornada gerada, simulação corrente, snapshot/link da sessão) vivem no store
+  `producao` (zustand) enquanto a sessão produz o ciclo T7→T12; telas de LEITURA
+  (briefing, workflow, segmento, monitor, propostas, portões, auditoria) leem SEMPRE
+  do backend via TanStack Query — a OS demo §11.4 alimenta essas telas sem passo
+  manual (o canvas T7 da demo nasce de um clique em "Gerar jornada (Flow)").
+
+## 2026-08-05 — Seeds DEMO_MODE (§11.4) + id do experimento no portão T9 — notas de implementação
+- **Entrega (`adapters/demo_seeds.py`, wiring em `app/main.py:create_app(demo=…)`,
+  aceite `tests/acceptance/test_seeds_demo.py`):** materializa o item §11.4 "Seeds
+  DEMO_MODE: OS-2026-0457 completa" — briefing 14 campos, segmento 847.312 (waterfall
+  + volume de abordagem + certificado do Guard), esteira T4a com 7 etapas, JGC de 4
+  canais com holdout 90/10, Ensaio Geral + **Previsto CONGELADO** em snapshot
+  (hash composto real), apply ok, launch `em_rampa` (onda 2), telemetria de 20 dias
+  (ENS + extract espelhado < 2% — reconciliação A3 sem alerta) calibrada para
+  **lift +24,1pp (IC95 ≈ [+18,6, +29,6], significativo) e ROAS 18,5x**, experimento
+  pré-registrado com janela de 15 dias JÁ FECHADA (apuração T15 funciona na demo sem
+  ferir o anti-peeking A1), 2 propostas pendentes do optimize (diff/esforço/risco/
+  score pelas funções reais do M11 — sem LLM) e 3 aprendizados.
+- **Wiring:** `create_app(demo=None)` → automático quando `DEMO_MODE=true` e
+  `APP_ENV=dev`; o conftest dos aceites usa `demo=False` (módulos M0–M12 valem sobre
+  repositório vazio; as seeds só ADICIONAM dados). O marco de telemetria do launch é
+  gravado APÓS as seeds — breakers avaliam janela limpa (§8-M10).
+- **Emenda aditiva ao payload do portão de experimento (§8-M8 T9):**
+  `GET /os/{id}/portoes → portoes.experimento` agora inclui `id` do experimento —
+  o T15 (§8-M11) precisa do alvo de `POST /experimentos/{id}/apurar` e o SDD não
+  define outro GET que o exponha. Campo extra, nenhum contrato existente alterado.
+
 ## 2026-08-05 — M12 (parte 2) · Políticas + Auditoria (§8-M12, §4.1 `policy_versao`/`invocacao`) — notas de implementação
 - **Entrega (router `api/v1/plataforma.py`, tags `policies` e `auditoria` — mesmo
   módulo M12, dois recursos, padrão M8 T9/T10; serviço

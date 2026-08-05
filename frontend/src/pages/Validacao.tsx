@@ -1,0 +1,201 @@
+/**
+ * T3 · Validação de Prontidão — campo a campo (mock T3): cada campo do briefing é
+ * checado automaticamente contra a fonte (POST /os/{id}/validacoes/{campo} → checagens
+ * + evidência) com duas ações por campo: Validar ou Abrir pendência (bloqueante trava
+ * o GO). Painel direito mostra a evidência da verificação selecionada.
+ */
+import { useMutation } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+
+import { Copiloto } from "../components/ai/Copiloto";
+import { BannerErro, BarraProgresso, EstadoVazio, TituloTela } from "../components/ui/basics";
+import { post } from "../lib/api";
+import { useBriefing, usePainelContextual } from "../lib/hooks";
+import {
+  campoBriefing,
+  valorLegivel,
+  type PendenciaOut,
+  type ValidacaoOut,
+} from "../lib/types";
+
+export function Validacao() {
+  const { id } = useParams<{ id: string }>();
+  const { data: briefing, error: erroBriefing } = useBriefing(id);
+
+  const [resultados, setResultados] = useState<Record<string, ValidacaoOut>>({});
+  const [pendencias, setPendencias] = useState<Record<string, PendenciaOut>>({});
+  const [selecionado, setSelecionado] = useState<string | null>(null);
+
+  const campos = useMemo(() => Object.entries(briefing?.briefing ?? {}), [briefing]);
+  const decididos = campos.filter(([campo]) => resultados[campo] || pendencias[campo]).length;
+  const pct = campos.length > 0 ? (100 * decididos) / campos.length : 0;
+
+  const validar = useMutation({
+    mutationFn: (campo: string) =>
+      post<ValidacaoOut>(`/os/${id}/validacoes/${encodeURIComponent(campo)}`),
+    onSuccess: (v) => {
+      setResultados((r) => ({ ...r, [v.campo]: v }));
+      setSelecionado(v.campo);
+    },
+  });
+
+  const abrirPendencia = useMutation({
+    mutationFn: (campo: string) =>
+      post<PendenciaOut>(`/os/${id}/validacoes/${encodeURIComponent(campo)}/pendencia`, {}),
+    onSuccess: (p, campo) => {
+      setPendencias((m) => ({ ...m, [campo]: p }));
+      setSelecionado(campo);
+    },
+  });
+
+  const validacaoSelecionada = selecionado ? resultados[selecionado] : undefined;
+  const pendenciaSelecionada = selecionado ? pendencias[selecionado] : undefined;
+
+  usePainelContextual(
+    <>
+      <div className="ctx-title">Verificação selecionada</div>
+      {validacaoSelecionada ? (
+        <>
+          <div className="mfield">
+            <span className="min-w-0">
+              <span className="block text-[12px] font-bold">
+                {validacaoSelecionada.campo} —{" "}
+                {validacaoSelecionada.veredito === "ok" ? "validado" : "falha"}
+              </span>
+              {validacaoSelecionada.checagens.map((c, i) => (
+                <span key={i} className="block text-[11.5px] text-slatex">
+                  {c.ok ? "✓" : "✗"} <b>{c.tipo}</b>: {c.detalhe}
+                </span>
+              ))}
+            </span>
+          </div>
+          <div className="mfield block">
+            <span className="block text-[12px] font-bold">Evidência</span>
+            <pre className="mt-1 max-h-48 overflow-auto rounded bg-surface2 p-2 font-mono text-[10px] leading-snug text-steel">
+              {JSON.stringify(validacaoSelecionada.evidencia, null, 2)}
+            </pre>
+          </div>
+        </>
+      ) : pendenciaSelecionada ? (
+        <div className="mfield">
+          <span>
+            <span className="block text-[12px] font-bold">
+              Pendência #{pendenciaSelecionada.numero} · {pendenciaSelecionada.titulo}
+            </span>
+            <span className="block text-[11.5px] text-slatex">
+              {pendenciaSelecionada.bloqueante
+                ? "Bloqueante — trava o GO até resolução ou aceite do Accountable."
+                : "Não bloqueante."}
+            </span>
+          </span>
+          <span className="mchip-r">aberta</span>
+        </div>
+      ) : (
+        <div className="text-[12px] text-muted">
+          Valide um campo para ver checagens e evidência aqui.
+        </div>
+      )}
+      <div className="ctx-title">Copiloto</div>
+      <Copiloto titulo="Auditora de viabilidade">
+        Cada campo é checado contra a fonte real (contagem, schema, frescor) — a checagem
+        é determinística; a IA só redige a pendência e sugere resolução.
+      </Copiloto>
+    </>,
+    [validacaoSelecionada, pendenciaSelecionada],
+  );
+
+  return (
+    <div>
+      <TituloTela
+        titulo="Validação de Prontidão"
+        subtitulo={
+          <>
+            <b>{decididos}</b> de <b>{campos.length}</b> campos decididos — decida todos
+            para liberar o GO (T4).
+          </>
+        }
+      />
+      {erroBriefing != null && <BannerErro erro={erroBriefing} contexto="Briefing" />}
+      {validar.error != null && <BannerErro erro={validar.error} contexto="Validação" />}
+      {abrirPendencia.error != null && (
+        <BannerErro erro={abrirPendencia.error} contexto="Pendência" />
+      )}
+
+      <BarraProgresso pct={pct} tom={pct === 100 ? "good" : "blue"} />
+      <div className="mt-3">
+        {campos.length === 0 && (
+          <EstadoVazio>Briefing vazio — estruture-o na Sala de Ideação (T2).</EstadoVazio>
+        )}
+        {campos.map(([campo, entrada]) => {
+          const e = campoBriefing(entrada);
+          const resultado = resultados[campo];
+          const pendencia = pendencias[campo];
+          const comPendencia = Boolean(pendencia);
+          return (
+            <div
+              key={campo}
+              className={`mfield cursor-pointer ${
+                comPendencia
+                  ? "border-warn-line bg-warn-bg"
+                  : selecionado === campo
+                    ? "border-blue"
+                    : ""
+              }`}
+              onClick={() => setSelecionado(campo)}
+            >
+              <span className="min-w-0">
+                <span className="block text-[12.5px] font-bold">
+                  {campo}{" "}
+                  {resultado &&
+                    (resultado.veredito === "ok" ? (
+                      <span className="mchip-g">validado</span>
+                    ) : (
+                      <span className="mchip-r">falha</span>
+                    ))}
+                  {pendencia && (
+                    <span className="mchip-r">Pendência #{pendencia.numero} aberta</span>
+                  )}
+                  {!resultado && !pendencia && <span className="mchip-w">pendente</span>}
+                </span>
+                <span className="block break-words text-[11.5px] leading-snug text-slatex">
+                  {valorLegivel(e.valor)}
+                  {resultado && (
+                    <>
+                      {" · "}
+                      {resultado.checagens.map((c) => `${c.ok ? "✓" : "✗"} ${c.tipo}`).join(" · ")}
+                    </>
+                  )}
+                </span>
+              </span>
+              <span className="flex flex-none items-center gap-1.5">
+                <button
+                  type="button"
+                  className="mbtn !px-2.5 !py-1 !text-[11px]"
+                  disabled={validar.isPending}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    validar.mutate(campo);
+                  }}
+                >
+                  Validar
+                </button>
+                <button
+                  type="button"
+                  className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
+                  disabled={abrirPendencia.isPending || comPendencia}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    abrirPendencia.mutate(campo);
+                  }}
+                >
+                  Abrir pendência
+                </button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
