@@ -901,3 +901,11 @@ necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 - CI (§13): jobs de build do front e e2e compose ficam condicionados/pendentes até MS3/MS8;
   ruff + mypy + pytest (cobertura ≥ 80%) ativos desde o M0. `pytest-cov` instalado só no CI
   (não consta do §3.2).
+
+## 2026-08-05 · Validação HubGPU real + Langfuse (pós-vMS8)
+- **HubGPU validado**: 120B (flow gerou JGC válido de 14 nós em 35s pelo caminho de produção; consultor extraiu briefing com completude 80% e faltante exato), 20B (200 OK) e embeddings Qwen3 (dim=1024 confirmado). Achado: reasoning do gpt-oss consome completion tokens — adapter lê só `content`, sem `max_tokens` baixo.
+- **fix(m7)**: retry §7.3 no flow com feedback do jgc_validate (commit 86c95f3) — transformou a reprova real do 120B em geração válida.
+- **fix(adapter hubgpu)**: `APITimeoutError`/`APIConnectionError` → `LLMIndisponivel` (503 degraded §10.6), nunca 500.
+- **Langfuse §10.8 validado no self-hosted 2.95** (compose): trace com `trace_id = invocacao.id`, spans rag_retrieve/generate/judge, metadados de agente — via TracerLangfuse de produção. Nota: SDK deve seguir o pin `langfuse~=2.53` do requirements (v4 usa OTel, incompatível com servidor v2; venv local estava desalinhado).
+- **Ambiente dev desta máquina**: docker-compose.override.yml LOCAL (gitignorado) com portas 18080/13000 por conflito com o projeto `agente_*` + restart unless-stopped (containers do projeto sofreram kill externo 255 duas vezes).
+- Hub oscilou durante os testes (ConnectTimeout após 20 min funcionando) — instabilidade de rede/VPN, não do código; caminho degradado agora responde 503.

@@ -26,3 +26,4 @@ node_modules/
 .vscode/
 .DS_Store
 *.tsbuildinfo
+docker-compose.override.yml

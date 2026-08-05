@@ -48,5 +48,15 @@ class LLMHubGPU:
                 "use o modo manual da UI."
             )
         _, model = self._config(perfil)
-        resposta = self._client(perfil).chat.completions.create(model=model, messages=mensagens)
+        import openai  # lazy, coerente com o client
+
+        try:
+            resposta = self._client(perfil).chat.completions.create(
+                model=model, messages=mensagens
+            )
+        except (openai.APITimeoutError, openai.APIConnectionError) as erro:
+            # §10.6: hub fora do ar/inacessível é modo degradado (503), nunca 500.
+            raise LLMIndisponivel(
+                f"Hub LLM inacessível ({type(erro).__name__}); use o modo manual da UI."
+            ) from erro
         return resposta.choices[0].message.content or ""
