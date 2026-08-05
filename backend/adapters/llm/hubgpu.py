@@ -51,9 +51,7 @@ class LLMHubGPU:
         import openai  # lazy, coerente com o client
 
         try:
-            resposta = self._client(perfil).chat.completions.create(
-                model=model, messages=mensagens
-            )
+            resposta = self._client(perfil).chat.completions.create(model=model, messages=mensagens)
         except (openai.APITimeoutError, openai.APIConnectionError) as erro:
             # §10.6: hub fora do ar/inacessível é modo degradado (503), nunca 500.
             raise LLMIndisponivel(
