@@ -981,3 +981,24 @@ nenhuma mudança de contrato de API além da emenda §8-M7 já registrada abaixo
 - **Deploy automático**: job `deploy` no ci.yml — push na main com os 3 gates verdes → SSH na VPS (chave dedicada em secret) → git reset + compose up --build + smoke. Concurrency `deploy-vps`.
 - **Langfuse na VPS**: serviços langfuse+db-langfuse no docker-compose.prod.yml; api com LANGFUSE_ENABLED=true (trace por invocação §10.8); UI pública em :13000 com signup desabilitado e credenciais provisionadas via .env da VPS (segredos gerados lá, fora do git).
 - **HTTPS preparado**: server block nginx (host) para jornada.falagaiotto.com.br → 127.0.0.1:8050; certbot presente. Pendente: registro DNS A → 187.77.46.137 (aí `certbot --nginx -d jornada.falagaiotto.com.br`). Adaptação consciente: Caddy substituído pelo nginx já existente no host (porta 80 ocupada).
+
+## 2026-08-05 · M-Guia (emenda §8 + §7.2): chat "IA, me ajude com esta página"
+Emenda §1.3.3 — endpoint novo `POST /api/v1/ajuda/perguntar` (§8-M-Guia; agente `ajuda`
+adicionado ao roster §7.2, perfil 20b — §3: resumos de UI).
+- **Backend**: skill `backend/agents/skills/ajuda.skill.md` (canônico §7.1 — responde SÓ
+  sobre a plataforma Jornada e a página em foco; recusa fora da plataforma; sem PII);
+  `agents/ajuda.py` (mensagens + `mascarar_pii` §10.2), `application/services/
+  ajuda_service.py`, porta `repositorio_ajuda.py` e rota `api/v1/ajuda.py` (RFC-7807;
+  `LLMIndisponivel` → 503 `modo: degraded` §10.6). Contrato: `{pagina, pergunta,
+  contexto, historico?≤20}` — **`contexto` é o conteúdo do guia da página enviado pelo
+  front** (fonte única em `frontend/src/guia/conteudo.ts`; duplicar no back seria drift),
+  validado ≤ 8000 chars (422 além). Ledger `invocacao` via_ai com `os_id` NULL (a ajuda é
+  da página, não de uma OS) + trace Langfuse `ajuda.perguntar` (§10.8). Testes:
+  `test_guia_A1` (resposta usa o contexto via LLMFake; perfil 20b; PII mascarada; 422 >8k)
+  e `test_guia_A2` (forced_off → 503 degraded, zero invocação) — suíte 158 verdes.
+- **Frontend**: `guia/ChatAjuda.tsx` — overlay no padrão do print 4: header "IA, ME
+  AJUDE! · Página: {titulo}", empty-state com 4 chips de sugestão, bolhas usuário/IA,
+  input+Enviar, rodapé "histórico desta sessão (não persistido)" e estado degraded
+  amigável (guia estático como modo manual); histórico por página no store zustand do
+  guia (memória da SPA — nada persistido). Botão "✨ IA, me ajude com esta página!" do
+  drawer de Ajuda passa a abrir o chat de verdade.

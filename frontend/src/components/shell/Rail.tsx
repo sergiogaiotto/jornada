@@ -92,6 +92,7 @@ function ItemRail({ item }: { item: Item }) {
   if (!href) {
     return (
       <span
+        data-tour-id={item.destino}
         className={`${classes} cursor-not-allowed opacity-40`}
         title={`${item.rotulo} — selecione uma OS no Cockpit`}
       >
@@ -102,7 +103,7 @@ function ItemRail({ item }: { item: Item }) {
   }
 
   return (
-    <NavLink to={href} className={classes} title={item.rotulo}>
+    <NavLink to={href} data-tour-id={item.destino} className={classes} title={item.rotulo}>
       {icone}
       {!colapsado && <span className="truncate">{item.rotulo}</span>}
     </NavLink>

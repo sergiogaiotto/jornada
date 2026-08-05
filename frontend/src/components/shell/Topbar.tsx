@@ -4,6 +4,7 @@
  */
 import { Link, useLocation } from "react-router-dom";
 
+import { DropdownGuia } from "../../guia/DropdownGuia";
 import { useOs } from "../../lib/hooks";
 import { tenant } from "../../lib/api";
 import { useUi } from "../../stores/ui";
@@ -59,6 +60,7 @@ export function Topbar() {
       </Link>
       <span className="truncate text-[12px] text-claro-rose2">{breadcrumb}</span>
       <span className="flex-1" />
+      <DropdownGuia />
       <button
         type="button"
         onClick={() => setCmdkAberto(true)}

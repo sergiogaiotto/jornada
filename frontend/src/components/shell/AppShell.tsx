@@ -4,6 +4,10 @@
  */
 import { Outlet, useLocation } from "react-router-dom";
 
+import { AjudaPagina } from "../../guia/AjudaPagina";
+import { ChatAjuda } from "../../guia/ChatAjuda";
+import { GuiaModulos } from "../../guia/GuiaModulos";
+import { Tour } from "../../guia/Tour";
 import { useUi } from "../../stores/ui";
 import { CmdK } from "./CmdK";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -35,6 +39,10 @@ export function AppShell() {
         )}
       </div>
       <CmdK />
+      <Tour />
+      <GuiaModulos />
+      <AjudaPagina />
+      <ChatAjuda />
     </div>
   );
 }

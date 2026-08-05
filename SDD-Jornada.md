@@ -447,6 +447,7 @@ Parser valida front-matter; publicar versão exige `harness_run.passou=true` (sc
 | cost | 20b | transversal | taxímetro/burn-rate (cálculo é código; LLM narra) |
 | doc | 20b | portões | .docx executivo via python-docx |
 | maestro | 120b | OS | FSM da campanha; nunca tarefa atômica |
+| ajuda | 20b | Guia (18 telas) | resposta didática sobre a página em foco (contexto = guia enviado pelo front); recusa fora da plataforma (emenda 2026-08-05, §8-M-Guia) |
 
 ### 7.3 Orquestração LangGraph
 Supergrafo por OS (checkpointer `langgraph-checkpoint-postgres`): nós = células IPO; `interrupt()` humano em TODOS os portões (pendência bloqueante, aprovação link mágico, simulação, publish). Subgrafo padrão do especialista: `preparar_contexto(RAG top-k=8 filtrado por bases autorizadas)` → `gerar` → `judge` (120B, dimensões correção/evidência/compliance/formato) → `retry≤2` → `entregar prévia` (Aplicar/Rejeitar na UI). Toda invocação grava `invocacao` (via_ai) com evidências citadas.
@@ -511,6 +512,10 @@ Repo, docker-compose (db+api+web+mocks+mailpit), config, migração 0001, auth d
 ### M12 · Ateliê (T16) + Políticas + Auditoria
 CRUD agentes/skills (`POST /skills/{id}/harness` → run; `POST /skills/{id}/publicar` exige harness verde) · dry-run lado a lado · `GET/POST /policies` (draft→publicada; relatório de policy drift sobre OSs em voo) · `GET /auditoria` (filtros; evento `via_ai` clicável: prompt+evidências+judge+humano) · `POST /auditoria/reconstruir/{invocacao}` (Art. 20).
 **A1** publicar skill com harness<90 → 409. **A2** OS em voo não muda de versão ao publicar skill nova (frozen). **A3** reconstrução devolve exatamente input/evidências/output da época.
+
+### M-Guia · Guia Interativo — chat "IA, me ajude com esta página" (emenda 2026-08-05)
+`POST /ajuda/perguntar` `{pagina, pergunta, contexto, historico?}` — agente `ajuda` (perfil **20b**, §3: resumos de UI; skill `backend/agents/skills/ajuda.skill.md` §7.1) responde SÓ sobre a plataforma Jornada e a página em questão. O `contexto` é o conteúdo do guia da página, enviado pelo FRONT (fonte única em `frontend/src/guia/conteudo.ts` — duplicar no back seria drift); o contrato valida ≤ 8000 chars (422 além). `historico` (≤20 turnos `{papel: usuario|ia, texto}`) vive só na sessão do navegador — nada persistido além do ledger. Recusa assuntos fora da plataforma (instrução da skill — o chat é informativo: nenhuma ação de domínio executa a partir dele); sem PII: pergunta MASCARADA no ledger (§10.2). Grava `invocacao` via_ai com `os_id` NULL (a ajuda é da página, não de uma OS) + trace Langfuse fire-and-forget (§10.8). Hub fora/`forced_off` → 503 `modo: degraded` (§10.6); o front oferece o guia estático como modo manual.
+**A1** resposta gerada com o contexto do guia no prompt (LLMFake); `invocacao` gravada (perfil 20b, os_id NULL, PII mascarada); contexto >8k → 422. **A2** hub `forced_off` → 503 problem+json `modo: degraded`, zero invocação gravada.
 
 ---
 
