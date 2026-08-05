@@ -1,0 +1,55 @@
+{
+  "descricao": "Seed das 7 listas de supressão (§11.4 '7 listas com contagens'; tabela lista_supressao §4.1). Contagens coerentes com o read model de audiência (read_model_audiencia.json). `amostras` = contato_hash sha256 SINTÉTICOS (sha256 de 'demo:{lista}:{nnnn}') para o breaker `disparo_lista_supressao` (§8-M10-A2) — NUNCA msisdn/e-mail em claro (§10.2).",
+  "tenant_id": "torre-movel",
+  "listas": {
+    "blacklist": {
+      "contagem": 12400,
+      "amostras": [
+        "4e3f9a445780e69f68f6083d0392ee8819e1f3c76c170aa31616e23257f9fb96",
+        "443f7da7747f6458858eaf9200db00497c3b4f5471d9010ae82fa5c6131fd610"
+      ]
+    },
+    "fraude": {
+      "contagem": 3210,
+      "amostras": [
+        "c7eaa0bc01e5643b634e84c27ba9542843ed8ae5ba3811f8697ea8babf07956c",
+        "e0becb6cfaf3927aef0a10e5362672e1877ea5d3dffd822e73143246695e6cfe"
+      ]
+    },
+    "nao_perturbe": {
+      "contagem": 45800,
+      "amostras": [
+        "daf1cdbc0ad590cefed916e3ad3664dfbb610fcc58a7b7dd9ca4958f2170e2a4",
+        "e3a117257d6c62eb00232435ab687666d446e9e2ff9c40fc24267aa3ddb05f91"
+      ]
+    },
+    "optout": {
+      "contagem": 61240,
+      "amostras": [
+        "f612f4871450f35fede2e062f45b1bf2443b61e168ca0ef5070ec420a0c620c9",
+        "e289df77364c0cf55854129bf27c8572c263f887ded9cf077411b7d9fe398b9e"
+      ]
+    },
+    "procon": {
+      "contagem": 1950,
+      "amostras": [
+        "1c41fa9db5a623073e9596c0a5030e3bd53c9b3a7ddb72fc725e3149f92d868a",
+        "a7f99b30a10e4b0c1dc507b0d6e85274f0dabcb48f8ba474f5917b0466759b2f"
+      ]
+    },
+    "inadimplente": {
+      "contagem": 88320,
+      "amostras": [
+        "f07118705b71a914a55ede9f8aa1f8fa4172b635f14cb0f61eb6f3bd6924a49a",
+        "3e91627ac61b7158bbc897c3ae9412cb3b9ff5b1f26429ed786326faace6cc9e"
+      ]
+    },
+    "reprovado_credito": {
+      "contagem": 27610,
+      "amostras": [
+        "a7db4a31cff7c88b9d8e2c26fc2c45d0bb143a9d8fd45451c106f61efce53d9d",
+        "8659f1ae97752cde0c1dbe6af28c44f0ece381dc858cb4334f1cde1c4371bb57"
+      ]
+    }
+  }
+}

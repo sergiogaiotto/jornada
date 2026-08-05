@@ -11,8 +11,10 @@ from api.v1 import (
     criativo,
     datacloud,
     esteira,
+    insight,
     intake,
     jornada,
+    lancamento,
     os_governanca,
     portoes,
     prevoo,
@@ -35,3 +37,5 @@ api_router.include_router(portoes.router_portoes)  # M8 (parte 2) · Portões T9
 api_router.include_router(portoes.router_aprovacao)  # M8 (parte 2) · Aprovação T10 (§8-M8)
 api_router.include_router(compilador.router)  # M9 (fatia 1) · Compilador plan/apply (§5.4)
 api_router.include_router(prevoo.router)  # M9 (fatia 2) · Pré-voo & Drift T11 (§5.4.5, §8-M9)
+api_router.include_router(lancamento.router)  # M10 (parte 1) · Torre de Lançamento T12 (§8-M10)
+api_router.include_router(insight.router)  # M10 (parte 3) · Pergunte aos Dados T13/T14 (§8-M10)

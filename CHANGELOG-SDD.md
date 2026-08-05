@@ -3,6 +3,172 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-04 — Auditoria MS6 (sem mudança de contrato): mypy verde + lacuna do adapter
+- Auditoria cética do MS6 confirmou os aceites `test_M10_A1..A4` + suíte completa
+  (116 verdes), ruff/format limpos, caminho crítico (breakers/kill/guard) SEM
+  import de LLM, zero PII em `telemetry_event`/fixtures (§10.2) e insight sem SQL
+  livre (execução só por consulta nomeada — §7.2). Correções pequenas:
+  - **Lacuna real**: `PublicacoesLocais` não implementava `tarifas_vigentes()`
+    declarado na `PublicacoesPort` (taxímetro §8-M7-A2) — adapter completado com o
+    seed §11.4 (`domain/custo/tarifas.py`).
+  - Gate mypy do CI (§13) de volta ao verde: anotações/narrowing pontuais em
+    `api/v1/{lancamento,criativo}.py`, `agents/{flow,engineer}.py`,
+    `agents/guard/elegibilidade.py`, `domain/simulacao/{personas,motor}.py` e
+    `domain/validacao/regras.py` — zero mudança de comportamento (116 testes
+    inalterados antes/depois).
+
+## 2026-08-04 — M10 · parte 3: Pergunte aos Dados T13/T14 (§8-M10, §7.2 insight, aceite A4)
+- **Entrega:**
+  - **Camada semântica** (`domain/lancamento/semantica.py`, CÓDIGO PURO): dicionário
+    VERSIONADO (`VERSAO_CAMADA=1.0.0`) de consultas nomeadas `vw_metricas_*` — roas,
+    lift, custo_por_pedido (param `canal`), atingimento_meta (param `meta`) — cada uma
+    com whitelist de parâmetros e a definição SQL da view (a "query" anexada à
+    resposta, §7.2: "mostra a query"). Execução SÓ por nome (`executar`); nome ou
+    parâmetro fora do dicionário ⇒ `ConsultaForaDaCamada` (defesa em profundidade).
+  - **Agente insight** (`agents/insight.py` + `skills/insight.skill.md`, 120b §7.2):
+    o LLM só COMPÕE — NL → consulta nomeada + parâmetros; guarda-corpos de CÓDIGO
+    descartam SQL livre, view desconhecida, parâmetro fora da whitelist e JSON
+    malformado ⇒ RECUSA PADRÃO sem executar nada (A4). Pré-guarda determinística de
+    escopo: pergunta pedindo dado individual/PII (CPF, telefone, "quem"...) recusa
+    SEM chamar o LLM (§1.3.5: PII jamais em prompt) — funciona até em modo degradado.
+  - **Rota** `POST /os/{id}/perguntar` (router `api/v1/insight.py`, tag `insight`;
+    caso de uso `ServicoInsight`): resposta com `consulta_executada` (nome, versão,
+    parâmetros, sql, resultado) + `recusado`/`motivo_recusa`; ledger `invocacao`
+    via_ai (pergunta MASCARADA — runs de ≥11 dígitos nunca em claro §10.2) + evento
+    `agent.invoked` (§2.3) + trace Langfuse `insight.perguntar` (§10.8, no-op em
+    teste). Aceite `test_M10_A4` + contrato `test_M10_perguntar_contratos`.
+- **Decisões (sem mudança de contrato do produto):**
+  - "NL→SQL sobre views semânticas" (§8-M10) materializado como NL→**consulta
+    nomeada + parâmetros** — o LLM nunca emite SQL executável; o SQL das views vive
+    no dicionário em código e a execução em dev/teste é o equivalente determinístico
+    em Python sobre o repositório em memória (mesmo racional da view `os_saude` §4.1:
+    contrato SQL íntegro, adapter equivale). Views físicas entram com o adapter
+    Postgres, sem tocar domínio/serviços (hexagonal §2.1).
+  - Recusa NÃO é erro: 200 com `recusado=true` e recusa padrão (o portão duro de
+    LLM continua LLMIndisponivel→503 degraded §10.6). Router SEPARADO de
+    `lancamento.py`: breakers/kill seguem LLM-proibidos (§10.6) — perguntar é
+    leitura assistida (RBAC: qualquer autenticado, padrão do monitor). OS sem
+    Previsto congelado ⇒ 409 ANTES de chamar o LLM (mesma régua §1.1.2 do monitor).
+
+## 2026-08-04 — M10 · parte 2: telemetria dupla + Monitor T13 (§8-M10, aceite A3)
+- **Entrega (LLM PROIBIDO em todo o caminho — §10.6; tudo determinístico):**
+  - **Extracts loader** (§8-M10 "job extracts loader"): porta `ExtractsPort`
+    (`application/ports/extracts.py`) + adapter de fixture CSV
+    `adapters/fontes/extracts.py` sobre `mocks/seeds/extracts_tracking.csv` (batch
+    D-1 da OS demo: 96 sent · 99 delivered · 1 bounce · 8 conversion; hashes sha256
+    SINTÉTICOS — nunca PII §10.2; coluna `grupo` vira `payload.grupo` da conversão).
+    Caso de uso `ServicoLancamento.carregar_extracts`: resolve `os_codigo`→OS do
+    tenant (linha desconhecida é ignorada e contada) e delega à MESMA ingestão
+    guardada do webhook (PII/contrato §4.1; `fonte='extract'`).
+  - **Reconciliação diária ENS×extract (A3)**: `domain/lancamento/reconciliacao.py`
+    (CÓDIGO PURO — `comparar_fontes`: contagens por tipo, divergência relativa
+    |ens−extract|/max×100, `LIMITE_DIVERGENCIA_PCT=2.0`) + caso de uso
+    `ServicoLancamento.reconciliar`: divergência >2% em qualquer tipo ⇒ ALERTA —
+    incidente `sev3` tipo `reconciliacao_divergente` (launch_id nulo: incidente da
+    OS; DEDUPE por incidente aberto — o job diário não re-abre alerta em tratamento)
+    + eventos `telemetry.reconciliada` / `telemetry.reconciliacao_divergente`.
+  - **Monitor T13** (`GET /os/{id}/monitor`, router `api/v1/lancamento.py`, tag
+    `launch`; leitura por qualquer autenticado — padrão `GET /os/{id}/saude` M1):
+    TODOS os KPIs como PAR `{previsto, realizado}` (§1.1.2) — conversões, lift vs
+    holdout COM IC95, ROAS, custo real, receita, `briefing.metas`×realizado e
+    disparos/custo POR CANAL — calculados em `domain/lancamento/monitor.py` (CÓDIGO
+    PURO) SEMPRE contra o `snapshot.previsto` CONGELADO (nunca a simulação
+    corrente); resposta embute `reconciliacao` corrente + alertas abertos e
+    `fontes` {ens, extract}. OS sem previsto congelado ⇒ `PrevistoAusente` → 409.
+  - Aceite `test_M10_A3` (fixture diverge 4% no tipo `sent` → alerta + dedupe;
+    monitor com par previsto×realizado em TODO KPI/canal/meta) + contrato
+    `test_M10_monitor_exige_previsto` (409 sem previsto; 404 OS inexistente).
+- **Decisões (sem mudança de contrato do produto):**
+  - Telemetria DUPLA sem dobrar contagem: taxas e burn-rate dos breakers e o
+    "realizado" do monitor medem SÓ o fluxo ENS (tempo real); `fonte='extract'` é o
+    batch de conciliação D-1. EXCEÇÃO deliberada: o breaker
+    `disparo_lista_supressao` varre os `sent` de TODAS as fontes — extract que
+    revela disparo a contato suprimido também mata (A2).
+  - Loader e reconciliação NÃO ganham endpoint (o §8-M10 os define como JOB; mesmo
+    racional do M9: "não há endpoint novo fora do SDD") — casos de uso
+    `carregar_extracts`/`reconciliar` prontos para o agendador diário; o aceite A3
+    os exercita direto no serviço (padrão M8: semeadura via repositório/serviço).
+  - Reconciliação v1 por CONTAGEM por tipo (match por `contato_hash` é evolução do
+    adapter real de extracts); divergência relativa sobre a MAIOR fonte.
+  - Realizado do monitor: conversões = eventos `conversion` do grupo tratado
+    (`payload.grupo != 'holdout'` — mesmo recorte do motor §6); n tratado =
+    contatos DISTINTOS com `sent`; n holdout proporcional ao `holdout_pct`
+    congelado no snapshot (fallback: segmento da OS, default 10.0 §4.1); lift em pp
+    com IC95 normal de duas proporções (mesmo z do §6) e `significativo` ⇔ IC
+    exclui zero (regra §8-M11-A2); receita = conversões × ticket médio congelado no
+    previsto; ROAS = receita/custo real; custo real = Σ sents × tarifa vigente
+    (Decimal). Premissas ecoadas na resposta.
+  - `ingerir_telemetria` passa a validar também `tipo` ∈ contrato §4.1 (o webhook
+    já validava via Pydantic; o extract entra pelo mesmo funil guardado).
+  - Novos tipos de evento (§2.3 define os MÍNIMOS): `telemetry.reconciliada`,
+    `telemetry.reconciliacao_divergente`.
+
+## 2026-08-04 — M10 · parte 1: Torre de Lançamento T12 (§8-M10, §4.1 `launch`)
+- **Entrega (LLM PROIBIDO em todo o caminho — §10.6: breakers/kill/retomada são
+  caminho crítico; tudo determinístico, actor `sistema` nas ações automáticas):**
+  - `domain/lancamento/` — `modelos.py` (Launch/TelemetryEvent 1:1 com o §4.1 e
+    `Incidente` da tabela auxiliar; rampa default `[{pct:1},{pct:10},{pct:100}]`),
+    `breakers.py` (CÓDIGO PURO: avaliação sobre a telemetria da janela — optout,
+    bounce, erro de entrega, burn-rate vs projetado e `disparo_lista_supressao` ⇒
+    SEV1 + kill), `telemetria.py` (guarda-corpo §10.2: contato só sha256; payload
+    com chave/valor de PII ⇒ 422, nada gravado) e `erros.py` (BreakerDisparado→409
+    com `disparos`; AprovadorRepetido→403; demais EstadoInvalido→409).
+  - `application/services/lancamento_service.py` (ServicoLancamento): `armar` exige
+    APPLY OK do snapshot (§8-M10; sync_run fase=apply estado=ok) e congela
+    `launch.breakers` da política publicada (§4.1 "limites da política congelada");
+    `avancar_onda` roda o PORTÃO AUTOMÁTICO entre ondas (breakers limpos p/ avançar;
+    disparo ⇒ pausa/kill automático + 409); após a última onda ⇒ `concluido`.
+    `ingerir_telemetria` persiste `telemetry_event` e avalia os launches `em_rampa`
+    das OSs afetadas (A1: optout>0,6% ⇒ `pausado_breaker` AUTOMÁTICO; A2: sent p/
+    contato suprimido ⇒ incidente SEV1 TIPADO + KILL AUTOMÁTICO). `kill` em 2
+    ETAPAS (solicitar devolve token; confirmar mata + incidente `kill_manual`).
+    `retomar` SEMPRE humano (A1); incidente SEV1 aberto ⇒ 2 aprovadores DISTINTOS
+    (repetido ⇒ 403, segregação §10.5); retomada resolve incidentes e reinicia a
+    janela dos breakers (marco de telemetria em `launch.eventos`).
+  - Rotas (`api/v1/lancamento.py`, tag `launch`): `POST /launch/{snapshot}/armar` ·
+    `POST /launch/{id}/avancar-onda` · `POST /launch/{id}/kill` (+confirmação) ·
+    `POST /launch/{id}/retomar` · `POST /webhooks/ens` (ingestão §8-M10 com
+    ASSINATURA VERIFICADA: HMAC-sha256 do corpo com APP_SECRET no header
+    `X-ENS-Signature`; sem Bearer — a assinatura é a credencial, racional do link
+    mágico M8; 401 sem/ com assinatura errada). RBAC: armar/avançar/kill exigem
+    analista|lider; retomar exige lider|aprovador (ato de alçada).
+  - Portas/adapters: `RepositorioLancamento` + `ListaSupressaoPort` (§2.1);
+    `adapters/fontes/lista_supressao.py` (fixtures) + seed
+    `mocks/seeds/lista_supressao.json` (§11.4 "7 listas com contagens" — contagens
+    coerentes com o read model M5; `amostras` = hashes sha256 SINTÉTICOS, nunca
+    PII). `RepositorioOsMemoria` implementa também `RepositorioLancamento`.
+  - Migração `0008_m10_incidente`: tabela auxiliar `incidente` (§4.1 nota final:
+    "incidente (sev1..3, kill/retomada 2 aprovadores)") — `launch`,
+    `telemetry_event` e `lista_supressao` já constavam da `0001_core`.
+  - Aceites `test_M10_A1`/`test_M10_A2` (+ contratos: armar exige apply ok e não
+    re-arma launch ativo; kill 2 etapas com token errado não mata; rampa completa
+    1→10→100 ⇒ concluído; webhook recusa assinatura inválida/PII/contato em claro
+    sem gravar NADA) em `tests/acceptance/test_M10.py`.
+- **Decisões (sem mudança de contrato do produto):**
+  - `POST /webhooks/ens` (endpoint do §8-M10) entrou já na parte 1 como o GATILHO
+    da avaliação automática dos breakers ("durante onda", A1/A2); extracts loader e
+    reconciliação diária (A3), monitor (T13) e insight (T14/A4) ficam para a parte 2.
+  - Breakers da política v1 (seed `POLITICA_PUBLICADA`, §11.4) ganham
+    `erro_entrega_pct_max: 5.0` e `burn_rate_max: 1.5` ao lado dos existentes
+    (`optout_pct_max: 0.6` — §8-M10-A1 — e `bounce_pct_max: 2.0`); a forma de
+    `policy_versao.conteudo.breakers` é aberta (§4.1) e o M12 a governará. Limite
+    ausente ⇒ breaker não avaliado.
+  - Determinismo dos cálculos: taxas sobre os `sent` da JANELA (armar/última
+    retomada — marco por id de telemetria em `launch.eventos`, imune a atraso de
+    relógio); `erro_entrega` = (sent−delivered)/sent avaliado SÓ com telemetria de
+    entrega presente (evita falso positivo por atraso do ENS); burn-rate = custo
+    realizado (Σ sent×tarifa vigente) ÷ custo projetado do snapshot
+    (`componentes.custo.previsto_p50`) pro-rata das ondas iniciadas.
+  - Kill manual abre incidente sev2 (`kill_manual`) ⇒ retomada com 1 aprovação
+    humana; só SEV1 (disparo p/ lista de supressão) exige 2 aprovadores distintos
+    (§8-M10). Distinção por usuário autenticado (id), auditada em
+    `incidente.meta.retomada.aprovadores` e `launch.eventos`.
+  - `launch.eventos` (jsonb §4.1) é o histórico auditável da rampa: armado, ondas,
+    disparos, kill 2 etapas, aprovações/retomadas e marcos de janela.
+  - Novos tipos de evento (§2.3 define os MÍNIMOS; `launch.wave_advanced|
+    breaker_tripped|killed` e `telemetry.ingested` já constavam): `launch.armado`,
+    `launch.retomado`, `launch.concluido`, `incidente.aberto`.
+
 ## 2026-08-04 — M9 · fatia 2: Pré-voo & Drift (§5.4.5, §8-M9) — bateria + monitor + A4
 - **Entrega (LLM PROIBIDO em todo o caminho — §5.4/§10.6; tudo determinístico):**
   - **Pré-voo** (`POST /preflight/{snapshot}?ambiente=`, router `api/v1/prevoo.py`,

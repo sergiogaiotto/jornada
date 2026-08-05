@@ -54,7 +54,7 @@ def executar_checagens(
                 "detalhe": "Nenhuma fonte configurada para o campo (fixtures §11).",
             }
         ]
-        evidencia = {"fonte": None, "consultado_em": agora.isoformat()}
+        evidencia: dict[str, Any] = {"fonte": None, "consultado_em": agora.isoformat()}
         return "falha", checagens, evidencia
 
     contagem = int(fonte.get("contagem", 0))

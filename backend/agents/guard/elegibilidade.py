@@ -89,13 +89,16 @@ def emitir_certificado(
     Hash = sha256 do JSON canônico (chaves ordenadas) de {os_id, segmento_id,
     sha256(sql), suprimidos, liquido, emitido_em} — reproduzível em auditoria.
     """
+    suprimidos_contagem: dict[str, int] = {
+        lista: int(suprimidos.get(lista, 0)) for lista in SETE_LISTAS
+    }
     payload = {
         "os_id": str(os_id),
         "segmento_id": str(segmento_id),
         "sql_sha256": (
             hashlib.sha256(sql_publico.encode("utf-8")).hexdigest() if sql_publico else None
         ),
-        "suprimidos": {lista: int(suprimidos.get(lista, 0)) for lista in SETE_LISTAS},
+        "suprimidos": suprimidos_contagem,
         "liquido": int(liquido),
         "emitido_em": agora.isoformat(),
     }
@@ -104,7 +107,7 @@ def emitir_certificado(
         id=uuid.uuid4(),
         os_id=os_id,
         hash=hashlib.sha256(canonico.encode("utf-8")).hexdigest(),
-        suprimidos=payload["suprimidos"],
+        suprimidos=suprimidos_contagem,
         liquido=int(liquido),
         emitido_em=agora,
         valido_ate=agora + timedelta(hours=validade_horas),

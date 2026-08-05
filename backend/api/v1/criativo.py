@@ -128,7 +128,7 @@ class CriativoOut(BaseModel):
 
 class GerarCriativosIn(BaseModel):
     kv_master: dict[str, Any] = Field(min_length=1)  # matriz nasce DO KV master (§8-M6)
-    canais: list[Canal] = Field(default_factory=lambda: list(CANAIS_CRIATIVO))
+    canais: list[Canal] = Field(default_factory=lambda: cast("list[Canal]", list(CANAIS_CRIATIVO)))
     variantes: list[str] = Field(default_factory=lambda: list(VARIANTES_DEFAULT), min_length=1)
     instrucoes: str | None = None
 

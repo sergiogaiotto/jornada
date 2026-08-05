@@ -7,10 +7,12 @@ política publicada = v1 do domínio (seed §11.4); tarifário vigente = id fixo
 domínio nem serviços (hexagonal §2.1).
 """
 
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from agents.consultor import carregar_skill
+from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.governanca.politicas import POLITICA_PUBLICADA
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "agents" / "skills"
@@ -33,3 +35,6 @@ class PublicacoesLocais:
 
     def tarifario_id(self) -> str:
         return TARIFARIO_VIGENTE_ID
+
+    def tarifas_vigentes(self) -> dict[str, Decimal]:
+        return dict(TARIFAS_VIGENTES)  # seed §11.4 (`tarifa_canal` §4.1)

@@ -346,14 +346,12 @@ def simular(
     esperas_p50 = {
         no_id: round(_percentil(sorted(serie), 0.5), 2) for no_id, serie in s_espera.items()
     }
-    gargalos = sorted(
-        (
-            {"no": no_id, "tipo": str(nos[no_id].get("type", "")), "espera_horas_p50": espera}
-            for no_id, espera in esperas_p50.items()
-            if espera > 0
-        ),
-        key=lambda g: -float(g["espera_horas_p50"]),
-    )[:5]
+    candidatos_gargalo: list[dict[str, Any]] = [
+        {"no": no_id, "tipo": str(nos[no_id].get("type", "")), "espera_horas_p50": espera}
+        for no_id, espera in esperas_p50.items()
+        if espera > 0
+    ]
+    gargalos = sorted(candidatos_gargalo, key=lambda g: -float(g["espera_horas_p50"]))[:5]
 
     poder = _poder(
         experimento,

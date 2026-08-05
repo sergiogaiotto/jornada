@@ -33,7 +33,16 @@ POLITICA_PUBLICADA: dict[str, Any] = {
         "holdout_min": 10.0,
         "alcadas": [{"ate": 100_000, "papel": "lider"}, {"ate": 1_000_000, "papel": "aprovador"}],
         "retencao_dias": 180,
-        "breakers": {"optout_pct_max": 0.6, "bounce_pct_max": 2.0},
+        # Limites dos breakers da Torre de Lançamento (§8-M10; congelados em
+        # `launch.breakers` no armar — §4.1). optout 0,6% = §8-M10-A1; erro de
+        # entrega e burn-rate vs projetado completam o contrato do M10 (valores
+        # v1 do seed — a política do tenant os governa via M12).
+        "breakers": {
+            "optout_pct_max": 0.6,
+            "bounce_pct_max": 2.0,
+            "erro_entrega_pct_max": 5.0,
+            "burn_rate_max": 1.5,
+        },
         "precedencia": [
             "blacklist",
             "fraude",

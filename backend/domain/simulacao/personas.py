@@ -33,7 +33,7 @@ def gerar_personas(
     for classe in CLASSES_FREQUENCIA:
         pesos[classe] = max(0.01, ger.normal(float(base[classe]), _JITTER_PESO))
     total = sum(pesos.values())
-    coortes = [
+    coortes: list[dict[str, Any]] = [
         {
             "classe": classe,
             "peso": round(pesos[classe] / total, 6),

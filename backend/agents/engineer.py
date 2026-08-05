@@ -91,9 +91,10 @@ def interpretar_saida(texto: str, *, exige_evidencia: bool = True) -> SaidaEngin
     if exige_evidencia and sql is not None and not evidencias:
         sql = None  # contrato §7.2/§7.1: sem evidência → não sabe (SQL descartado)
 
+    explicacao_bruta = dados.get("explicacao")
     explicacao = tuple(
         {"clausula": str(item.get("clausula", "")), "explicacao": str(item.get("explicacao", ""))}
-        for item in (dados.get("explicacao") if isinstance(dados.get("explicacao"), list) else [])
+        for item in (explicacao_bruta if isinstance(explicacao_bruta, list) else [])
         if isinstance(item, dict)
     )
     resposta = str(dados.get("resposta") or "").strip()

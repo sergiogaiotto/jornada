@@ -1,14 +1,17 @@
 """Repositório em memória do núcleo OS/governança, esteira, intake, validação,
-audiência, criativo, twin/simulador e compilador (M1+M2+M3+M4+M5+M6+M8+M9).
+audiência, criativo, twin/simulador, compilador e lançamento
+(M1+M2+M3+M4+M5+M6+M8+M9+M10).
 
 Implementa as portas `RepositorioOs`, `RepositorioWorkflow`, `RepositorioIntake`,
 `RepositorioValidacao`, `RepositorioAudiencia`, `RepositorioCriativo`,
-`RepositorioJornada` e `RepositorioSync` na MESMA instância (tipagem estrutural §2.1).
+`RepositorioJornada`, `RepositorioSync` e `RepositorioLancamento` na MESMA instância
+(tipagem estrutural §2.1).
 Escolha registrada no CHANGELOG-SDD.md (M1): os testes rodam sem docker e o DDL
 Postgres (jsonb/uuid/view os_saude, etapa_workflow, hike_import_log, pedido, invocacao,
 validacao_campo, os_thread, documento_portao, segmento, certificado_elegibilidade,
 dc_segment_cache, criativo, jornada_versao, experimento, snapshot, aprovacao, sync_run,
-resource_registry, drift_check, preflight_run) permanece íntegro nas migrações (§4.1);
+resource_registry, drift_check, preflight_run, launch, telemetry_event, incidente)
+permanece íntegro nas migrações (§4.1);
 este adapter cobre dev/teste;
 o adapter SQLAlchemy/Postgres entra quando um módulo exigir durabilidade real, sem
 tocar domínio nem serviços (hexagonal §2.1).
@@ -32,6 +35,7 @@ from domain.jornada.modelos import (
     ResourceRegistry,
     SyncRun,
 )
+from domain.lancamento.modelos import Incidente, Launch, TelemetryEvent
 from domain.validacao.modelos import DocumentoPortao, ThreadWarRoom, ValidacaoCampo
 
 
@@ -60,6 +64,12 @@ class RepositorioOsMemoria:
         self._preflights: list[PreflightRun] = []
         self._drift_checks: dict[uuid.UUID, DriftCheck] = {}
         self._ordem_drift: list[uuid.UUID] = []
+        self._launches: dict[uuid.UUID, Launch] = {}
+        self._ordem_launch: list[uuid.UUID] = []
+        self._telemetria: list[TelemetryEvent] = []
+        self._seq_telemetria = itertools.count(1)
+        self._incidentes: dict[uuid.UUID, Incidente] = {}
+        self._ordem_incidente: list[uuid.UUID] = []
         self._eventos: list[EventoDominio] = []
         self._seq_evento = itertools.count(1)
         self._seq_os: dict[int, itertools.count[int]] = {}
@@ -350,6 +360,63 @@ class RepositorioOsMemoria:
             for i in self._ordem_drift
             if self._drift_checks[i].snapshot_id == snapshot_id
         ]
+
+    # --- launch (§4.1 — Torre de Lançamento M10) ---
+    def adicionar_launch(self, launch: Launch) -> None:
+        self._launches[launch.id] = launch
+        self._ordem_launch.append(launch.id)
+
+    def obter_launch(self, launch_id: uuid.UUID) -> Launch | None:
+        return self._launches.get(launch_id)
+
+    def listar_launches(self, snapshot_id: uuid.UUID) -> list[Launch]:
+        return [
+            self._launches[i]
+            for i in self._ordem_launch
+            if self._launches[i].snapshot_id == snapshot_id
+        ]
+
+    def salvar_launch(self, launch: Launch) -> None:
+        self._launches[launch.id] = launch
+
+    # --- telemetry_event (§4.1 — id bigint identity emulado) ---
+    def adicionar_telemetria(self, evento: TelemetryEvent) -> None:
+        evento.id = next(self._seq_telemetria)
+        self._telemetria.append(evento)
+
+    def listar_telemetria(
+        self, os_id: uuid.UUID, apos_id: int | None = None
+    ) -> list[TelemetryEvent]:
+        return [
+            e
+            for e in self._telemetria
+            if e.os_id == os_id and (apos_id is None or (e.id or 0) > apos_id)
+        ]
+
+    def maior_id_telemetria(self) -> int:
+        return self._telemetria[-1].id or 0 if self._telemetria else 0
+
+    # --- incidente (tabela auxiliar §4.1 nota final — migração 0008, M10) ---
+    def adicionar_incidente(self, incidente: Incidente) -> None:
+        self._incidentes[incidente.id] = incidente
+        self._ordem_incidente.append(incidente.id)
+
+    def listar_incidentes(
+        self,
+        os_id: uuid.UUID | None = None,
+        launch_id: uuid.UUID | None = None,
+        estado: str | None = None,
+    ) -> list[Incidente]:
+        return [
+            self._incidentes[i]
+            for i in self._ordem_incidente
+            if (os_id is None or self._incidentes[i].os_id == os_id)
+            and (launch_id is None or self._incidentes[i].launch_id == launch_id)
+            and (estado is None or self._incidentes[i].estado == estado)
+        ]
+
+    def salvar_incidente(self, incidente: Incidente) -> None:
+        self._incidentes[incidente.id] = incidente
 
     # --- Outbox (§2.3) ---
     def adicionar_evento(self, evento: EventoDominio) -> None:

@@ -84,9 +84,10 @@ def interpretar_saida(texto: str) -> SaidaFlow:
     grafo = dados.get("grafo")
     if not isinstance(grafo, dict) or not grafo:
         grafo = None
+    premissas_brutas = dados.get("premissas")
     premissas = tuple(
         str(p).strip()
-        for p in (dados.get("premissas") if isinstance(dados.get("premissas"), list) else [])
+        for p in (premissas_brutas if isinstance(premissas_brutas, list) else [])
         if str(p).strip()
     )
     return SaidaFlow(
