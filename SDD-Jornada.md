@@ -359,7 +359,7 @@ create table domain_event (id bigint generated always as identity primary key, t
   os_id uuid, type text not null, payload jsonb, actor text, via_ai boolean default false,
   created_at timestamptz default now());
 ```
-Tabelas auxiliares (colunas óbvias, criar na migração do módulo que as usa): `criativo` (matriz canal×variante, estado por célula, kv_master_ref), `incidente` (sev1..3, kill/retomada 2 aprovadores), `notificacao`, `custo_realizado`, `hike_import_log`, `documento_portao` (docx gerados), `preflight_run` (bateria do pré-voo M9: itens pass/warn/fail com evidência + resultado verde/amarelo/vermelho por snapshot×ambiente).
+Tabelas auxiliares (colunas óbvias, criar na migração do módulo que as usa): `criativo` (matriz canal×variante, estado por célula, kv_master_ref), `incidente` (sev1..3, kill/retomada 2 aprovadores), `notificacao`, `custo_realizado`, `hike_import_log`, `documento_portao` (docx gerados), `preflight_run` (bateria do pré-voo M9: itens pass/warn/fail com evidência + resultado verde/amarelo/vermelho por snapshot×ambiente), `proposta_otimizacao` (M11: proposta do optimize — diff JGC + impacto pré-simulado + esforço/risco/score; aprovar referencia a nova jornada_versao), `aprendizado` (M11: memória da retro — origem proposta/experimento, status aceito/sinal/promovido, `herdado_de` no clone).
 
 ---
 

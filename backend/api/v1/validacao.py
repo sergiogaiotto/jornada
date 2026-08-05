@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.documentos.docx_portao import GeradorDocxPortao
 from adapters.fontes.fixtures import FonteFixtures
-from adapters.publicacoes import PublicacoesLocais
+from adapters.publicacoes import PublicacoesAtelie, PublicacoesLocais
 from adapters.relogio import RelogioSistema
 from api.v1.os_governanca import (
     Autenticado,
@@ -36,6 +36,8 @@ from api.v1.os_governanca import (
 )
 from app.errors import problem_response
 from application.ports.fonte_validacao import FonteValidacaoPort
+from application.ports.repositorio_atelie import RepositorioAtelie
+from application.ports.repositorio_plataforma import RepositorioPoliticas
 from application.ports.repositorio_validacao import RepositorioValidacao
 from application.services.os_service import ServicoOs
 from application.services.validacao_service import ServicoValidacao
@@ -74,7 +76,7 @@ class RotaValidacao(APIRoute):
 
 # ------------------------------------------------------------------ Dependências
 _relogio = RelogioSistema()
-_publicacoes = PublicacoesLocais()
+_publicacoes_disco = PublicacoesLocais()
 _gerador = GeradorDocxPortao()
 
 
@@ -92,15 +94,21 @@ def get_servico_validacao(
     request: Request, servico_os: Annotated[ServicoOs, Depends(get_servico_os)]
 ) -> ServicoValidacao:
     """Mesma instância de repositório da OS (app.state) — RepositorioOsMemoria implementa
-    todas as portas (tipagem estrutural §2.1); o cast só informa o mypy."""
+    todas as portas (tipagem estrutural §2.1); o cast só informa o mypy. O GO congela
+    versões do BANCO do Ateliê (M12) com fallback disco — mesmos valores (§8-M4-A2)."""
     repositorio = get_repositorio_os(request)
+    publicacoes = PublicacoesAtelie(
+        cast(RepositorioAtelie, repositorio),
+        fallback=_publicacoes_disco,
+        politicas=cast(RepositorioPoliticas, repositorio),  # policy publicada ATUAL (M12 p2)
+    )
     return ServicoValidacao(
         cast(RepositorioValidacao, repositorio),
         repositorio,
         _relogio,
         servico_os,
         get_fonte_validacao(request),
-        _publicacoes,
+        publicacoes,
         _gerador,
     )
 

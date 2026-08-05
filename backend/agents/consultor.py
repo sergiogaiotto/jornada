@@ -12,19 +12,17 @@ PII: o prompt recebe apenas conteúdo do briefing/faltantes/mensagem — jamais 
 """
 
 import json
-import re
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from application.ports.llm import PerfilModelo
+from domain.atelie.skill_parser import parse_skill_md
 from domain.intake.completude import valor_do_campo, valor_presente
 from domain.intake.modelos import CAMPOS_OBRIGATORIOS
 
 SKILL_PATH = Path(__file__).resolve().parent / "skills" / "consultor.skill.md"
-
-_SEGMENTOS = re.compile(r"\s{2,}")  # §7.1 admite mais de um `chave: valor` por linha
 
 
 @dataclass(frozen=True)
@@ -54,37 +52,20 @@ class SaidaConsultor:
     inferencias: tuple[Inferencia, ...]
 
 
-def _parse_front_matter(bloco: str) -> dict[str, str]:
-    chaves: dict[str, str] = {}
-    for linha in bloco.splitlines():
-        for segmento in _SEGMENTOS.split(linha.strip()):
-            if ":" in segmento:
-                chave, _, valor = segmento.partition(":")
-                if chave.strip():
-                    chaves[chave.strip()] = valor.strip()
-    return chaves
-
-
 @cache
 def carregar_skill(caminho: Path = SKILL_PATH) -> Skill:
-    """Parser mínimo do SKILL.md canônico (§7.1); o parser pleno chega com o Ateliê (M12)."""
-    texto = caminho.read_text(encoding="utf-8")
-    partes = texto.split("---", 2)
-    if len(partes) < 3:
-        raise ValueError(f"SKILL.md sem front-matter delimitado por '---' (§7.1): {caminho}")
-    meta = _parse_front_matter(partes[1])
-    perfil = meta.get("modelo_perfil", "20b")
-    if perfil not in ("120b", "20b"):
-        raise ValueError(f"modelo_perfil inválido no SKILL.md (§7.1): {perfil!r}")
+    """SKILL.md validado pelo parser PLENO do Ateliê (§7.1 — domain/atelie/skill_parser;
+    o parser mínimo do M3 foi substituído no M12, como prometido). Cacheado por caminho."""
+    parseada = parse_skill_md(caminho.read_text(encoding="utf-8"))
     return Skill(
-        nome=meta.get("name", ""),
-        versao=meta.get("version", ""),
-        camada=meta.get("camada", ""),
-        modelo_perfil=perfil,  # type: ignore[arg-type]  # validado acima
-        etapa=meta.get("etapa", ""),
-        exige_evidencia=meta.get("exige_evidencia", "false").lower() == "true",
-        corpo=partes[2].strip(),
-        meta=meta,
+        nome=parseada.nome,
+        versao=parseada.versao,
+        camada=parseada.camada,
+        modelo_perfil=cast(PerfilModelo, parseada.modelo_perfil),  # validado no parser
+        etapa=parseada.etapa,
+        exige_evidencia=parseada.exige_evidencia,
+        corpo=parseada.corpo,
+        meta=parseada.meta,
     )
 
 

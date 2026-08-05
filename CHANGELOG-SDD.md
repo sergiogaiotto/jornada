@@ -3,6 +3,146 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — M12 (parte 2) · Políticas + Auditoria (§8-M12, §4.1 `policy_versao`/`invocacao`) — notas de implementação
+- **Entrega (router `api/v1/plataforma.py`, tags `policies` e `auditoria` — mesmo
+  módulo M12, dois recursos, padrão M8 T9/T10; serviço
+  `application/services/plataforma_service.py`; domínio em
+  `domain/governanca/politicas.py` + `modelos.PolicyVersao` + erros; porta
+  `application/ports/repositorio_plataforma.py`; aceite `test_M12_A3` +
+  `test_M12_policies_e_drift`):** policy-as-code com ciclo draft→publicada e versão
+  SEQUENCIAL, relatório de policy drift sobre OSs em voo e auditoria com
+  reconstrução Art. 20 LGPD. SEM migração nova: `policy_versao`, `domain_event` e
+  `invocacao` já constam da `0001_core` (§4.1); head permanece `0009_m11_otimizacao`.
+- **Materialização do "GET/POST /policies (draft→publicada; relatório de policy
+  drift)" em endpoints concretos:** `GET/POST /policies` ·
+  `POST /policies/{id}/publicar` (só draft com versão MAIOR que a publicada — draft
+  obsoleto 409; evento `policy.published` §2.3; publicar é papel `lider`, portão de
+  plataforma como skills; NÃO toca `os.frozen` — simetria com A2) ·
+  `GET /policies/drift` · `POST /policies/drift/pendencias`. Conteúdo validado por
+  CÓDIGO no conjunto FECHADO do §4.1 (compliance nunca é LLM §1.1.3) com erros
+  ACUMULADOS → 422 (padrão do parser §7.1). Seed §11.4 "políticas v1": a política v1
+  do domínio vira linha PUBLICADA de `policy_versao` (mesmos valores do fallback do
+  GO — `test_M4-A2` permanece válido); `PublicacoesAtelie.politica_publicada()`
+  passa a ler o banco (fallback domínio), então um NOVO GO congela a versão nova.
+- **Relatório de policy drift (decisão de escopo v1):** OS em VOO = `frozen` não
+  nulo + fase ≠ encerrada; em drift = `frozen.policy_version` < versão publicada.
+  Violações verificáveis nos artefatos CONGELADOS: holdout de segmento <
+  `holdout_min` novo e breakers congelados no armar (§4.1 `launch.breakers`, launch
+  não terminal) mais FROUXOS que os novos (`*_max`: congelado > novo). Caps de
+  frequência/quiet hours não têm artefato congelado comparável no v1 — fora do
+  relatório. Pendências de adequação são OPCIONAIS (POST explícito), NÃO bloqueantes
+  (a política nova não trava retroativamente OS aprovada na antiga) e idempotentes
+  por `origem = policy_drift:v{n}`.
+- **Auditoria (Art. 20):** `GET /auditoria` filtra tipo/agente/OS (+ `via_ai`);
+  evento via_ai com `invocacao_id` embute o DETALHE COMPLETO do ledger `invocacao`
+  (input+evidências+output+judge+aceite humano) — o "clicável" da T16.
+  `POST /auditoria/reconstruir/{invocacao_id}` devolve EXATAMENTE
+  input/evidências/output/judge DA ÉPOCA (A3 — o ledger é imutável; skill nova
+  publicada depois não muda nada) e registra `auditoria.reconstruida` no outbox.
+  RBAC da reconstrução: `dpo|lider` (atende o titular; admin sempre passa §8-M0).
+
+## 2026-08-05 — M12 (parte 1) · Ateliê T16 (§8-M12, §7.1, §4.1 mesh) — notas de implementação
+- **Entrega (router `api/v1/atelie.py`, tag `atelie`; serviço
+  `application/services/atelie_service.py`; domínio `domain/atelie/`; judge
+  `agents/harness/judge.py`; seeds `adapters/atelie_seeds.py` +
+  `mocks/seeds/harness_cases.json`; aceites `test_M12_A1/A2` + contratos):** parser
+  PLENO do SKILL.md canônico (§7.1 — valida campos: name/version/camada/
+  modelo_perfil, `bases_rag` no conjunto fechado do §4.1, exige_evidencia,
+  max_retries, saida; 422 com a lista de erros), CRUD agentes/skills com ciclo
+  draft→em_revisao→publicada, harness com judge 120b de rubrica fixa (LLMFake
+  determinístico em teste §1.3.5; `harness_run` com score POR DIMENSÃO; trace tag
+  `harness` §10.8), portão de publicação (A1: sem run VERDE — passou com score ≥ 90
+  por dimensão — 409) e dry-run lado a lado (mesma entrada, atual × candidata; nada
+  persiste). SEM migração nova: `agente`/`skill_versao`/`harness_case`/`harness_run`
+  já constam da `0001_core` (§4.1); head permanece `0009_m11_otimizacao`.
+- **Materialização do "CRUD agentes/skills" (§8-M12) em endpoints concretos:**
+  `GET/POST /agentes` · `GET/POST /agentes/{id}/skills` · `GET/PUT /skills/{id}`
+  (editável SÓ em draft — em revisão o harness julga texto estável) ·
+  `POST /skills/{id}/revisao|harness|publicar|dry-run`. Publicar exige papel
+  `lider` (portão de plataforma; RBAC §8-M0). Guarda-corpo adicional: `harness_run`
+  guarda `skill_md_hash` — run que não cobre o texto ATUAL não publica (409).
+- **Fonte das versões publicadas passa ao banco do Ateliê:** o GO (§8-M4-A2)
+  congela agora via `PublicacoesAtelie` (banco `skill_versao`, fallback disco
+  `PublicacoesLocais` com os MESMOS valores — seeds espelham `agents/skills/*.md`
+  como v1 publicadas). A2 verificada ponta a ponta: publicar skill nova NÃO reescreve
+  `os.frozen` de OS em voo (resolução por OS: `versao_para_os` — frozen → congelada;
+  sem GO → publicada atual); um NOVO GO congela a versão nova.
+- **Parser mínimo do M3 substituído:** `agents/consultor.carregar_skill` agora
+  delega ao parser pleno (`domain/atelie/skill_parser.py`), como o próprio M3
+  prometia ("o parser pleno chega com o Ateliê"). Seeds §11.4 ganham
+  `harness_cases.json` (3 casos golden por agente-chave com SKILL.md; `guard`
+  semeado como agente DETERMINÍSTICO sem skill §7.2). Política (`GET/POST
+  /policies`), auditoria e reconstrução Art. 20 ficam para a parte 2 do M12.
+
+## 2026-08-05 — M11 · Otimização/Retro/Calibração T15 (§8-M11, §4.1 `experimento`/`calibracao_prior`)
+- **Entrega (router `api/v1/otimizacao.py`, tag `otimizacao`; serviço
+  `application/services/otimizacao_service.py`; domínio `domain/otimizacao/` +
+  `domain/experimento/apuracao.py`; migração `0009_m11_otimizacao`; aceites
+  `test_M11_A1..A3` + contratos):**
+  - **Agente optimize** (`agents/otimizacao.py` + `skills/optimize.skill.md`, 120b
+    §7.2): PROPOR é a ÚNICA ação autônoma — `GET /os/{id}/propostas` sem pendentes
+    faz o agente propor grafos JGC candidatos; TODO o resto é CÓDIGO (§1.3.5/§10.6):
+    `meta.osCodigo/tenant` reescritos, `jgc_validate` §5.3 descarta candidata
+    inválida (com evidência em `avisos`), diff estrutural (`domain/jornada/diff.py`
+    — código puro FATORADO do M7, `ServicoJornada` delega), impacto PRÉ-SIMULADO via
+    SimuladorService (novo `ensaiar_grafo`: mesmo pipeline §6, MESMA seed/params da
+    simulação base, NADA persiste) e ranking determinístico lift×esforço×risco
+    (`domain/otimizacao/ranking.py`: lift relativo de conversões P50 ÷ (nº de
+    mudanças × fator de risco por semáforo/custo↑/mexer no entrySource)). Ledger
+    `invocacao` via_ai + `agent.invoked` + trace Langfuse (§10.8). Propostas
+    pendentes NÃO regeneram (decidir é humano §1.1.3).
+  - `POST /propostas/{id}/aprovar`: re-valida §5.3, gera NOVA `jornada_versao`
+    (rascunho, taxímetro M7-A2, SEM simulação/previsto) e devolve o **mini-ciclo
+    M8→M9 expresso** — hash novo ⇒ snapshot novo ⇒ **nova aprovação EXPRESSA (link
+    mágico) antes de qualquer apply** (imposto pelos gates já existentes do M8/M9;
+    nada é publicado pelo agente). Vira aprendizado ACEITO.
+    `POST /propostas/{id}/rejeitar`: motivo OBRIGATÓRIO (422 sem ele) — vira SINAL
+    (aprendizado `sinal`) injetado no prompt do optimize na próxima geração.
+  - **Apuração** `POST /experimentos/{id}/apurar` (ZERO LLM): ANTI-PEEKING (A1) —
+    janela = primeira exposição (`sent` ENS) + `janela_dias`; antes do fim → **425
+    Too Early** (problem+json com `fim_janela`; nenhum lift calculado; janela
+    correndo marca `em_apuracao` §4.1). Depois: lift pp + IC95
+    (`domain/experimento/apuracao.py`, mesmo z do §6/M8/M10; n holdout proporcional
+    ao `holdout_pct` congelado) e `significativo` ⇔ IC exclui zero (A2); resultado
+    IMUTÁVEL em `experimento.resultado` (§4.1 `{lift, ic95, significativo, roas}`;
+    re-apurar → 409) + evento `experimento.apurado`. Significativo ⇒ aprendizado
+    PROMOVIDO + ingestão STUB na base RAG `resultados` (A3): linha
+    `agente_evidence` com chunk/meta íntegros e `embedding=None` até o adapter
+    pgvector (`rag reindex` §7.4).
+  - `POST /os/{id}/clonar-com-aprendizados` (A3): nova OS (fase `pensada`, briefing
+    copiado, código sequencial) herdando aprendizados ACEITOS/PROMOVIDOS como linhas
+    próprias com `herdado_de` (sinal NÃO herda) + `priors` VIGENTES na resposta
+    (última `calibracao_prior` publicada; o Ensaio Geral da nova OS já os usa).
+  - **CalibrateService** (`ServicoCalibracao` + `domain/otimizacao/calibracao.py`,
+    código puro): compara previsto CONGELADO (snapshot §1.1.2) × realizado
+    (conversões ENS do tratado — mesmo recorte do monitor M10) por OS; razão global
+    clampada [0.25, 4.0] escala as taxas de conversão dos priors vigentes; BACKTEST
+    OBRIGATÓRIO (MAPE antes×depois; não melhora ⇒ 409, nada publicado);
+    `POST /calibracao/publicar` versiona em `calibracao_prior` (§4.1; DDL já na
+    0001) com score/backtest/publicada_em + evento `calibracao.publicada`.
+    **Simulador passa a preferir priors publicados** (promessa de priors.py):
+    `ServicoSimulador._priors_vigentes` — sem publicação, `PRIORS_DEFAULT` v1
+    intacto (M8-A1 preservado; `parametros.priors_versao` reflete a versão usada).
+- **Emenda §4.1 (nota final):** tabelas auxiliares ganham `proposta_otimizacao` e
+  `aprendizado` (migração `0009_m11_otimizacao`); `experimento`, `calibracao_prior`
+  e `agente_evidence` já constavam da 0001.
+- **Decisões (sem mudança de contrato do produto):**
+  - `GET /os/{id}/propostas` é o gatilho da proposição autônoma (o §8-M11 define o
+    GET como o endpoint do optimize); sem versão SIMULADA → 409 (não há régua para
+    pré-simular). Hub LLM fora → o GET **degrada** (200 com `degradado: true` e
+    lista vazia/existente) em vez de 503: leitura nunca depende de LLM (§10.6);
+    geração via LLM continua respondendo 503 apenas em mutações (nenhuma no M11).
+  - Versão publicada de `calibracao_prior` começa em 2 — a v1 é o `PRIORS_DEFAULT`
+    em código (priors.py); `versao` da linha = versão dos priors.
+  - Relógio do M11 é INJETÁVEL via `app.state.relogio` (`get_relogio` no router —
+    §2.1 clock atrás de porta): `test_M11_A1` prova o anti-peeking manipulando o
+    ClockPort (mesma telemetria; 425 a 1s do fim da janela → 200 depois dela).
+  - Apuração usa telemetria ENS (extract é conciliação — decisão M10) e ROAS
+    realizado = conversões×ticket congelado ÷ Σ sent×tarifa vigente (Decimal).
+  - Novos tipos de evento (§2.3 define os MÍNIMOS): `proposta.criada|aprovada|
+    rejeitada`, `experimento.apurado`, `aprendizado.promovido`,
+    `os.clonada_com_aprendizados`, `calibracao.publicada`.
+
 ## 2026-08-04 — Auditoria MS6 (sem mudança de contrato): mypy verde + lacuna do adapter
 - Auditoria cética do MS6 confirmou os aceites `test_M10_A1..A4` + suíte completa
   (116 verdes), ruff/format limpos, caminho crítico (breakers/kill/guard) SEM

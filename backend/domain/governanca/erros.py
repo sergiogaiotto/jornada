@@ -36,3 +36,16 @@ class HoldoutAbaixoDaPolitica(ErroDominio):
 
 class RessalvasObrigatorias(ErroDominio):
     """`aprovado_ressalvas` exige ressalvas (e `aprovado` não as aceita) — 422."""
+
+
+class PolicyInvalida(ErroDominio):
+    """Conteúdo fora do formato `policy_versao.conteudo` §4.1 (M12 parte 2) —
+    422 com a lista `erros` acumulada (padrão do parser §7.1)."""
+
+    def __init__(self, motivo: str, erros: list[str] | None = None) -> None:
+        super().__init__(motivo)
+        self.erros = erros or []
+
+
+class EstadoPolicyInvalido(EstadoInvalido):
+    """Operação fora do ciclo draft→publicada da política (§8-M12) — 409."""

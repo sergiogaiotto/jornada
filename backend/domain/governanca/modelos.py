@@ -16,6 +16,8 @@ from typing import Any
 
 DECISOES: tuple[str, ...] = ("aprovado", "aprovado_ressalvas", "reprovado")
 
+ESTADOS_POLICY: tuple[str, ...] = ("draft", "publicada")  # §4.1 `policy_versao.estado`
+
 # A4 (§8-M8): tolerância de variação de custo entre o snapshot aprovado e o custo
 # previsto corrente — acima disso a aprovação é invalidada (snapshot novo obrigatório).
 VARIACAO_CUSTO_MAX = 0.10
@@ -58,3 +60,22 @@ class Aprovacao:
     # A4 — emenda §4.1 (migração 0006): variação de custo >10% pós-aprovação
     invalidada_em: datetime | None = None
     invalidada_motivo: str | None = None
+
+
+@dataclass
+class PolicyVersao:
+    """Tabela `policy_versao` §4.1 — policy-as-code (M12 parte 2).
+
+    `conteudo` = {frequency_cap, quiet_hours, blackout, holdout_min, alcadas,
+    retencao_dias, breakers, precedencia} (conjunto FECHADO — politicas.py valida).
+    Ciclo draft→publicada; a publicada ATUAL é a que o GO congela em
+    `os.frozen.policy_version` (§8-M4-A2) — OS em voo NÃO muda de versão ao publicar
+    política nova (o relatório de policy drift §8-M12 acusa quem violaria a nova).
+    """
+
+    id: uuid.UUID
+    tenant_id: str
+    versao: int
+    conteudo: dict[str, Any]
+    estado: str = "draft"  # ESTADOS_POLICY
+    publicada_em: datetime | None = None

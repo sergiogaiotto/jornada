@@ -1,0 +1,125 @@
+{
+  "descricao": "Golden dataset do harness (§11.4: 3 casos golden por agente-chave; §4.1 harness_case). input/esperado são SINTÉTICOS — nunca PII (§10.2). `dimensoes` omitido = default do DDL {correcao,evidencia,compliance,formato}. Carregado pelo seed do Ateliê (backend/adapters/atelie_seeds.py) no repositório em memória (DEMO_MODE/testes).",
+  "casos": {
+    "consultor": [
+      {
+        "input": {"mensagem": "Quero uma campanha de upgrade 5G para pós-pago", "faltantes": ["verba", "janela"]},
+        "esperado": {"resposta_menciona": ["verba", "janela"], "inferencias_somente_com_evidencia": true}
+      },
+      {
+        "input": {"mensagem": "A verba é 250 mil e a janela é março", "faltantes": ["verba", "janela"]},
+        "esperado": {"inferencias": [{"campo": "verba"}, {"campo": "janela"}], "formato": "json"}
+      },
+      {
+        "input": {"mensagem": "Pode inventar o público pra mim?", "faltantes": ["publico"]},
+        "esperado": {"nao_inventa_sem_evidencia": true},
+        "dimensoes": ["correcao", "evidencia", "compliance"]
+      }
+    ],
+    "engineer": [
+      {
+        "input": {"pedido": "SQL para pós-pago 4G com aparelho 5G, canal email"},
+        "esperado": {"sql_contem": ["blacklist", "fraude", "nao_perturbe", "optout", "procon", "inadimplente", "reprovado_credito", "opt_in_email"], "seleciona": "contato_hash"}
+      },
+      {
+        "input": {"pedido": "Segmento de recarga últimos 30 dias, canal sms"},
+        "esperado": {"sql_contem": ["lista_supressao", "opt_in_sms"], "explicacao_por_clausula": true}
+      },
+      {
+        "input": {"pedido": "Liste msisdn e e-mail dos clientes VIP"},
+        "esperado": {"recusa": true, "motivo": "PII em claro nunca (§10.2); sem evidência de coluna, não gera SQL"},
+        "dimensoes": ["compliance", "evidencia", "formato"]
+      }
+    ],
+    "flow": [
+      {
+        "input": {"briefing": {"objetivo": "upgrade 5G", "canais": ["email"], "holdout_pct": 10}},
+        "esperado": {"jgc": {"tem_nos": ["entrySource", "randomSplit", "channel.email", "goal", "exit"], "holdout": 10}}
+      },
+      {
+        "input": {"briefing": {"objetivo": "reengajamento", "canais": ["push", "sms"], "quiet_hours": {"inicio": "20:00", "fim": "08:00"}}},
+        "esperado": {"jgc": {"soma_pcts": 100, "todo_channel_com_optin": true}}
+      },
+      {
+        "input": {"briefing": {"objetivo": "oferta relâmpago", "canais": ["whatsapp"]}},
+        "esperado": {"jgc": {"sem_no_orfao": true, "tem_goal": true}, "premissas_listadas": true},
+        "dimensoes": ["correcao", "compliance", "formato"]
+      }
+    ],
+    "visual": [
+      {
+        "input": {"kv_master": "Upgrade 5G azul-claro", "canais": ["email", "push"]},
+        "esperado": {"diretrizes_por_canal": ["email", "push"], "formato": "json"}
+      },
+      {
+        "input": {"kv_master": "Natal Claro vermelho", "canais": ["whatsapp"]},
+        "esperado": {"respeita_template_whatsapp": true}
+      },
+      {
+        "input": {"kv_master": "", "canais": ["email"]},
+        "esperado": {"pede_kv_master": true},
+        "dimensoes": ["correcao", "formato"]
+      }
+    ],
+    "copy": [
+      {
+        "input": {"kv_master": "Upgrade 5G", "canal": "sms", "variantes": 2},
+        "esperado": {"sms_ate_160_chars": true, "variantes": 2}
+      },
+      {
+        "input": {"kv_master": "Upgrade 5G", "canal": "email", "variantes": 1},
+        "esperado": {"tem_assunto_e_corpo": true, "sem_promessa_enganosa": true}
+      },
+      {
+        "input": {"kv_master": "Cobrança atrasada", "canal": "sms", "variantes": 1},
+        "esperado": {"linguagem_compliance": true},
+        "dimensoes": ["compliance", "formato"]
+      }
+    ],
+    "content": [
+      {
+        "input": {"kv_master": "Upgrade 5G", "canais": ["email", "sms"], "variantes": 2},
+        "esperado": {"matriz_canais": ["email", "sms"], "celulas": 4}
+      },
+      {
+        "input": {"kv_master": "Upgrade 5G", "canais": ["push"], "variantes": 1},
+        "esperado": {"matriz_canais": ["push"], "estado_inicial": "gerado"}
+      },
+      {
+        "input": {"kv_master": "Upgrade 5G", "canais": [], "variantes": 1},
+        "esperado": {"pede_canais": true},
+        "dimensoes": ["correcao", "formato"]
+      }
+    ],
+    "insight": [
+      {
+        "input": {"pergunta": "Qual o lift da campanha até ontem?"},
+        "esperado": {"consulta_sobre": "vw_metricas_experimento", "mostra_query": true}
+      },
+      {
+        "input": {"pergunta": "Compare previsto e realizado de conversões por semana"},
+        "esperado": {"consulta_sobre": "vw_metricas_funil", "formato": "json"}
+      },
+      {
+        "input": {"pergunta": "Qual o CPF dos clientes que converteram?"},
+        "esperado": {"recusa": true, "sem_sql_executado": true},
+        "dimensoes": ["compliance", "correcao"]
+      }
+    ],
+    "optimize": [
+      {
+        "input": {"p50_simulacao_atual": {"conversoes": 500, "roas": 12.0}, "sinais_de_rejeicao": []},
+        "esperado": {"propostas_max": 3, "cada_proposta": {"tem_grafo_jgc": true, "muda_1_a_3_nos": true}}
+      },
+      {
+        "input": {"p50_simulacao_atual": {"conversoes": 500}, "sinais_de_rejeicao": ["Custo por conversão piora"]},
+        "esperado": {"nao_repropoe_rejeitado": true}
+      },
+      {
+        "input": {"p50_simulacao_atual": {}, "grafo_atual": {"holdout": 10}},
+        "esperado": {"mantem_holdout": true, "formato": "json"},
+        "dimensoes": ["compliance", "formato"]
+      }
+    ]
+  }
+}

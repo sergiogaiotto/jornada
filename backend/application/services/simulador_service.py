@@ -74,49 +74,9 @@ class ServicoSimulador:
                 "nova versão (§1.2 non-goals: sem edição ao vivo)."
             )
         experimento = self._repo.experimento_da_os(os_.id)
-        politica = POLITICA_PUBLICADA["conteudo"]
-        erros = validar_grafo(
-            jornada.grafo,
-            experimento_travado=experimento_travado(experimento),
-            politica=politica,
+        resultado = self._rodar(
+            os_, jornada.grafo, experimento, seed=seed, runs=runs, n_personas=n_personas
         )
-        if erros:
-            raise GrafoInvalido(erros)
-        segmento = self._segmento_recontado(os_.id)
-        briefing = os_.briefing or {}
-        ticket = float(briefing.get("ticket_medio") or PRIORS_DEFAULT["ticket_medio"])
-        verba = float(briefing["verba"]) if briefing.get("verba") else None
-
-        ger = self._rng.gerador(seed)
-        personas = self._personas.gerar(
-            n=n_personas,
-            priors=PRIORS_DEFAULT,
-            ger=ger,
-            volume_abordagem=segmento.volume_abordagem,
-        )
-        resultado = motor.simular(
-            jornada.grafo,
-            volume_entrada=int(segmento.contagem_liquida or 0),
-            personas=personas,
-            priors=PRIORS_DEFAULT,
-            tarifas=TARIFAS_VIGENTES,
-            politica=politica,
-            ger=ger,
-            runs=runs,
-            ticket_medio=ticket,
-            hora_inicio=float(self._relogio.agora().hour),
-            experimento=self._experimento_dict(experimento),
-            verba=verba,
-        )
-        resultado["parametros"] = {
-            "seed": seed,
-            "runs": runs,
-            "n_personas": n_personas,
-            "segmento_id": str(segmento.id),
-            "ticket_medio": ticket,
-            "priors_versao": PRIORS_DEFAULT["versao"],
-        }
-        resultado["executada_em"] = self._relogio.agora().isoformat()
         jornada.simulacao = resultado
         jornada.estado = "simulado"
         self._repo.salvar_jornada(jornada)
@@ -170,6 +130,26 @@ class ServicoSimulador:
         )
         return jornada
 
+    # -------------------------------------- pré-simulação do M11 (impacto de proposta)
+    def ensaiar_grafo(
+        self,
+        tenant_id: str,
+        os_id: uuid.UUID,
+        grafo: dict[str, Any],
+        *,
+        seed: int = SEED_DEFAULT,
+        runs: int = RUNS_DEFAULT,
+        n_personas: int = N_PERSONAS_DEFAULT,
+    ) -> dict[str, Any]:
+        """Ensaio SEM persistência (§8-M11: "impacto pré-simulado via SimuladorService"
+        das propostas do optimize) — MESMO pipeline determinístico do Ensaio Geral
+        (§6, valida §5.3, portas Rng/Clock); nada é gravado no twin nem no outbox."""
+        os_ = self._repo_os.obter_os(tenant_id, os_id)
+        if os_ is None:
+            raise NaoEncontrado(f"OS {os_id} não encontrada no tenant {tenant_id!r}.")
+        experimento = self._repo.experimento_da_os(os_.id)
+        return self._rodar(os_, grafo, experimento, seed=seed, runs=runs, n_personas=n_personas)
+
     # ------------------------------------------------- POST /simulacoes/comparar
     def comparar(self, tenant_id: str, jornada_ids: list[uuid.UUID]) -> dict[str, Any]:
         """Cenários lado a lado (§8-M8): P50s por versão + deltas vs o primeiro
@@ -203,6 +183,80 @@ class ServicoSimulador:
         return {"baseline": cenarios[0]["jornada_id"], "cenarios": cenarios}
 
     # ----------------------------------------------------------------- privados
+    def _rodar(
+        self,
+        os_: OS,
+        grafo: dict[str, Any],
+        experimento: Experimento | None,
+        *,
+        seed: int,
+        runs: int,
+        n_personas: int,
+    ) -> dict[str, Any]:
+        """Pipeline puro do Ensaio (§6): valida §5.3, monta entradas e roda o motor —
+        compartilhado por `simular` (persiste) e `ensaiar_grafo` (M11, não persiste)."""
+        politica = POLITICA_PUBLICADA["conteudo"]
+        erros = validar_grafo(
+            grafo,
+            experimento_travado=experimento_travado(experimento),
+            politica=politica,
+        )
+        if erros:
+            raise GrafoInvalido(erros)
+        segmento = self._segmento_recontado(os_.id)
+        priors = self._priors_vigentes(os_)
+        briefing = os_.briefing or {}
+        ticket = float(briefing.get("ticket_medio") or priors["ticket_medio"])
+        verba = float(briefing["verba"]) if briefing.get("verba") else None
+
+        ger = self._rng.gerador(seed)
+        personas = self._personas.gerar(
+            n=n_personas,
+            priors=priors,
+            ger=ger,
+            volume_abordagem=segmento.volume_abordagem,
+        )
+        resultado = motor.simular(
+            grafo,
+            volume_entrada=int(segmento.contagem_liquida or 0),
+            personas=personas,
+            priors=priors,
+            tarifas=TARIFAS_VIGENTES,
+            politica=politica,
+            ger=ger,
+            runs=runs,
+            ticket_medio=ticket,
+            hora_inicio=float(self._relogio.agora().hour),
+            experimento=self._experimento_dict(experimento),
+            verba=verba,
+        )
+        resultado["parametros"] = {
+            "seed": seed,
+            "runs": runs,
+            "n_personas": n_personas,
+            "segmento_id": str(segmento.id),
+            "ticket_medio": ticket,
+            "priors_versao": priors["versao"],
+        }
+        resultado["executada_em"] = self._relogio.agora().isoformat()
+        return resultado
+
+    def _priors_vigentes(self, os_: OS) -> dict[str, Any]:
+        """§6: priors da `calibracao_prior` do tipo de campanha — última versão
+        PUBLICADA pelo M11 (CalibrateService, backtest obrigatório); sem publicação
+        vigente → `PRIORS_DEFAULT` v1 (priors.py), sem tocar o motor."""
+        tipo = (os_.briefing or {}).get("tipo_campanha")
+        if isinstance(tipo, dict):  # briefing M3: {valor, inferido, ...}
+            tipo = tipo.get("valor")
+        publicadas = [
+            c
+            for c in self._repo.listar_calibracoes(
+                os_.tenant_id, tipo if isinstance(tipo, str) else None
+            )
+            if c.publicada_em is not None
+        ]
+        return publicadas[-1].priors if publicadas else PRIORS_DEFAULT
+
     @staticmethod
     def _p50s(simulacao: dict[str, Any]) -> dict[str, Any]:
         roas = simulacao.get("roas")

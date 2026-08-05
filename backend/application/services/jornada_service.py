@@ -32,6 +32,7 @@ from domain.experimento.modelos import experimento_travado
 from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.jornada import taximetro
 from domain.jornada.canonico import hash_jgc
+from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.sfmc_preview import preview_do_no
@@ -250,21 +251,9 @@ class ServicoJornada:
 
     @staticmethod
     def _diff_grafos(atual: dict[str, Any], proposto: dict[str, Any]) -> dict[str, Any]:
-        """Diff estrutural por id (nodes/edges adicionados/removidos/alterados) + meta."""
-
-        def _por_id(itens: Any) -> dict[str, Any]:
-            return {str(i.get("id")): i for i in itens or [] if isinstance(i, dict) and i.get("id")}
-
-        diff: dict[str, Any] = {}
-        for chave in ("nodes", "edges"):
-            de, para = _por_id(atual.get(chave)), _por_id(proposto.get(chave))
-            diff[chave] = {
-                "adicionados": sorted(set(para) - set(de)),
-                "removidos": sorted(set(de) - set(para)),
-                "alterados": sorted(i for i in set(de) & set(para) if de[i] != para[i]),
-            }
-        diff["meta_alterada"] = (atual.get("meta") or {}) != (proposto.get("meta") or {})
-        return diff
+        """Diff estrutural por id — código puro compartilhado (domain/jornada/diff.py;
+        o M11 reusa o MESMO diff nas propostas do optimize §8-M11)."""
+        return diff_grafos(atual, proposto)
 
     def _exigir_os(self, tenant_id: str, os_id: uuid.UUID) -> OS:
         os_ = self._repo_os.obter_os(tenant_id, os_id)

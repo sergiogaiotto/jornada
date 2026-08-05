@@ -14,6 +14,7 @@ from domain.audiencia.modelos import Segmento
 from domain.campanha.modelos import EventoDominio
 from domain.experimento.modelos import Experimento
 from domain.jornada.modelos import JornadaVersao
+from domain.otimizacao.modelos import CalibracaoPrior
 
 
 class RepositorioJornada(Protocol):
@@ -41,6 +42,14 @@ class RepositorioJornada(Protocol):
 
     # --- Segmento (volume líquido p/ o taxímetro — A2) ---
     def listar_segmentos(self, os_id: uuid.UUID) -> list[Segmento]: ...
+
+    # --- Priors vigentes (§6: `calibracao_prior` do tipo de campanha — M11) ---
+    def listar_calibracoes(
+        self, tenant_id: str, tipo_campanha: str | None = None
+    ) -> list[CalibracaoPrior]:
+        """Calibrações do tenant em ordem de versão (o simulador usa a última
+        PUBLICADA; sem publicação → PRIORS_DEFAULT v1)."""
+        ...
 
     # --- Ledger via_ai (§4.1 `invocacao`) e outbox (§2.3) ---
     def adicionar_invocacao(self, invocacao: Invocacao) -> None: ...

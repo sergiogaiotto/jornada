@@ -1,17 +1,18 @@
 """Repositório em memória do núcleo OS/governança, esteira, intake, validação,
-audiência, criativo, twin/simulador, compilador e lançamento
-(M1+M2+M3+M4+M5+M6+M8+M9+M10).
+audiência, criativo, twin/simulador, compilador, lançamento e otimização/calibração
+(M1+M2+M3+M4+M5+M6+M8+M9+M10+M11+M12).
 
 Implementa as portas `RepositorioOs`, `RepositorioWorkflow`, `RepositorioIntake`,
 `RepositorioValidacao`, `RepositorioAudiencia`, `RepositorioCriativo`,
-`RepositorioJornada`, `RepositorioSync` e `RepositorioLancamento` na MESMA instância
-(tipagem estrutural §2.1).
+`RepositorioJornada`, `RepositorioSync`, `RepositorioLancamento`,
+`RepositorioOtimizacao` e `RepositorioAtelie` na MESMA instância (tipagem
+estrutural §2.1).
 Escolha registrada no CHANGELOG-SDD.md (M1): os testes rodam sem docker e o DDL
 Postgres (jsonb/uuid/view os_saude, etapa_workflow, hike_import_log, pedido, invocacao,
 validacao_campo, os_thread, documento_portao, segmento, certificado_elegibilidade,
 dc_segment_cache, criativo, jornada_versao, experimento, snapshot, aprovacao, sync_run,
-resource_registry, drift_check, preflight_run, launch, telemetry_event, incidente)
-permanece íntegro nas migrações (§4.1);
+resource_registry, drift_check, preflight_run, launch, telemetry_event, incidente,
+policy_versao) permanece íntegro nas migrações (§4.1);
 este adapter cobre dev/teste;
 o adapter SQLAlchemy/Postgres entra quando um módulo exigir durabilidade real, sem
 tocar domínio nem serviços (hexagonal §2.1).
@@ -20,13 +21,14 @@ tocar domínio nem serviços (hexagonal §2.1).
 import itertools
 import uuid
 
-from domain.agentes.modelos import Invocacao
+from domain.agentes.modelos import AgenteEvidence, Invocacao
+from domain.atelie.modelos import Agente, HarnessCase, HarnessRun, SkillVersao
 from domain.audiencia.modelos import CertificadoElegibilidade, DcSegmentCache, Segmento
 from domain.campanha.modelos import OS, EventoDominio, Pendencia, SlaClock
 from domain.criativo.modelos import Criativo
 from domain.esteira.modelos import EtapaWorkflow, HikeImportLog
 from domain.experimento.modelos import Experimento
-from domain.governanca.modelos import Aprovacao, Snapshot
+from domain.governanca.modelos import Aprovacao, PolicyVersao, Snapshot
 from domain.intake.modelos import Pedido
 from domain.jornada.modelos import (
     DriftCheck,
@@ -36,6 +38,7 @@ from domain.jornada.modelos import (
     SyncRun,
 )
 from domain.lancamento.modelos import Incidente, Launch, TelemetryEvent
+from domain.otimizacao.modelos import Aprendizado, CalibracaoPrior, PropostaOtimizacao
 from domain.validacao.modelos import DocumentoPortao, ThreadWarRoom, ValidacaoCampo
 
 
@@ -70,6 +73,19 @@ class RepositorioOsMemoria:
         self._seq_telemetria = itertools.count(1)
         self._incidentes: dict[uuid.UUID, Incidente] = {}
         self._ordem_incidente: list[uuid.UUID] = []
+        self._propostas: dict[uuid.UUID, PropostaOtimizacao] = {}
+        self._ordem_proposta: list[uuid.UUID] = []
+        self._aprendizados: list[Aprendizado] = []
+        self._calibracoes: list[CalibracaoPrior] = []
+        self._evidencias: list[AgenteEvidence] = []
+        self._agentes: dict[uuid.UUID, Agente] = {}
+        self._ordem_agente: list[uuid.UUID] = []
+        self._skills: dict[uuid.UUID, SkillVersao] = {}
+        self._ordem_skill: list[uuid.UUID] = []
+        self._harness_cases: list[HarnessCase] = []
+        self._harness_runs: list[HarnessRun] = []
+        self._policies: dict[uuid.UUID, PolicyVersao] = {}
+        self._ordem_policy: list[uuid.UUID] = []
         self._eventos: list[EventoDominio] = []
         self._seq_evento = itertools.count(1)
         self._seq_os: dict[int, itertools.count[int]] = {}
@@ -161,6 +177,9 @@ class RepositorioOsMemoria:
     def listar_invocacoes(self, tenant_id: str) -> list[Invocacao]:
         return [i for i in self._invocacoes if i.tenant_id == tenant_id]
 
+    def obter_invocacao(self, invocacao_id: uuid.UUID) -> Invocacao | None:
+        return next((i for i in self._invocacoes if i.id == invocacao_id), None)
+
     # --- Validações campo-a-campo (`validacao_campo` — M4) ---
     def adicionar_validacao(self, validacao: ValidacaoCampo) -> None:
         self._validacoes.append(validacao)
@@ -251,13 +270,20 @@ class RepositorioOsMemoria:
     def proxima_versao(self, os_id: uuid.UUID) -> int:
         return max((j.versao for j in self.listar_jornadas(os_id)), default=0) + 1
 
-    # --- Experimentos (`experimento` §4.1 — leitura p/ validação §5.3 e poder §6) ---
+    # --- Experimentos (`experimento` §4.1 — leitura p/ validação §5.3 e poder §6;
+    #     obter/salvar p/ a apuração anti-peeking do M11 §8-M11) ---
     def adicionar_experimento(self, experimento: Experimento) -> None:
         self._experimentos[experimento.id] = experimento
 
     def experimento_da_os(self, os_id: uuid.UUID) -> Experimento | None:
         da_os = [e for e in self._experimentos.values() if e.os_id == os_id]
         return da_os[-1] if da_os else None
+
+    def obter_experimento(self, experimento_id: uuid.UUID) -> Experimento | None:
+        return self._experimentos.get(experimento_id)
+
+    def salvar_experimento(self, experimento: Experimento) -> None:
+        self._experimentos[experimento.id] = experimento
 
     # --- Snapshots (`snapshot` §4.1 — M8 parte 2) ---
     def adicionar_snapshot(self, snapshot: Snapshot) -> None:
@@ -417,6 +443,153 @@ class RepositorioOsMemoria:
 
     def salvar_incidente(self, incidente: Incidente) -> None:
         self._incidentes[incidente.id] = incidente
+
+    # --- Propostas do optimize (`proposta_otimizacao` — migração 0009, M11) ---
+    def adicionar_proposta(self, proposta: PropostaOtimizacao) -> None:
+        self._propostas[proposta.id] = proposta
+        self._ordem_proposta.append(proposta.id)
+
+    def obter_proposta(self, proposta_id: uuid.UUID) -> PropostaOtimizacao | None:
+        return self._propostas.get(proposta_id)
+
+    def listar_propostas(
+        self, os_id: uuid.UUID, estado: str | None = None
+    ) -> list[PropostaOtimizacao]:
+        return [
+            self._propostas[i]
+            for i in self._ordem_proposta
+            if self._propostas[i].os_id == os_id
+            and (estado is None or self._propostas[i].estado == estado)
+        ]
+
+    def salvar_proposta(self, proposta: PropostaOtimizacao) -> None:
+        self._propostas[proposta.id] = proposta
+
+    # --- Aprendizados (`aprendizado` — migração 0009, M11; clone herda A3) ---
+    def adicionar_aprendizado(self, aprendizado: Aprendizado) -> None:
+        self._aprendizados.append(aprendizado)
+
+    def listar_aprendizados(
+        self, os_id: uuid.UUID | None = None, status: str | None = None
+    ) -> list[Aprendizado]:
+        return [
+            a
+            for a in self._aprendizados
+            if (os_id is None or a.os_id == os_id) and (status is None or a.status == status)
+        ]
+
+    # --- Priors versionados (`calibracao_prior` §4.1 — M11) ---
+    def adicionar_calibracao(self, calibracao: CalibracaoPrior) -> None:
+        self._calibracoes.append(calibracao)
+
+    def listar_calibracoes(
+        self, tenant_id: str, tipo_campanha: str | None = None
+    ) -> list[CalibracaoPrior]:
+        do_tenant = [
+            c
+            for c in self._calibracoes
+            if c.tenant_id == tenant_id
+            and (tipo_campanha is None or c.tipo_campanha in (None, tipo_campanha))
+        ]
+        do_tenant.sort(key=lambda c: c.versao)
+        return do_tenant
+
+    # --- Ateliê (`agente`/`skill_versao`/`harness_*` §4.1, 0001_core — M12) ---
+    def adicionar_agente(self, agente: Agente) -> None:
+        self._agentes[agente.id] = agente
+        self._ordem_agente.append(agente.id)
+
+    def obter_agente(self, tenant_id: str, agente_id: uuid.UUID) -> Agente | None:
+        agente = self._agentes.get(agente_id)
+        return agente if agente is not None and agente.tenant_id == tenant_id else None
+
+    def obter_agente_por_nome(self, nome: str) -> Agente | None:
+        """`agente.nome` é unique GLOBAL (§4.1)."""
+        return next((a for a in self._agentes.values() if a.nome == nome), None)
+
+    def listar_agentes(self, tenant_id: str) -> list[Agente]:
+        return [
+            self._agentes[i] for i in self._ordem_agente if self._agentes[i].tenant_id == tenant_id
+        ]
+
+    def adicionar_skill(self, skill: SkillVersao) -> None:
+        self._skills[skill.id] = skill
+        self._ordem_skill.append(skill.id)
+
+    def obter_skill(self, skill_id: uuid.UUID) -> SkillVersao | None:
+        return self._skills.get(skill_id)
+
+    def listar_skills(self, agente_id: uuid.UUID) -> list[SkillVersao]:
+        return [
+            self._skills[i] for i in self._ordem_skill if self._skills[i].agente_id == agente_id
+        ]
+
+    def salvar_skill(self, skill: SkillVersao) -> None:
+        self._skills[skill.id] = skill
+
+    def versoes_skills_publicadas(self) -> dict[str, str]:
+        """Última publicada por agente (publicada_em; empate → ordem de inserção)."""
+        versoes: dict[str, str] = {}
+        for agente_id in self._ordem_agente:
+            agente = self._agentes[agente_id]
+            publicadas = [
+                s
+                for s in self.listar_skills(agente_id)
+                if s.estado == "publicada" and s.publicada_em is not None
+            ]
+            if publicadas:
+                atual = max(publicadas, key=lambda s: s.publicada_em)  # type: ignore[arg-type,return-value]
+                versoes[agente.nome] = atual.versao
+        return versoes
+
+    def adicionar_harness_case(self, caso: HarnessCase) -> None:
+        self._harness_cases.append(caso)
+
+    def listar_harness_cases(self, agente_id: uuid.UUID) -> list[HarnessCase]:
+        return [c for c in self._harness_cases if c.agente_id == agente_id]
+
+    def adicionar_harness_run(self, run: HarnessRun) -> None:
+        self._harness_runs.append(run)
+
+    def listar_harness_runs(self, skill_versao_id: uuid.UUID) -> list[HarnessRun]:
+        return [r for r in self._harness_runs if r.skill_versao_id == skill_versao_id]
+
+    # --- Policy-as-code (`policy_versao` §4.1 — M12 parte 2) ---
+    def adicionar_policy(self, policy: PolicyVersao) -> None:
+        self._policies[policy.id] = policy
+        self._ordem_policy.append(policy.id)
+
+    def obter_policy(self, tenant_id: str, policy_id: uuid.UUID) -> PolicyVersao | None:
+        policy = self._policies.get(policy_id)
+        return policy if policy is not None and policy.tenant_id == tenant_id else None
+
+    def listar_policies(self, tenant_id: str) -> list[PolicyVersao]:
+        return [
+            self._policies[i]
+            for i in self._ordem_policy
+            if self._policies[i].tenant_id == tenant_id
+        ]
+
+    def salvar_policy(self, policy: PolicyVersao) -> None:
+        self._policies[policy.id] = policy
+
+    def politica_publicada_atual(self, tenant_id: str | None = None) -> PolicyVersao | None:
+        """Maior `versao` publicada; `tenant_id=None` → dev single-tenant (§3),
+        espelhando `versoes_skills_publicadas`."""
+        publicadas = [
+            self._policies[i]
+            for i in self._ordem_policy
+            if self._policies[i].estado == "publicada"
+            and (tenant_id is None or self._policies[i].tenant_id == tenant_id)
+        ]
+        return max(publicadas, key=lambda p: p.versao) if publicadas else None
+
+    # --- RAG (`agente_evidence` §4.1 — STUB de ingestão M11: embedding None §7.4) ---
+    def adicionar_evidencia(self, evidencia: AgenteEvidence) -> None:
+        self._evidencias.append(evidencia)
+
+    def listar_evidencias(self, tenant_id: str, base: str) -> list[AgenteEvidence]:
+        return [e for e in self._evidencias if e.tenant_id == tenant_id and e.base == base]
 
     # --- Outbox (§2.3) ---
     def adicionar_evento(self, evento: EventoDominio) -> None:

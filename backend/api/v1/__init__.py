@@ -6,6 +6,7 @@ M0 não define endpoints de negócio; os routers dos módulos M1+ são incluído
 from fastapi import APIRouter
 
 from api.v1 import (
+    atelie,
     audiencia,
     compilador,
     criativo,
@@ -16,6 +17,8 @@ from api.v1 import (
     jornada,
     lancamento,
     os_governanca,
+    otimizacao,
+    plataforma,
     portoes,
     prevoo,
     simulador,
@@ -39,3 +42,7 @@ api_router.include_router(compilador.router)  # M9 (fatia 1) · Compilador plan/
 api_router.include_router(prevoo.router)  # M9 (fatia 2) · Pré-voo & Drift T11 (§5.4.5, §8-M9)
 api_router.include_router(lancamento.router)  # M10 (parte 1) · Torre de Lançamento T12 (§8-M10)
 api_router.include_router(insight.router)  # M10 (parte 3) · Pergunte aos Dados T13/T14 (§8-M10)
+api_router.include_router(otimizacao.router)  # M11 · Otimização/Retro/Calibração T15 (§8-M11)
+api_router.include_router(atelie.router)  # M12 (parte 1) · Ateliê T16 (§7.1, §8-M12)
+api_router.include_router(plataforma.router_policies)  # M12 (parte 2) · Políticas (§8-M12)
+api_router.include_router(plataforma.router_auditoria)  # M12 (parte 2) · Auditoria Art. 20 (§8-M12)
