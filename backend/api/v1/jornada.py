@@ -1,6 +1,7 @@
 """Rotas do M7 · Twin Canvas / T7 (SDD §8-M7) — tag OpenAPI `jornada`.
 
-`POST /os/{id}/jornada/gerar` (flow → JGC) · `PUT /jornadas/{id}/grafo` (valida §5.3;
+`POST /os/{id}/jornada/gerar` (flow → JGC) · `GET /os/{id}/jornada` (última versão do
+twin — emenda A14; 404 sem versão) · `PUT /jornadas/{id}/grafo` (valida §5.3;
 recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff proposto,
 NUNCA aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o
 compilador gerará — §5.4, determinístico).
@@ -188,6 +189,16 @@ async def gerar_jornada(
         taximetro=TaximetroOut(custo_projetado=jornada.custo_projetado or 0.0, **taximetro),
         invocacao_id=invocacao.id,
     )
+
+
+@router.get("/os/{os_id}/jornada", response_model=JornadaOut)
+async def obter_jornada(
+    os_id: uuid.UUID, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> JornadaOut:
+    """Última versão do twin da OS (§8-M7, emenda A14) — o canvas T7 abre o grafo
+    persistido sem regenerar nada; 404 problem+json quando a OS não tem versão.
+    Leitura 100% determinística — LLM proibido neste caminho (§10.6)."""
+    return JornadaOut.model_validate(servico.ultima_versao(tenant, os_id))
 
 
 @router.put("/jornadas/{jornada_id}/grafo", response_model=GrafoOut)

@@ -37,6 +37,26 @@ def test_montar_mensagens_sem_pii_e_com_contexto() -> None:
     assert contexto["faltantes"] == ["verba", "janela"]
     assert contexto["mensagem_do_solicitante"] == "qual verba usar?"
     assert "solicitante" not in contexto  # PII nunca em prompt (§1.3.5/§10.2)
+    # com faltantes, NÃO há instrução de briefing completo
+    assert "briefing_completo" not in contexto and "instrucao" not in contexto
+
+
+def test_montar_mensagens_briefing_completo_instrui_consultoria() -> None:
+    """A2 (UAT real): conversa de OS com briefing COMPLETO (faltantes vazio) → o
+    contexto instrui consultoria ESTRATÉGICA sem inventar faltantes."""
+    skill = carregar_skill()
+    conteudo = {
+        campo: {"valor": f"valor de {campo}", "inferido": False}
+        for campo in ("objetivo", "publico", "oferta", "verba", "janela")
+    }
+    mensagens = montar_mensagens(skill, conteudo, [], "como maximizar a conversão?")
+    contexto = json.loads(mensagens[1]["content"])
+    assert contexto["briefing_completo"] is True
+    assert contexto["faltantes"] == []
+    assert "consultor" in contexto["instrucao"].lower()
+    assert "não invente faltantes" in contexto["instrucao"].lower()
+    # a regra também vive na skill (§7.1) — o LLM real a recebe como system prompt
+    assert "faltantes" in skill.corpo.lower() and "estratégico" in skill.corpo.lower()
 
 
 # ------------------------------------------------- Guarda-corpos da saída do LLM

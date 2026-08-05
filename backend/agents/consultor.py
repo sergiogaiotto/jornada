@@ -72,18 +72,30 @@ def carregar_skill(caminho: Path = SKILL_PATH) -> Skill:
 def montar_mensagens(
     skill: Skill, conteudo: dict[str, Any], faltantes: list[str], mensagem: str
 ) -> list[dict[str, str]]:
-    """Mensagens OpenAI-style. SEM PII: nunca inclui o `solicitante` do pedido (§1.3.5)."""
+    """Mensagens OpenAI-style. SEM PII: nunca inclui o `solicitante` do pedido (§1.3.5).
+
+    A2 (UAT real): com `faltantes` vazio (conversa de OS com briefing completo — rota
+    de briefing da OS), o contexto DIZ isso ao modelo — consultoria estratégica, sem
+    inventar pendência nem repetir pergunta de campo já preenchido."""
     resumo = {
         campo: valor_do_campo(conteudo, campo)
         for campo in CAMPOS_OBRIGATORIOS
         if valor_presente(valor_do_campo(conteudo, campo))
     }
-    contexto = {
+    contexto: dict[str, Any] = {
         "campos_obrigatorios": list(CAMPOS_OBRIGATORIOS),
         "conteudo_atual": resumo,
         "faltantes": faltantes,
         "mensagem_do_solicitante": mensagem,
     }
+    if not faltantes:
+        contexto["briefing_completo"] = True
+        contexto["instrucao"] = (
+            "briefing completo: atue como consultor ESTRATÉGICO da campanha "
+            "(riscos, oportunidades, cadência, canais, próximos passos) sobre o "
+            "conteúdo atual; NÃO invente faltantes nem pergunte por campo já "
+            "preenchido."
+        )
     return [
         {"role": "system", "content": skill.corpo},
         {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)},

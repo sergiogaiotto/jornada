@@ -489,7 +489,7 @@ Repo, docker-compose (db+api+web+mocks+mailpit), config, migração 0001, auth d
 **A1** SMS 161 chars → 422. **A2** edição do KV master marca células derivadas `adaptado_revisar`. **A3** nenhuma célula vai a `aprovado` via agente — só usuário com papel analista+.
 
 ### M7 · Twin Canvas (T7)
-`POST /os/{id}/jornada/gerar` (flow → JGC) · `PUT /jornadas/{id}/grafo` (valida §5.3; recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff proposto, nunca aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o compilador gerará).
+`POST /os/{id}/jornada/gerar` (flow → JGC) · `GET /os/{id}/jornada` (última versão do twin da OS; 404 quando não há versão — leitura determinística do canvas, emenda 2026-08-05) · `PUT /jornadas/{id}/grafo` (valida §5.3; recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff proposto, nunca aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o compilador gerará).
 **A1** grafo com braço órfão → 422 com apontamento do nó. **A2** taxímetro = Σ(volume esperado × tarifa vigente) — teste com fixture bate valor exato. **A3** `reentrada=qualquer_momento` + experimento travado → 422 (contrato de re-entrada).
 
 ### M8 · Simulador (T8) + Portões (T9) + Aprovação (T10)

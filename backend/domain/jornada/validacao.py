@@ -23,6 +23,34 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "jgc.schema.json"
 HOLDOUT_ID = "holdout"  # braço de randomSplit reservado ao holdout (§5.2/§5.3)
 TIPOS_TERMINAIS: tuple[str, ...] = ("goal", "exit", "exception")
 
+# A13 (UAT com gpt-oss-120b real): modelos geram arestas com aliases `source`/`target`
+# — normalizados para o contrato §5.1 (`from`/`to`) ANTES de validar/persistir.
+ALIASES_ARESTA: dict[str, str] = {"source": "from", "target": "to"}
+
+
+def normalizar_arestas(grafo: Any) -> Any:
+    """Normaliza aliases de aresta (`source`→`from`, `target`→`to`) — A13.
+
+    Roda nas ENTRADAS (gerar/ajustar/PUT) antes do `jgc_validate`: o contrato interno
+    e o hash canônico usam SEMPRE `from`/`to`; o alias é aceito na borda e descartado.
+    Não muda nada quando o grafo já está no contrato (idempotente); entrada que não é
+    grafo/aresta-objeto passa intacta (a validação estrutural aponta o erro)."""
+    if not isinstance(grafo, dict) or not isinstance(grafo.get("edges"), list):
+        return grafo
+    grafo = dict(grafo)
+    arestas: list[Any] = []
+    for aresta in grafo["edges"]:
+        if isinstance(aresta, dict) and any(a in aresta for a in ALIASES_ARESTA):
+            aresta = dict(aresta)
+            for alias, canonico in ALIASES_ARESTA.items():
+                valor = aresta.pop(alias, None)
+                if canonico not in aresta and valor is not None:
+                    aresta[canonico] = valor
+        arestas.append(aresta)
+    grafo["edges"] = arestas
+    return grafo
+
+
 # ISO 8601 (subset usado pelo JGC §5.2: PnW/PnD/TnH/nM/nS)
 _DURACAO = re.compile(
     r"^P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
@@ -101,10 +129,36 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
         vistos.add(no_id)
         erros.extend(_validar_no(no_id, no))
     for aresta in grafo.get("edges") or []:
-        if not isinstance(aresta, dict) or not all(aresta.get(c) for c in ("id", "from", "to")):
+        if not isinstance(aresta, dict):
             erros.append(
-                _erro(None, "estrutura", f"Aresta sem id/from/to (§5.1 edges): {aresta!r}.")
+                _erro(None, "estrutura", f"Aresta deve ser objeto (§5.1 edges): {aresta!r}.")
             )
+            continue
+        # A13: from/to são OBRIGATÓRIOS (aliases source/target já foram normalizados
+        # na entrada) — mensagem clara por campo alimenta o retry do flow (§7.3).
+        rotulo = f"Aresta {aresta.get('id')!r}" if aresta.get("id") else f"Aresta {aresta!r}"
+        for campo in ("id", "from", "to"):
+            if not aresta.get(campo):
+                erros.append(
+                    _erro(
+                        None,
+                        "estrutura",
+                        f"{rotulo} sem campo obrigatório `{campo}` (§5.1 edges — toda aresta "
+                        "exige `id`, `from` e `to`; use exatamente esses nomes).",
+                    )
+                )
+        # from/to devem apontar para nós EXISTENTES do grafo (A13 — §5.1/§5.3)
+        for campo, papel in (("from", "parte de"), ("to", "aponta para")):
+            destino = aresta.get(campo)
+            if destino and str(destino) not in vistos:
+                erros.append(
+                    _erro(
+                        str(aresta.get("from")) if str(aresta.get("from", "")) in vistos else None,
+                        "estrutura",
+                        f"{rotulo} {papel} nó inexistente: `{campo}`={destino!r} — todo "
+                        "`from`/`to` deve referenciar o `id` de um nó do grafo (§5.1).",
+                    )
+                )
     return erros
 
 

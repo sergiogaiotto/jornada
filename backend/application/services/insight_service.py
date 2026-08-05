@@ -77,6 +77,16 @@ class ServicoInsight:
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # indisponível → 503
             spans.append({"nome": "generate", "modelo_perfil": skill.modelo_perfil})
             saida = agente_insight.interpretar_saida(texto)
+            if saida.recusa is not None:
+                # A17: ANTES de recusar, mapa determinístico de sinônimos → métrica
+                # canônica ('conversão por real gasto' → custo_por_pedido). Só a
+                # pergunta é consultada; a consulta mapeada É do dicionário (§7.2).
+                canonica = agente_insight.consulta_por_sinonimo(pergunta)
+                if canonica is not None:
+                    saida = agente_insight.SaidaInsight(
+                        consulta=canonica, parametros={}, resposta="", recusa=None
+                    )
+                    spans.append({"nome": "sinonimo_canonico", "consulta": canonica})
             if saida.recusa is None and saida.consulta is not None:
                 consulta_executada = semantica.executar(saida.consulta, saida.parametros, contexto)
                 spans.append(

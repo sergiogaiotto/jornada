@@ -10,13 +10,17 @@ Rodam via TestClient, sem docker, ZERO LLM (§1.3.5: LLMFake nem chega a ser cha
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from adapters.atelie_seeds import semear_atelie
+from adapters.demo_seeds import semear_demo
 from adapters.llm.fake import LLMFake
 from adapters.observabilidade.langfuse import TracerLangfuse
+from adapters.persistence.memoria import RepositorioOsMemoria
 from app.config import Settings
 from app.main import create_app, ping_db
 
@@ -77,6 +81,60 @@ def test_seeds_demo_monitor_lift_e_roas(client: TestClient) -> None:
     assert corpo["reconciliacao"]["divergente"] is False  # A3: espelho < 2%
     assert corpo["launch"]["estado"] == "em_rampa"
     assert set(corpo["canais"]) == {"email", "push", "sms", "whatsapp"}
+
+
+def test_seeds_demo_jornada_publicada_no_canvas(client: TestClient) -> None:
+    """A14: `GET /os/{id}/jornada` (emenda §8-M7) devolve a versão PUBLICADA da demo
+    com a paleta realista do §5.2 — o canvas T7 nunca abre vazio."""
+    os_ = _os_demo(client)
+    resposta = client.get(f"/api/v1/os/{os_['id']}/jornada", headers=HEADERS)
+    assert resposta.status_code == 200, resposta.text
+    jornada = resposta.json()
+    assert jornada["estado"] == "publicado" and jornada["versao"] == 1
+    tipos = {n["type"] for n in jornada["grafo"]["nodes"]}
+    assert {
+        "entrySource",
+        "randomSplit",
+        "sto",
+        "decisionSplit",
+        "wait",
+        "channel.email",
+        "channel.sms",
+        "channel.whatsapp",
+        "goal",
+        "exit",
+    } <= tipos  # paleta do mock T7 (§5.2)
+    bracos = next(n for n in jornada["grafo"]["nodes"] if n["type"] == "randomSplit")
+    assert {b["id"] for b in bracos["data"]["braços"]} == {"tratado", "holdout"}
+    assert all("from" in a and "to" in a for a in jornada["grafo"]["edges"])  # contrato §5.1
+
+
+def test_seeds_ids_deterministicos_entre_restarts() -> None:
+    """A15: 2 execuções das seeds (restart simulado) geram os MESMOS ids — links do
+    front (OS/jornada/snapshot/experimento/propostas/agentes) nunca quebram."""
+    agora = datetime.now(UTC)
+
+    def _ids(repositorio: RepositorioOsMemoria) -> dict[str, object]:
+        os_ = repositorio.obter_os_por_codigo("OS-2026-0457")
+        return {
+            "os": os_.id,
+            "jornadas": [j.id for j in repositorio.listar_jornadas(os_.id)],
+            "segmentos": [s.id for s in repositorio.listar_segmentos(os_.id)],
+            "snapshots": [s.id for s in repositorio.listar_snapshots(os_.id)],
+            "experimento": repositorio.experimento_da_os(os_.id).id,
+            "propostas": [p.id for p in repositorio.listar_propostas(os_.id)],
+            "agentes": [a.id for a in repositorio.listar_agentes(TENANT)],
+        }
+
+    execucoes = []
+    for _ in range(2):  # dois "boots" com relógios DIFERENTES — ids idênticos
+        repositorio = RepositorioOsMemoria()
+        semear_demo(repositorio, tenant_id=TENANT, agora=agora)
+        semear_atelie(repositorio, tenant_id=TENANT, agora=agora)
+        execucoes.append(_ids(repositorio))
+        agora = agora + timedelta(hours=7)
+    assert execucoes[0] == execucoes[1]
+    assert execucoes[0]["jornadas"] and execucoes[0]["propostas"] and execucoes[0]["agentes"]
 
 
 def test_seeds_demo_retro_propostas_e_apuracao(client: TestClient) -> None:

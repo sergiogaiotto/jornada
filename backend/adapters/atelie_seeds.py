@@ -28,6 +28,12 @@ SKILLS_DIR = Path(__file__).resolve().parents[1] / "agents" / "skills"
 CASOS_PADRAO = Path(__file__).resolve().parents[2] / "mocks" / "seeds" / "harness_cases.json"
 
 
+def _uuid_seed(rotulo: str) -> uuid.UUID:
+    """Id DETERMINÍSTICO das seeds (A15): uuid5(NAMESPACE_URL, 'jornada/<rotulo>') —
+    restart re-semeia com os MESMOS ids (links do T16 nunca quebram)."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"jornada/{rotulo}")
+
+
 def semear_atelie(
     repositorio: RepositorioAtelie,
     *,
@@ -44,7 +50,7 @@ def semear_atelie(
         texto = arquivo.read_text(encoding="utf-8")
         parseada = parse_skill_md(texto)
         agente = Agente(
-            id=uuid.uuid4(),
+            id=_uuid_seed(f"agente/{parseada.nome}"),
             tenant_id=tenant_id,
             nome=parseada.nome,
             camada=parseada.camada,
@@ -55,7 +61,7 @@ def semear_atelie(
         repositorio.adicionar_agente(agente)
         repositorio.adicionar_skill(
             SkillVersao(
-                id=uuid.uuid4(),
+                id=_uuid_seed(f"skill/{parseada.nome}@{parseada.versao}"),
                 agente_id=agente.id,
                 versao=parseada.versao,
                 skill_md=texto,
@@ -65,10 +71,10 @@ def semear_atelie(
                 publicada_em=agora,
             )
         )
-        for caso in casos_por_agente.get(parseada.nome, []):
+        for indice, caso in enumerate(casos_por_agente.get(parseada.nome, []), start=1):
             repositorio.adicionar_harness_case(
                 HarnessCase(
-                    id=uuid.uuid4(),
+                    id=_uuid_seed(f"harness-case/{parseada.nome}/{indice}"),
                     agente_id=agente.id,
                     input=caso["input"],
                     esperado=caso["esperado"],
@@ -78,7 +84,7 @@ def semear_atelie(
     # guard: determinístico (§7.2) — existe no roster, mas NÃO tem skill nem harness.
     repositorio.adicionar_agente(
         Agente(
-            id=uuid.uuid4(),
+            id=_uuid_seed("agente/guard"),
             tenant_id=tenant_id,
             nome="guard",
             camada="especialista",
@@ -100,7 +106,7 @@ def semear_politicas(
         return
     repositorio.adicionar_policy(
         PolicyVersao(
-            id=uuid.uuid4(),
+            id=_uuid_seed(f"policy/v{POLITICA_PUBLICADA['versao']}"),
             tenant_id=tenant_id,
             versao=int(POLITICA_PUBLICADA["versao"]),
             conteudo=dict(POLITICA_PUBLICADA["conteudo"]),

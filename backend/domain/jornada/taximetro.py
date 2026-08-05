@@ -27,13 +27,20 @@ _CENTAVO = Decimal("0.01")
 
 
 def _saidas(grafo: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Mesma adjacência da validação: edges + regras de decisionSplit (to direto)."""
+    """Mesma adjacência da validação: edges + regras de decisionSplit (to direto).
+
+    Aresta/regra malformada (sem `from`/`to` — A13) é IGNORADA aqui: quem aponta o
+    erro é o `jgc_validate` (§5.3); o taxímetro jamais estoura KeyError bruto."""
     saidas: dict[str, list[dict[str, Any]]] = {}
     for aresta in grafo.get("edges") or []:
+        if not isinstance(aresta, dict) or not aresta.get("from") or not aresta.get("to"):
+            continue
         saidas.setdefault(str(aresta["from"]), []).append(aresta)
     for no in grafo.get("nodes") or []:
-        if no.get("type") == "decisionSplit":
+        if isinstance(no, dict) and no.get("id") and no.get("type") == "decisionSplit":
             for regra in no.get("data", {}).get("regras") or []:
+                if not isinstance(regra, dict) or not regra.get("to"):
+                    continue
                 saidas.setdefault(str(no["id"]), []).append(
                     {"from": str(no["id"]), "to": str(regra["to"]), "cond": regra.get("expr")}
                 )
@@ -42,7 +49,9 @@ def _saidas(grafo: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
 
 def _volumes_por_no(grafo: dict[str, Any], volume_entrada: int) -> tuple[dict[str, Decimal], bool]:
     """Propaga o volume esperado (Decimal) da entrada a cada nó; (volumes, houve_ciclo)."""
-    nos: dict[str, dict[str, Any]] = {str(n["id"]): n for n in grafo.get("nodes") or []}
+    nos: dict[str, dict[str, Any]] = {
+        str(n["id"]): n for n in grafo.get("nodes") or [] if isinstance(n, dict) and n.get("id")
+    }
     saidas = _saidas(grafo)
     grau_entrada: dict[str, int] = dict.fromkeys(nos, 0)
     for arestas in saidas.values():
@@ -97,6 +106,8 @@ def calcular(
     memoria: list[dict[str, Any]] = []
     total = Decimal(0)
     for no in grafo.get("nodes") or []:
+        if not isinstance(no, dict) or not no.get("id"):
+            continue  # nó malformado: o jgc_validate aponta; aqui nunca KeyError (A13)
         tipo = str(no.get("type", ""))
         if not tipo.startswith("channel."):
             continue

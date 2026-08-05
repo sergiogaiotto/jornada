@@ -10,6 +10,10 @@ repositório (mesmo padrão de `atelie_seeds.py`). Só roda quando `DEMO_MODE=tr
 `APP_ENV=dev` (create_app); os testes de aceite criam o app com `demo=False` — o
 comportamento dos módulos M0–M12 é idêntico com ou sem seeds.
 
+Ids DETERMINÍSTICOS (A15 — UAT na VPS): uuid5(NAMESPACE_URL, 'jornada/<rotulo>') em
+TODOS os objetos semeados — restart do backend re-semeia com os MESMOS ids e nenhum
+link/bookmark do front quebra (antes, uuid4 trocava tudo a cada boot).
+
 Números calibrados (verificáveis em `tests/acceptance/test_seeds_demo.py`):
 - lift realizado = (271/900 − 6/100) × 100 = +24,11 pp · IC95 ≈ [+18,6, +29,6] —
   SIGNIFICATIVO (IC exclui zero, §8-M11-A2); holdout 10% ⇒ n_holdout = 100.
@@ -74,9 +78,17 @@ def _hash_contato(rotulo: str) -> str:
     return hashlib.sha256(f"demo-{rotulo}".encode()).hexdigest()
 
 
+def _uuid_demo(rotulo: str) -> uuid.UUID:
+    """Id DETERMINÍSTICO das seeds (A15): uuid5(NAMESPACE_URL, 'jornada/<rotulo>') —
+    dois restarts do backend geram os MESMOS ids e nenhum link do front quebra."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"jornada/{rotulo}")
+
+
 def _grafo_demo() -> dict[str, Any]:
-    """JGC §5 da OS demo: entrada → holdout 90/10 → e-mail → push → SMS → WhatsApp →
-    goal (paleta completa do mock T7); braço holdout → exit."""
+    """JGC §5 da OS demo com a paleta COMPLETA do §5.2 (canvas T7 realista — A14):
+    entrada por DE → holdout 90/10 (randomSplit) → STO → e-mail → wait →
+    decisionSplit (não abriu → push; senão pula) → wait → SMS → wait → WhatsApp →
+    goal; braço holdout → exit."""
     return {
         "jgcVersion": "1.0",
         "meta": {
@@ -97,11 +109,26 @@ def _grafo_demo() -> dict[str, Any]:
                 "data": {"braços": [{"id": "tratado", "pct": 90}, {"id": "holdout", "pct": 10}]},
             },
             {
+                "id": "n12",
+                "type": "sto",
+                "data": {"janelaHoras": 12, "fallback": "10:00"},
+            },
+            {
                 "id": "n3",
                 "type": "channel.email",
                 "data": {"assetRef": "asset-email-457-A", "optIn": True, "throttlePorHora": 25_000},
             },
             {"id": "n4", "type": "wait", "data": {"duracao": "PT48H"}},
+            {
+                "id": "n13",
+                "type": "decisionSplit",
+                "data": {
+                    "regras": [
+                        {"expr": "abriu_email == false", "to": "n5"},
+                        {"expr": "senao", "to": "n6"},
+                    ]
+                },
+            },
             {
                 "id": "n5",
                 "type": "channel.push",
@@ -128,15 +155,16 @@ def _grafo_demo() -> dict[str, Any]:
         ],
         "edges": [
             {"id": "e1", "from": "n1", "to": "n2", "cond": None},
-            {"id": "e2", "from": "n2", "to": "n3", "cond": "tratado"},
+            {"id": "e2", "from": "n2", "to": "n12", "cond": "tratado"},
             {"id": "e3", "from": "n2", "to": "n11", "cond": "holdout"},
-            {"id": "e4", "from": "n3", "to": "n4", "cond": None},
-            {"id": "e5", "from": "n4", "to": "n5", "cond": None},
-            {"id": "e6", "from": "n5", "to": "n6", "cond": None},
-            {"id": "e7", "from": "n6", "to": "n7", "cond": None},
-            {"id": "e8", "from": "n7", "to": "n8", "cond": None},
-            {"id": "e9", "from": "n8", "to": "n9", "cond": None},
-            {"id": "e10", "from": "n9", "to": "n10", "cond": None},
+            {"id": "e4", "from": "n12", "to": "n3", "cond": None},
+            {"id": "e5", "from": "n3", "to": "n4", "cond": None},
+            {"id": "e6", "from": "n4", "to": "n13", "cond": None},
+            {"id": "e7", "from": "n5", "to": "n6", "cond": None},
+            {"id": "e8", "from": "n6", "to": "n7", "cond": None},
+            {"id": "e9", "from": "n7", "to": "n8", "cond": None},
+            {"id": "e10", "from": "n8", "to": "n9", "cond": None},
+            {"id": "e11", "from": "n9", "to": "n10", "cond": None},
         ],
     }
 
@@ -156,8 +184,10 @@ def _simulacao_demo(segmento_id: uuid.UUID, executada_em: datetime) -> dict[str,
         "funil": {
             "n1": {"tipo": "entrySource", **_faixa(1000, 1000, 1000)},
             "n2": {"tipo": "randomSplit", **_faixa(1000, 1000, 1000)},
+            "n12": {"tipo": "sto", **_faixa(900, 900, 900)},
             "n3": {"tipo": "channel.email", **_faixa(905, 950, 985)},
             "n4": {"tipo": "wait", **_faixa(860, 900, 940)},
+            "n13": {"tipo": "decisionSplit", **_faixa(860, 900, 940)},
             "n5": {"tipo": "channel.push", **_faixa(245, 280, 315)},
             "n6": {"tipo": "wait", **_faixa(238, 270, 300)},
             "n7": {"tipo": "channel.sms", **_faixa(160, 190, 222)},
@@ -352,7 +382,7 @@ def _propostas_demo(os_: OS, jornada: JornadaVersao, agora: datetime) -> list[Pr
             risco=risco,
         )
         return PropostaOtimizacao(
-            id=uuid.uuid4(),
+            id=_uuid_demo(f"proposta/{OS_CODIGO_DEMO}/{titulo}"),  # estável (A15)
             os_id=os_.id,
             jornada_base_id=jornada.id,
             titulo=titulo,
@@ -390,7 +420,7 @@ def _propostas_demo(os_: OS, jornada: JornadaVersao, agora: datetime) -> list[Pr
     grafo_wa = _grafo_demo()
     grafo_wa["nodes"].append(
         {
-            "id": "n12",
+            "id": "n14",
             "type": "decisionSplit",
             "data": {
                 "regras": [
@@ -401,8 +431,8 @@ def _propostas_demo(os_: OS, jornada: JornadaVersao, agora: datetime) -> list[Pr
         }
     )
     for aresta in grafo_wa["edges"]:
-        if aresta["id"] == "e9":  # n8 → n9 passa por n12
-            aresta["to"] = "n12"
+        if aresta["id"] == "e10":  # n8 → n9 passa por n14
+            aresta["to"] = "n14"
     proposta_wa = _montar(
         "WhatsApp só para engagement_score > 90",
         "CTR do WhatsApp 30% abaixo do previsto no perfil de baixo engajamento — "
@@ -420,7 +450,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
         return
 
     os_ = OS(
-        id=uuid.uuid4(),
+        id=_uuid_demo(f"os/{OS_CODIGO_DEMO}"),
         tenant_id=tenant_id,
         codigo=OS_CODIGO_DEMO,
         nome="Upgrade Pós-Pago 5G",
@@ -475,7 +505,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             ]
         repositorio.adicionar_etapa(
             EtapaWorkflow(
-                id=uuid.uuid4(),
+                id=_uuid_demo(f"etapa/{OS_CODIGO_DEMO}/{nome}"),
                 os_id=os_.id,
                 ordem=ordem,
                 nome=nome,
@@ -490,7 +520,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
 
     # ------------------------------------------- segmento 847.312 (§11.4) + guard
     segmento = Segmento(
-        id=uuid.uuid4(),
+        id=_uuid_demo(f"segmento/{OS_CODIGO_DEMO}"),
         os_id=os_.id,
         origem="estudio_sql",
         sql_publico=(
@@ -539,7 +569,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     repositorio.adicionar_segmento(segmento)
     repositorio.adicionar_certificado(
         CertificadoElegibilidade(
-            id=uuid.uuid4(),
+            id=_uuid_demo(f"certificado/{OS_CODIGO_DEMO}"),
             os_id=os_.id,
             hash=hashlib.sha256(b"demo-certificado-457").hexdigest(),
             suprimidos={
@@ -562,12 +592,12 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     executada_em = agora - timedelta(days=21)
     simulacao = _simulacao_demo(segmento.id, executada_em)
     jornada = JornadaVersao(
-        id=uuid.uuid4(),
+        id=_uuid_demo(f"jornada/{OS_CODIGO_DEMO}/v1"),
         os_id=os_.id,
         versao=1,
         grafo=grafo,
         hash=hash_jgc(grafo),
-        estado="simulado",
+        estado="publicado",  # launch em rampa ⇒ versão materializada (M9: apply ok)
         premissas=["cadência D0 → D2 → D4 → D5 (e-mail → push → SMS → WhatsApp)"],
         custo_projetado=31_800.0,
         simulacao=simulacao,
@@ -581,7 +611,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
 
     # ------------------------------ experimento pré-registrado, janela FECHADA (T15)
     experimento = Experimento(
-        id=uuid.uuid4(),
+        id=_uuid_demo(f"experimento/{OS_CODIGO_DEMO}"),
         os_id=os_.id,
         holdout_pct=10.0,
         n_minimo=74_000,
@@ -612,7 +642,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
         },
     }
     snapshot = Snapshot(
-        id=uuid.uuid4(),
+        id=_uuid_demo(f"snapshot/{OS_CODIGO_DEMO}"),
         os_id=os_.id,
         hash=hash_composto(componentes),
         conteudo={
@@ -632,7 +662,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     repositorio.adicionar_snapshot(snapshot)
     repositorio.adicionar_sync_run(  # materialização (§8-M9) — pré-condição do armar
         SyncRun(
-            id=uuid.uuid4(),
+            id=_uuid_demo(f"sync-run/{OS_CODIGO_DEMO}/apply-homolog"),
             snapshot_id=snapshot.id,
             ambiente="homolog",
             fase="apply",
@@ -650,7 +680,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     inicio_rampa = agora - timedelta(days=_DIAS_TELEMETRIA)
     repositorio.adicionar_launch(
         Launch(
-            id=uuid.uuid4(),
+            id=_uuid_demo(f"launch/{OS_CODIGO_DEMO}"),
             snapshot_id=snapshot.id,
             onda_atual=2,
             estado="em_rampa",
@@ -691,7 +721,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     for origem, texto in aprendizados:
         repositorio.adicionar_aprendizado(
             Aprendizado(
-                id=uuid.uuid4(),
+                id=_uuid_demo(f"aprendizado/{OS_CODIGO_DEMO}/{origem}"),
                 tenant_id=tenant_id,
                 os_id=os_.id,
                 origem=origem,

@@ -11,7 +11,11 @@ interpreta a saída do LLM com guarda-corpos de CÓDIGO:
   msisdn, telefone, "quem converteu"...) é recusada SEM sequer chamar o LLM —
   PII jamais entra em prompt (§1.3.5/§10.2) e zero consulta executa (A4);
 - `mascarar_pii` protege o ledger `invocacao` (§10.2): runs longas de dígitos
-  (CPF/telefone eventualmente colados na pergunta) nunca são persistidas em claro.
+  (CPF/telefone eventualmente colados na pergunta) nunca são persistidas em claro;
+- `consulta_por_sinonimo` (A17 — UAT real): sinônimos de negócio ('conversão por
+  real gasto', 'custo-benefício por canal', 'ROI'...) mapeiam para a métrica
+  CANÔNICA antes de qualquer recusa — vocabulário livre não derruba pergunta
+  legítima; o alvo é sempre consulta do dicionário (nunca SQL livre).
 """
 
 import json
@@ -52,6 +56,46 @@ _PADROES_PII = tuple(
 )
 _SEPARADOR_DIGITOS = re.compile(r"(?<=\d)[.\-\s/](?=\d)")
 _DIGITOS_LONGOS = re.compile(r"\d{11,}")  # CPF (11) / telefone — nunca em prompt/ledger
+
+# A17 (UAT real): sinônimos de negócio → métrica CANÔNICA da camada semântica.
+# Mapa determinístico consultado ANTES de recusar (o LLM recebe a mesma regra via
+# skill; o código garante que pergunta legítima com vocabulário livre não é recusada).
+_SINONIMOS_CANONICOS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
+    (re.compile(padrao, re.IGNORECASE), consulta)
+    for padrao, consulta in (
+        (
+            r"convers(?:[ãa]o|[õo]es)\s+por\s+rea(?:l|is)(?:\s+gasto)?",
+            "vw_metricas_custo_por_pedido",
+        ),
+        (r"custo[\s-]*benef[íi]cio", "vw_metricas_custo_por_pedido"),
+        (
+            r"custo\s+(?:m[ée]dio\s+)?por\s+(?:convers[ãa]o|venda|pedido|aquisi[çc][ãa]o)",
+            "vw_metricas_custo_por_pedido",
+        ),
+        (r"\bcpa\b|\bcac\b", "vw_metricas_custo_por_pedido"),
+        (r"retorno\s+(?:sobre|do)\s+(?:o\s+)?investimento|\broi\b", "vw_metricas_roas"),
+        (
+            r"\bincremental(?:idade)?\b|efeito\s+da\s+campanha|(?:vs\.?|contra|versus)\s+"
+            r"(?:o\s+)?holdout",
+            "vw_metricas_lift",
+        ),
+        (
+            r"(?:batemos|atingimos|alcan[çc]amos|cumprimos)\s+(?:a[s]?\s+)?metas?",
+            "vw_metricas_atingimento_meta",
+        ),
+    )
+)
+
+
+def consulta_por_sinonimo(pergunta: str) -> str | None:
+    """Mapa sinônimo→métrica canônica (A17): 'conversão por real gasto' e
+    'custo-benefício por canal' são `custo_por_pedido` etc. None = sem mapeamento
+    (aí sim a recusa padrão vale). Código puro — nunca inventa consulta fora do
+    dicionário (todos os alvos existem em CAMADA_SEMANTICA)."""
+    for padrao, consulta in _SINONIMOS_CANONICOS:
+        if padrao.search(pergunta):
+            return consulta
+    return None
 
 
 def carregar() -> Skill:

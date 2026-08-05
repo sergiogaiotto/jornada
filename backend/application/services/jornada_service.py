@@ -36,7 +36,7 @@ from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.sfmc_preview import preview_do_no
-from domain.jornada.validacao import validar_grafo
+from domain.jornada.validacao import normalizar_arestas, validar_grafo
 
 
 class ServicoJornada:
@@ -236,6 +236,18 @@ class ServicoJornada:
         }
         return proposta, invocacao
 
+    # ------------------------------------------------------- GET /os/{id}/jornada
+    def ultima_versao(self, tenant_id: str, os_id: uuid.UUID) -> JornadaVersao:
+        """Última versão do twin da OS (§8-M7, emenda A14) — leitura determinística,
+        ZERO LLM (§10.6); OS sem versão → NaoEncontrado (404)."""
+        os_ = self._exigir_os(tenant_id, os_id)
+        versoes = self._repo.listar_jornadas(os_.id)
+        if not versoes:
+            raise NaoEncontrado(
+                f"OS {os_id} sem versão de jornada — gere o JGC no T7 (§8-M7) primeiro."
+            )
+        return versoes[-1]  # listar_jornadas devolve em ordem de `versao` (§4.1)
+
     # ----------------------------------- GET /jornadas/{id}/no/{noId}/sfmc-preview
     def sfmc_preview(self, tenant_id: str, jornada_id: uuid.UUID, no_id: str) -> dict[str, Any]:
         """JSON que o compilador (M9) gerará para o nó (§5.4) — determinístico."""
@@ -245,8 +257,10 @@ class ServicoJornada:
     # ----------------------------------------------------------------- privados
     @staticmethod
     def _normalizar_meta(grafo: dict[str, Any], os_: OS) -> dict[str, Any]:
-        """Escopo NUNCA vem do LLM/cliente (§1.3.5): meta.osCodigo/tenant = valores da OS."""
-        grafo = dict(grafo)
+        """Escopo NUNCA vem do LLM/cliente (§1.3.5): meta.osCodigo/tenant = valores da OS.
+        Arestas com aliases `source`/`target` (A13 — UAT com o 120b real) são
+        normalizadas para `from`/`to` ANTES do `jgc_validate` (gerar/ajustar/PUT)."""
+        grafo = dict(normalizar_arestas(grafo))
         grafo.setdefault("jgcVersion", "1.0")
         meta = dict(grafo.get("meta") or {})
         meta["osCodigo"] = os_.codigo

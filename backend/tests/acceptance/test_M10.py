@@ -809,6 +809,40 @@ def test_M10_perguntar_contratos(client: TestClient, app: FastAPI) -> None:
     )
 
 
+def test_M10_perguntar_sinonimo_nao_recusa(client: TestClient, app: FastAPI) -> None:
+    """A17 (UAT real): pergunta legítima com vocabulário livre ('custo-benefício por
+    canal') NÃO é recusada — mesmo com o agente classificando fora da camada, o mapa
+    determinístico de sinônimos resgata a métrica CANÔNICA (custo_por_pedido) e a
+    consulta do dicionário executa (§7.2: zero SQL livre). Pergunta realmente fora
+    da camada segue recusada (A4 intacto)."""
+    criada = client.post("/api/v1/os", json={"nome": "Sinônimos", "tshirt": "P"}, headers=_h())
+    assert criada.status_code == 201
+    os_id = criada.json()["id"]
+    _previsto_minimo(app, uuid.UUID(os_id))
+    base = f"/api/v1/os/{os_id}/perguntar"
+
+    # o LLM (dublê) RECUSA — o mapa de sinônimos roda antes da recusa final
+    recusa_llm = json.dumps({"consulta": None, "parametros": {}, "resposta": "fora do escopo"})
+    app.state.llm = LLMFake(resposta=recusa_llm)
+    resposta = client.post(
+        base, json={"pergunta": "Qual o custo-benefício por canal da campanha?"}, headers=_h()
+    )
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    assert corpo["recusado"] is False and corpo["motivo_recusa"] is None
+    assert corpo["consulta_executada"]["nome"] == "vw_metricas_custo_por_pedido"
+    assert "vw_metricas_custo_por_pedido" in corpo["consulta_executada"]["sql"]
+
+    outra = client.post(base, json={"pergunta": "Qual a conversão por real gasto?"}, headers=_h())
+    assert outra.status_code == 200
+    assert outra.json()["consulta_executada"]["nome"] == "vw_metricas_custo_por_pedido"
+
+    # sem sinônimo mapeável, a recusa PADRÃO permanece (nada é executado)
+    fora = client.post(base, json={"pergunta": "Como está o clima em Campinas?"}, headers=_h())
+    assert fora.status_code == 200
+    assert fora.json()["recusado"] is True and fora.json()["consulta_executada"] is None
+
+
 def _previsto_minimo(app: FastAPI, os_id: uuid.UUID) -> Snapshot:
     """Snapshot com Previsto congelado mínimo (shape do motor §6) direto no repo."""
     snapshot = Snapshot(

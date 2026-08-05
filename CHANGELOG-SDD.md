@@ -3,6 +3,48 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — UAT real na VPS (gpt-oss-120b) · fixes A13/A14/A15/A2/A17
+- **A13 · KeyError 'to' no taxímetro (emenda de robustez, sem mudança de contrato do
+  §5.1):** o 120b real gera arestas com aliases `source`/`target`. Correção em 3
+  camadas: (a) `normalizar_arestas` (`domain/jornada/validacao.py`) converte
+  `source`→`from`/`target`→`to` nas ENTRADAS (gerar/ajustar/PUT — chamado no
+  `_normalizar_meta` do `ServicoJornada`, antes do `jgc_validate`; contrato interno e
+  hash canônico seguem `from`/`to`); (b) `jgc_validate` (§5.3) passa a EXIGIR
+  `from`/`to` presentes E apontando para nós existentes, com mensagem clara por campo
+  (alimenta o retry §7.3 do flow); (c) `taximetro.py` ignora aresta/nó malformado na
+  adjacência (quem aponta erro é o validador) — nunca mais KeyError bruto → 500.
+  Testes: `test_M7_arestas_source_target_normalizadas`,
+  `test_M7_aresta_sem_to_e_no_inexistente_422`, unit `test_jornada_arestas.py`.
+- **A14 · canvas sem leitura (EMENDA §8-M7 — endpoint novo):** `GET /os/{id}/jornada`
+  devolve a ÚLTIMA versão do twin (404 problem+json sem versão); leitura 100%
+  determinística (LLM proibido §10.6). O front deixa de depender do estado de sessão
+  para reabrir o T7. Seeds §11.4: a jornada demo agora tem a paleta REALISTA do §5.2
+  (entry por DE, randomSplit com holdout, **sto**, **decisionSplit**, wait,
+  channel.email/push/sms/whatsapp, goal, exit) e nasce `publicado` (launch em rampa ⇒
+  apply ok M9) — o canvas da demo nunca abre vazio. Testes:
+  `test_M7_get_jornada_ultima_versao`, `test_seeds_demo_jornada_publicada_no_canvas`.
+- **A15 · seeds com uuid4 (links quebravam a cada restart):** `demo_seeds.py` e
+  `atelie_seeds.py` passam a gerar ids DETERMINÍSTICOS —
+  `uuid5(NAMESPACE_URL, 'jornada/<rotulo>')` (ex.: `jornada/os/OS-2026-0457`,
+  `jornada/agente/flow`, `jornada/snapshot/OS-2026-0457`) para OS/etapas/segmento/
+  certificado/jornada/experimento/snapshot/sync_run/launch/propostas/aprendizados/
+  agentes/skills/harness cases/policy. Restart re-semeia com os MESMOS ids. Teste:
+  `test_seeds_ids_deterministicos_entre_restarts` (2 boots com relógios diferentes).
+- **A2 · consultor em OS com briefing completo:** `montar_mensagens`
+  (`agents/consultor.py`) com `faltantes` vazio agora envia `briefing_completo: true`
+  + instrução 'briefing completo: atue como consultor estratégico da campanha; não
+  invente faltantes nem pergunte campo já preenchido'; regra espelhada no
+  `consultor.skill.md` (§7.1). Teste:
+  `test_montar_mensagens_briefing_completo_instrui_consultoria`.
+- **A17 · insight recusava vocabulário livre:** novo `consulta_por_sinonimo`
+  (`agents/insight.py`) — mapa determinístico sinônimo→métrica CANÔNICA consultado
+  ANTES da recusa pós-LLM ('conversão por real gasto'/'custo-benefício por canal' →
+  `custo_por_pedido`; ROI → `roas`; 'incremental'/'contra o holdout' → `lift`;
+  'batemos a meta' → `atingimento_meta`); skill instruída com os mesmos sinônimos.
+  Todo alvo do mapa EXISTE no dicionário (§7.2 — zero SQL livre) e a pré-guarda de
+  PII (A4) permanece soberana. Testes: `test_M10_perguntar_sinonimo_nao_recusa`,
+  unit `test_insight_sinonimos.py`.
+
 ## 2026-08-05 — MS8 · Auditoria final (build + pytest + smoke e2e da jornada feliz) — notas
 - **Build/pytest:** `npm run build` (tsc -b + vite) verde; pytest 131 verdes (130 do
   MS0–MS8 + 1 regressão nova abaixo). Cobertura e gates do §13 inalterados.

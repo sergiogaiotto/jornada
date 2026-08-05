@@ -283,6 +283,88 @@ def test_M7_sfmc_preview_e_via_ai(client: TestClient, app: FastAPI) -> None:
     assert repo.listar_eventos(os_id=uuid.UUID(jornada["os_id"]), tipo="jornada.versao_criada")
 
 
+def test_M7_arestas_source_target_normalizadas(client: TestClient, app: FastAPI) -> None:
+    """A13 (UAT com o 120b real): o modelo gera arestas com aliases `source`/`target`
+    — gerar e PUT normalizam para `from`/`to` ANTES de validar; o grafo persistido
+    fica no contrato §5.1 (hash canônico estável)."""
+    os_ = _criar_os_com_segmento(client, app)
+    grafo_alias = _grafo(os_["codigo"])
+    grafo_alias["edges"] = [
+        {"id": a["id"], "source": a["from"], "target": a["to"], "cond": a["cond"]}
+        for a in grafo_alias["edges"]
+    ]
+    app.state.llm = LLMFake(resposta=_resposta_flow(grafo_alias))
+    gerada = client.post(f"/api/v1/os/{os_['id']}/jornada/gerar", headers=_h())
+    assert gerada.status_code == 201, gerada.text
+    persistido = gerada.json()["jornada"]["grafo"]
+    assert all("from" in a and "to" in a for a in persistido["edges"])
+    assert all("source" not in a and "target" not in a for a in persistido["edges"])
+    # taxímetro calculado normalmente sobre o grafo normalizado (A2 — sem KeyError)
+    assert gerada.json()["jornada"]["custo_projetado"] == 16_267.50
+
+    # PUT com aliases também é aceito e normalizado (mesma borda §5.1)
+    jornada_id = gerada.json()["jornada"]["id"]
+    salvo = client.put(
+        f"/api/v1/jornadas/{jornada_id}/grafo", json={"grafo": grafo_alias}, headers=_h()
+    )
+    assert salvo.status_code == 200, salvo.text
+    assert all("from" in a and "to" in a for a in salvo.json()["jornada"]["grafo"]["edges"])
+
+
+def test_M7_aresta_sem_to_e_no_inexistente_422(client: TestClient, app: FastAPI) -> None:
+    """A13: aresta SEM `to` (ou apontando para nó inexistente) → 422 problem+json com
+    mensagem clara (alimenta o retry §7.3) — nunca KeyError/500 no taxímetro."""
+    _, corpo = _gerar_jornada(client, app)
+    jornada = corpo["jornada"]
+
+    sem_to = _grafo(corpo["jornada"]["grafo"]["meta"]["osCodigo"])
+    del sem_to["edges"][3]["to"]  # e4 (n3 → n4) perde o destino
+    resposta = client.put(
+        f"/api/v1/jornadas/{jornada['id']}/grafo", json={"grafo": sem_to}, headers=_h()
+    )
+    assert resposta.status_code == 422, resposta.text  # jamais 500 (KeyError bruto)
+    assert resposta.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    erros = resposta.json()["erros"]
+    assert any("`to`" in e["mensagem"] and e["regra"] == "estrutura" for e in erros)
+
+    # aresta apontando para nó INEXISTENTE → 422 com o alvo na mensagem
+    fantasma = _grafo(corpo["jornada"]["grafo"]["meta"]["osCodigo"])
+    fantasma["edges"][3]["to"] = "n99"
+    resposta = client.put(
+        f"/api/v1/jornadas/{jornada['id']}/grafo", json={"grafo": fantasma}, headers=_h()
+    )
+    assert resposta.status_code == 422, resposta.text
+    assert any("n99" in e["mensagem"] for e in resposta.json()["erros"])
+
+    # nada foi salvo: o twin persistido segue íntegro
+    persistida = app.state.repositorio_os.obter_jornada(uuid.UUID(jornada["id"]))
+    assert all(a.get("to") for a in persistida.grafo["edges"])
+
+
+def test_M7_get_jornada_ultima_versao(client: TestClient, app: FastAPI) -> None:
+    """Emenda A14 (§8-M7): `GET /os/{id}/jornada` devolve a ÚLTIMA versão do twin
+    (o canvas T7 reabre o grafo persistido); OS sem versão → 404 problem+json."""
+    os_, corpo = _gerar_jornada(client, app)
+
+    lida = client.get(f"/api/v1/os/{os_['id']}/jornada", headers=_h())
+    assert lida.status_code == 200, lida.text
+    assert lida.json()["id"] == corpo["jornada"]["id"]
+    assert lida.json()["versao"] == 1
+    assert lida.json()["grafo"] == corpo["jornada"]["grafo"]
+
+    # nova geração cria a v2 — o GET passa a devolver a versão mais recente
+    segunda = client.post(f"/api/v1/os/{os_['id']}/jornada/gerar", headers=_h())
+    assert segunda.status_code == 201, segunda.text
+    lida = client.get(f"/api/v1/os/{os_['id']}/jornada", headers=_h())
+    assert lida.status_code == 200 and lida.json()["versao"] == 2
+
+    # OS nova (sem twin) → 404 problem+json
+    outra = _criar_os_com_segmento(client, app)
+    ausente = client.get(f"/api/v1/os/{outra['id']}/jornada", headers=_h())
+    assert ausente.status_code == 404
+    assert ausente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
 def test_M7_gerar_degradado_503_e_put_sem_llm(client: TestClient, app: FastAPI) -> None:
     """Hub LLM fora (§10.6): gerar → 503 degraded; PUT do grafo (caminho crítico)
     segue funcionando SEM LLM."""
