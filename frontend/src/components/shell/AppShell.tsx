@@ -2,15 +2,17 @@
  * Shell 3 zonas (SDD §12 / layout Maestro dos mocks): topbar vermelha + rail esquerdo
  * colapsável + centro operacional + painel direito contextual (slot — casa do copiloto).
  */
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 
 import { useUi } from "../../stores/ui";
 import { CmdK } from "./CmdK";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { Rail } from "./Rail";
 import { Topbar } from "./Topbar";
 
 export function AppShell() {
   const painel = useUi((s) => s.painel);
+  const { pathname } = useLocation();
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
@@ -18,7 +20,10 @@ export function AppShell() {
       <div className="flex min-h-0 flex-1">
         <Rail />
         <main className="min-w-0 flex-1 overflow-y-auto p-5">
-          <Outlet />
+          {/* key = pathname: erro de uma tela não persiste ao navegar para outra */}
+          <ErrorBoundary key={pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
         {painel != null && (
           <aside

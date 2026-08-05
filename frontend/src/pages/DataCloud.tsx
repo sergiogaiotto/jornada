@@ -205,8 +205,28 @@ export function DataCloud() {
                     <ChipStatus status={s.status} />
                   </td>
                   <td className="px-3 py-2">
-                    <span className={ativo ? "mbtn !px-2.5 !py-1 !text-[11px]" : "mbtn-gh !px-2.5 !py-1 !text-[11px]"}>
-                      Relatório {ativo ? "▾" : ""}
+                    <span className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                      <span className={ativo ? "mbtn !px-2.5 !py-1 !text-[11px]" : "mbtn-gh !px-2.5 !py-1 !text-[11px]"}>
+                        Relatório {ativo ? "▾" : ""}
+                      </span>
+                      {/* A12 (UAT): ação por segmento — POST /datacloud/segmentos/{id}/usar
+                          (lineage §8-M5); sucesso navega ao Estúdio (T5) com o segmento
+                          em foco; erro aparece no BannerErro "Usar segmento" acima. */}
+                      <button
+                        type="button"
+                        className="mbtn !px-2.5 !py-1 !text-[11px]"
+                        disabled={usar.isPending}
+                        title="Vira segmento de trabalho da OS com lineage (consulta, não cópia) e abre o Estúdio de Audiência"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setEscolhido(s.id);
+                          usar.mutate(s.id);
+                        }}
+                      >
+                        {usar.isPending && usar.variables === s.id
+                          ? "Levando ao Estúdio…"
+                          : "Usar como entrada no Estúdio (T5)"}
+                      </button>
                     </span>
                   </td>
                 </tr>

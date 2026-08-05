@@ -132,6 +132,10 @@ export function Validacao() {
           const resultado = resultados[campo];
           const pendencia = pendencias[campo];
           const comPendencia = Boolean(pendencia);
+          // A10 (UAT): estado de envio POR LINHA — `variables` é o campo da linha
+          // clicada, então cada botão reflete (e dispara) somente o próprio campo.
+          const validando = validar.isPending && validar.variables === campo;
+          const abrindo = abrirPendencia.isPending && abrirPendencia.variables === campo;
           return (
             <div
               key={campo}
@@ -172,24 +176,24 @@ export function Validacao() {
                 <button
                   type="button"
                   className="mbtn !px-2.5 !py-1 !text-[11px]"
-                  disabled={validar.isPending}
+                  disabled={validando}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     validar.mutate(campo);
                   }}
                 >
-                  Validar
+                  {validando ? "Validando…" : "Validar"}
                 </button>
                 <button
                   type="button"
                   className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
-                  disabled={abrirPendencia.isPending || comPendencia}
+                  disabled={abrindo || comPendencia}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     abrirPendencia.mutate(campo);
                   }}
                 >
-                  Abrir pendência
+                  {abrindo ? "Abrindo…" : "Abrir pendência"}
                 </button>
               </span>
             </div>

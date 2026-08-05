@@ -4,7 +4,7 @@
  * 409 RFC-7807 exibido; etapa selecionada detalhada no painel contextual (hike_ref).
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Copiloto } from "../components/ai/Copiloto";
@@ -50,6 +50,14 @@ export function Esteira() {
   const etapas = [...(workflow?.etapas ?? [])].sort((a, b) => a.ordem - b.ordem);
   const selecionada = etapas.find((e) => e.nome === selecionadaNome) ?? null;
   const concluidas = etapas.filter((e) => e.estado === "concluida").length;
+
+  // A6 (UAT): o 409 de dependência insatisfeita vira banner no TOPO da tela — se o
+  // clique aconteceu com a esteira rolada, garante que o banner entra no viewport.
+  const refBannerErro = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (mudar.error != null)
+      refBannerErro.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [mudar.error]);
 
   usePainelContextual(
     <>
@@ -131,7 +139,11 @@ export function Esteira() {
         }
       />
       {error != null && <BannerErro erro={error} contexto="Workflow" />}
-      {mudar.error != null && <BannerErro erro={mudar.error} contexto="Atualização de etapa" />}
+      {mudar.error != null && (
+        <div ref={refBannerErro}>
+          <BannerErro erro={mudar.error} contexto="Atualização de etapa" />
+        </div>
+      )}
       {isLoading && <EstadoVazio>Carregando esteira…</EstadoVazio>}
       {workflow && etapas.length === 0 && (
         <EstadoVazio>Sem workflow — as 7 etapas nascem com a OS (M2).</EstadoVazio>

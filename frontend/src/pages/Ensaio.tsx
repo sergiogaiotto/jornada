@@ -22,7 +22,14 @@ import type {
   Semaforo,
   SimulacaoResultado,
 } from "../lib/types";
-import { useProducao } from "../stores/producao";
+import { useProducao, type CenarioRegistrado } from "../stores/producao";
+
+/**
+ * Fallback ESTÁVEL para o selector de cenários — `?? []` inline criava um array novo
+ * a cada snapshot do zustand, e o `useSyncExternalStore` do React entra em loop
+ * infinito de re-render (erro #185 — página branca) quando a OS ainda não tem twin.
+ */
+const SEM_CENARIOS: readonly CenarioRegistrado[] = [];
 
 const SEMAFORO_CHIP: Record<Semaforo, string> = {
   verde: "mchip-g",
@@ -62,7 +69,7 @@ export function Ensaio() {
 
   const jornadaTwin = useProducao((s) => s.jornadas[osId]);
   const ensaio = useProducao((s) => s.ensaios[osId]);
-  const cenarios = useProducao((s) => s.cenarios[osId] ?? []);
+  const cenarios = useProducao((s) => s.cenarios[osId] ?? SEM_CENARIOS);
   const setEnsaio = useProducao((s) => s.setEnsaio);
   const registrarCenario = useProducao((s) => s.registrarCenario);
 

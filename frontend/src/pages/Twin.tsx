@@ -9,7 +9,7 @@ import "@xyflow/react/dist/style.css";
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Background, Controls, ReactFlow } from "@xyflow/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { BadgeViaAi } from "../components/ai/BadgeViaAi";
@@ -22,7 +22,7 @@ import { NoJb } from "../components/twin/NoJb";
 import { ApiError, get, post, put } from "../lib/api";
 import { fmtBRL, fmtCompacto, fmtTarifa } from "../lib/format";
 import { usePainelContextual } from "../lib/hooks";
-import type { AjustarOut, GerarJornadaOut, GrafoOut } from "../lib/types";
+import type { AjustarOut, GerarJornadaOut, GrafoOut, JornadaOut } from "../lib/types";
 import { useProducao } from "../stores/producao";
 
 const TIPOS_DE_NO = { jb: NoJb };
@@ -60,6 +60,35 @@ export function Twin() {
 
   const jornada = estado?.jornada;
   const taximetro = estado?.taximetro;
+
+  /**
+   * A14 (UAT): ao montar, carrega a ÚLTIMA versão persistida do twin
+   * (GET /os/{id}/jornada — emenda SDD §8-M7; 404 = OS sem versão → botão Gerar).
+   * Só consulta quando o estado em memória está vazio (ex.: reload do navegador).
+   */
+  const ultimaVersao = useQuery({
+    queryKey: ["os", osId, "jornada"],
+    queryFn: ({ signal }) => get<JornadaOut>(`/os/${osId}/jornada`, signal),
+    enabled: Boolean(osId) && !estado,
+    retry: false,
+  });
+  const semVersao =
+    ultimaVersao.error instanceof ApiError && ultimaVersao.error.status === 404;
+
+  useEffect(() => {
+    if (ultimaVersao.data && !estado) {
+      // GET não expõe a memória do taxímetro — o rodapé usa o custo persistido;
+      // a memória volta ao re-gerar/PUT (que recalculam e devolvem o taxímetro).
+      setJornada(osId, {
+        jornada: ultimaVersao.data,
+        taximetro: {
+          custo_projetado: ultimaVersao.data.custo_projetado ?? 0,
+          memoria: [],
+          avisos: [],
+        },
+      });
+    }
+  }, [ultimaVersao.data, estado, osId, setJornada]);
 
   const gerar = useMutation({
     mutationFn: () => post<GerarJornadaOut>(`/os/${osId}/jornada/gerar`, { instrucoes }),
@@ -235,6 +264,9 @@ export function Twin() {
         </div>
       </div>
 
+      {ultimaVersao.error != null && !semVersao && (
+        <BannerErro erro={ultimaVersao.error} contexto="Última versão do twin" />
+      )}
       {gerar.error != null && <BannerErro erro={gerar.error} contexto="Flow (gerar)" />}
       {ajustar.error != null && <BannerErro erro={ajustar.error} contexto="Flow (ajustar)" />}
       {aplicar.error != null && (
@@ -253,7 +285,9 @@ export function Twin() {
       )}
 
       {/* --------------------------------------------------- gerar / premissas */}
-      {!jornada ? (
+      {!jornada && ultimaVersao.isLoading ? (
+        <EstadoVazio>Consultando a última versão do twin…</EstadoVazio>
+      ) : !jornada ? (
         <div className="mcard mb-3">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-[.08em] text-faint">
             Flow desenha o rascunho a partir do briefing (prévia via_ai)
@@ -290,7 +324,7 @@ export function Twin() {
         </div>
       )}
 
-      {!jornada && (
+      {!jornada && !ultimaVersao.isLoading && (
         <EstadoVazio>
           Sem versão do twin nesta OS — o Flow gera o JGC; `jgc_validate` (§5.3) e o
           taxímetro são código, o agente não tem a palavra final.
