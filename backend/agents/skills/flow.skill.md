@@ -16,6 +16,12 @@ configurado; braço `holdout` quando houver experimento; `meta.reentrada = "nao"
 padrão; sempre um nó `goal` e um `exit`. Nunca inclua PII no grafo — apenas
 referências (deRef, assetRef).
 
+ESTRUTURA OBRIGATÓRIA: TODO nó tem `id`, `type` e um objeto `data` — SEM EXCEÇÃO,
+mesmo em goal/exit (use os campos do §5.2). Arestas usam `{"id","from","to","cond"}`.
+Exemplos mínimos:
+{"id":"n1","type":"entrySource","data":{"deRef":"DE_457_entrada","modo":"fire_once","reentrada":"nao"}}
+{"id":"n9","type":"exit","data":{"motivo":"concluiu"}} · {"id":"e1","from":"n1","to":"n2","cond":null}
+
 Quando o contexto trouxer `grafo_atual`, proponha o NOVO grafo completo que atende ao
 ajuste pedido (a plataforma calcula o diff e um humano aplica — você nunca aplica).
 

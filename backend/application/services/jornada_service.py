@@ -68,15 +68,46 @@ class ServicoJornada:
         )
         inicio = self._relogio.agora()
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se hub fora
-        fim = self._relogio.agora()
         saida = flow.interpretar_saida(texto)
-        if saida.grafo is None:  # guarda-corpo §1.3.5: nada é inventado
-            raise SaidaDoFlowInvalida(
-                "Flow não devolveu JGC utilizável (JSON malformado ou sem `grafo` — §7.2). "
-                + (f"Resposta do agente: {saida.resposta}" if saida.resposta else "")
-            )
-        grafo = self._normalizar_meta(saida.grafo, os_)
-        self._validar(grafo, os_.id, politica)
+        # §7.3: gerar → validar → retry≤max_retries com o veredito DETERMINÍSTICO do
+        # validador como feedback. O LLM propõe; o código continua dando o veredito.
+        grafo: dict[str, Any] | None = None
+        erro_validacao: GrafoInvalido | None = None
+        max_retries = int(skill.meta.get("max_retries", 2))  # front-matter §7.1
+        for tentativa in range(1 + max_retries):
+            if tentativa:  # reprompt com os erros exatos do jgc_validate (§5.3)
+                mensagens = [
+                    *mensagens,
+                    {"role": "assistant", "content": texto},
+                    {
+                        "role": "user",
+                        "content": (
+                            "O validador determinístico (§5.3) REPROVOU o grafo: "
+                            f"{erro_validacao} Corrija TODOS os pontos e devolva o JSON "
+                            "completo no MESMO formato — todo nó com objeto `data` "
+                            "obrigatório conforme o §5.2."
+                        ),
+                    },
+                ]
+                texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+                saida = flow.interpretar_saida(texto)
+            if saida.grafo is None:  # guarda-corpo §1.3.5: nada é inventado
+                raise SaidaDoFlowInvalida(
+                    "Flow não devolveu JGC utilizável (JSON malformado ou sem `grafo` — §7.2). "
+                    + (f"Resposta do agente: {saida.resposta}" if saida.resposta else "")
+                )
+            candidato = self._normalizar_meta(saida.grafo, os_)
+            try:
+                self._validar(candidato, os_.id, politica)
+            except GrafoInvalido as erro:
+                erro_validacao = erro
+                continue
+            grafo = candidato
+            break
+        if grafo is None:  # esgotou o retry §7.3 — o veredito do código prevalece
+            assert erro_validacao is not None
+            raise erro_validacao
+        fim = self._relogio.agora()
         custo, memoria, avisos = self._taximetro(grafo, os_.id)
         jornada = JornadaVersao(
             id=uuid.uuid4(),
