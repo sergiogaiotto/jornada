@@ -48,7 +48,7 @@ class OS:
 
 @dataclass
 class Pendencia:
-    """Tabela `pendencia` §4.1 — item bloqueante herdado do Hike (≈ RAID, §14).
+    """Tabela `pendencia` §4.1 — item bloqueante herdado do Hike (§14).
 
     Sem tenant_id próprio (DDL §4.1): o escopo de tenant vem da OS referenciada.
     """

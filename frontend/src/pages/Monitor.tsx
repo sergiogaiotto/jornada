@@ -208,7 +208,7 @@ export function Monitor() {
           </Link>
           , congele o Previsto e monte o snapshot nos{" "}
           <Link to={`/os/${osId}/portoes`} className="font-semibold text-blue underline">
-            Portões (T9)
+            QA (T9)
           </Link>{" "}
           — o monitor só existe contra a régua congelada (§8-M10).
         </EstadoVazio>

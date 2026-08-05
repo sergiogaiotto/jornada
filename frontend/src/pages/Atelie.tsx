@@ -3,7 +3,7 @@
  * catálogo do roster organizado POR ETAPA do workflow, com versão publicada, SKILL
  * vinculada e score no harness; painel do agente com o system prompt VISÍVEL
  * (SKILL.md canônico §7.1), bases RAG autorizadas e ciclo draft → em_revisao →
- * publicada — harness VERDE (≥90 por dimensão) é o portão de release (A1). Publicar
+ * publicada — harness VERDE (≥90 por dimensão) é o QA de release (A1). Publicar
  * NUNCA toca `os.frozen` (A2): campanha em voo segue com as versões congeladas no GO.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -146,7 +146,7 @@ export function Atelie() {
 
   usePainelContextual(
     <>
-      <div className="ctx-title">Portão de release</div>
+      <div className="ctx-title">QA de release</div>
       <Copiloto titulo="Harness">
         Publicar skill exige harness <b>VERDE</b>: golden dataset (3 casos por
         agente-chave) julgado pelo judge 120b com rubrica fixa — score <b>≥ 90 por
@@ -172,7 +172,7 @@ export function Atelie() {
       <div className="ctx-title">RBAC</div>
       <div className="mfield">
         <span className="text-[12px]">
-          Editar/harness/dry-run: analista+ · <b>publicar: líder</b> (portão de
+          Editar/harness/dry-run: analista+ · <b>publicar: líder</b> (QA de
           plataforma, segregação §10.5)
         </span>
       </div>
@@ -365,7 +365,7 @@ export function Atelie() {
                     </pre>
                   )}
 
-                  <div className="ctx-title !mt-3">Harness (portão de release — A1)</div>
+                  <div className="ctx-title !mt-3">Harness (QA de release — A1)</div>
                   {skill.data?.harness_runs.length ? (
                     <UltimoRun run={skill.data.harness_runs[skill.data.harness_runs.length - 1]} />
                   ) : (

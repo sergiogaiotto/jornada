@@ -1002,3 +1002,7 @@ adicionado ao roster §7.2, perfil 20b — §3: resumos de UI).
   amigável (guia estático como modo manual); histórico por página no store zustand do
   guia (memória da SPA — nada persistido). Botão "✨ IA, me ajude com esta página!" do
   drawer de Ajuda passa a abrir o chat de verdade.
+
+## 2026-08-05 · Nomenclatura: "Portão" → "QA" na UI
+- Termo visível da plataforma passa a ser **QA** (65 substituições no front + README, com flexões: "portão duro"→"QA bloqueante", "portão de saída"→"QA de saída"). Rotas (/portoes), identificadores e eventos (`gate.*`) inalterados. Glossário §14 registra a equivalência.
+- Auditoria da sessão eliminou 2 reintroduções do termo "RAID" (glossário do Guia e docstring de modelos) — vocabulário canônico segue: **pendência (ex-Hike)**.

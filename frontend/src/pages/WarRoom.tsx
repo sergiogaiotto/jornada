@@ -125,7 +125,7 @@ export function WarRoom() {
       </div>
       {goFeito && (
         <>
-          <div className="ctx-title">Documento do portão</div>
+          <div className="ctx-title">Documento do QA</div>
           <div className="mfield">
             <span>
               <span className="block text-[12px] font-bold">

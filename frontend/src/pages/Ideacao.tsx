@@ -132,7 +132,7 @@ export function Ideacao() {
       </div>
       <Copiloto titulo="Consultor de Campanhas">
         Converse à esquerda — o briefing se estrutura sozinho. Campos inferidos ficam em
-        âmbar até um humano confirmar (portão da Fase 1).
+        âmbar até um humano confirmar (QA da Fase 1).
       </Copiloto>
     </>,
     [completude, faltantes, os],

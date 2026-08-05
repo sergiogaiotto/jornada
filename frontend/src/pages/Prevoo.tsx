@@ -183,7 +183,7 @@ export function Prevoo() {
         <EstadoVazio>
           Nenhum snapshot nesta sessão —{" "}
           <Link to={`/os/${osId}/portoes`} className="font-semibold text-blue underline">
-            monte o snapshot nos Portões (T9)
+            monte o snapshot nos QA (T9)
           </Link>{" "}
           para compilar (o apply exige aprovação + certificado + pré-voo verde).
         </EstadoVazio>

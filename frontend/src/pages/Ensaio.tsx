@@ -1,5 +1,5 @@
 /**
- * T8 · Ensaio Geral — simulador Monte Carlo (mock T8 / SDD §6, §8-M8): portão
+ * T8 · Ensaio Geral — simulador Monte Carlo (mock T8 / SDD §6, §8-M8): QA
  * obrigatório. KPIs P10/P50/P90 (conversões, custo, receita, ROAS, lift), funil por
  * nó, gargalos, semáforo (vermelho bloqueia T9/T11), comparador de cenários lado a
  * lado e Congelar Previsto (a régua imutável do pós-disparo). ZERO LLM no caminho
@@ -134,7 +134,7 @@ export function Ensaio() {
               "Sem gargalos relevantes de espera. "
             )}
             {sim.semaforo === "verde"
-              ? "Semáforo VERDE — recomendo congelar o Previsto e seguir aos portões."
+              ? "Semáforo VERDE — recomendo congelar o Previsto e seguir aos QAs."
               : sim.semaforo === "amarelo"
                 ? "Semáforo AMARELO — há avisos; revise antes de congelar."
                 : "Semáforo VERMELHO — T9/T11 ficam bloqueados até resolver os motivos."}
@@ -178,14 +178,14 @@ export function Ensaio() {
         <div className="text-[12px] text-muted">— sem simulação —</div>
       )}
 
-      <div className="ctx-title">Portão</div>
+      <div className="ctx-title">QA</div>
       <div className="mfield">
         <span className="text-[12px]">
           {sim?.semaforo === "verde" ? (
             <>
               Simulação <b className="text-good">VERDE</b> — libera os{" "}
               <Link to={`/os/${osId}/portoes`} className="font-semibold text-blue underline">
-                portões de governança (T9)
+                QA de governança (T9)
               </Link>
             </>
           ) : sim?.semaforo === "vermelho" ? (
@@ -197,7 +197,7 @@ export function Ensaio() {
               Simulação <b className="text-warn">AMARELA</b> — siga com atenção aos avisos
             </>
           ) : (
-            <>portão obrigatório — rode o ensaio (§6)</>
+            <>QA obrigatório — rode o ensaio (§6)</>
           )}
         </span>
         {sim && <span className={SEMAFORO_CHIP[sim.semaforo]}>{sim.semaforo}</span>}
@@ -310,7 +310,7 @@ export function Ensaio() {
 
       {jornadaId !== null && !sim && !simular.isPending && (
         <EstadoVazio>
-          Portão obrigatório (§6): 10.000 personas sintéticas percorrem o grafo em Monte
+          QA obrigatório (§6): 10.000 personas sintéticas percorrem o grafo em Monte
           Carlo — <b>Rodar Ensaio Geral</b> produz o funil, custo, ROAS e lift em
           P10/P50/P90.
         </EstadoVazio>

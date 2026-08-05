@@ -557,7 +557,7 @@ Vite+React+TS; Tailwind com tokens do artifact (chrome **vermelho Claro #D0271C/
 `ci.yml`: ruff + mypy + pytest (unit/contract) + build front + e2e compose em PR para main; cobertura mínima backend 80% (gate). `pre-commit` com ruff/format. Branches: `main` protegida; `feat/msN-*`. Releases por tag `vMS{n}`.
 
 ## 14. Glossário mínimo
-OS (campanha/ordem de serviço) · JGC (grafo canônico) · Snapshot (pacote imutável por hash) · Portão (gate bloqueante) · Pendência (item bloqueante herdado do Hike; equivale ao “RAID” da referência IBM) · Guard (validador determinístico de elegibilidade) · Governor (árbitro de pressão de contato cross-campanha) · via_ai (ledger de ação de agente) · Previsto (baseline congelado da simulação) · Drift (divergência twin↔SFMC).
+OS (campanha/ordem de serviço) · JGC (grafo canônico) · Snapshot (pacote imutável por hash) · Portão / QA (gate bloqueante — na UI o termo visível é "QA") · Pendência (item bloqueante herdado do Hike; equivale ao “RAID” da referência IBM) · Guard (validador determinístico de elegibilidade) · Governor (árbitro de pressão de contato cross-campanha) · via_ai (ledger de ação de agente) · Previsto (baseline congelado da simulação) · Drift (divergência twin↔SFMC).
 
 ---
 *SDD v1.0.0 · consome o plano Martech v1.2 (artifact acima) como especificação funcional e visual; em conflito, o SDD prevalece no técnico e o artifact no visual.*

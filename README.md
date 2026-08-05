@@ -14,7 +14,7 @@ Toda campanha é *pensada, discutida, criada, avaliada, configurada, disparada, 
 ## Os 3 princípios inegociáveis
 
 1. **O twin é a fonte da verdade** — a jornada é um grafo canônico JSON (**JGC**, SDD §5) versionado, com snapshot imutável por hash. Ninguém edita o SFMC diretamente: um **compilador determinístico plan/apply** materializa o grafo (Data Extensions, Event Definitions, Journey, assets) com externalKeys idempotentes, e um **monitor de drift** acusa qualquer edição feita por fora. *Aprovado = publicado = em execução.*
-2. **Nada dispara sem ensaio** — a **simulação Monte Carlo** (reprodutível por seed) é portão obrigatório e congela o "Previsto" (P10/P50/P90 de funil, custo, ROAS). Todo KPI do pós-disparo é um par **previsto × realizado**, e o erro recalibra o simulador (closed loop).
+2. **Nada dispara sem ensaio** — a **simulação Monte Carlo** (reprodutível por seed) é QA obrigatório e congela o "Previsto" (P10/P50/P90 de funil, custo, ROAS). Todo KPI do pós-disparo é um par **previsto × realizado**, e o erro recalibra o simulador (closed loop).
 3. **IA copilota, humano aprova** — mesh de agentes (Maestro → Triagem → Especialista) sempre como **prévia/diff com Aplicar/Rejeitar**, premissas editáveis e ledger **`via_ai`** reconstruível (LGPD Art. 20). **Compliance é código determinístico, nunca LLM** — o Guard das 7 listas de supressão funciona com o hub de IA fora do ar.
 
 ## Arquitetura — Diamante 4D + loop do twin
@@ -34,7 +34,7 @@ flowchart LR
   LOOP -.->|aprendizados → RAG| JGC
 ```
 
-**Mesh de agentes** (SDD §7): Consultor de Campanhas (intake), Engineer (SQL do público), Activate, Flow (gera o JGC), Visual/Copy/Content, Simulate+Persona, Sync/Publish, Insight (NL→consulta nomeada, nunca SQL livre), Optimize (propor é a única ação autônoma), Calibrate, Cost, Doc — e o **Guard, que não é LLM**. Skills versionadas em `SKILL.md`, harness com golden dataset como portão de release, tudo com retry §7.3 (reprompt com o veredito do validador determinístico).
+**Mesh de agentes** (SDD §7): Consultor de Campanhas (intake), Engineer (SQL do público), Activate, Flow (gera o JGC), Visual/Copy/Content, Simulate+Persona, Sync/Publish, Insight (NL→consulta nomeada, nunca SQL livre), Optimize (propor é a única ação autônoma), Calibrate, Cost, Doc — e o **Guard, que não é LLM**. Skills versionadas em `SKILL.md`, harness com golden dataset como QA de release, tudo com retry §7.3 (reprompt com o veredito do validador determinístico).
 
 ## As 18 telas
 
@@ -44,7 +44,7 @@ flowchart LR
 | 1 · Pensada | T2 Sala de Ideação (Consultor IA, briefing dinâmico, medidor de completude) |
 | 2 · Discutida | T3 Validação campo-a-campo (✓ contagem · ✓ schema · ✓ frescor) · T4 War Room (GO congela SLAs e versões) |
 | 3 · Criada | T5 Audiência (waterfall das 7 listas + SQL + Guard) · T5a Data Cloud (relatório de público e **volume de abordagem**) · T6 Criativo (matriz canal×variante) · T7 **Canvas do Twin** (React Flow, paleta Journey Builder, taxímetro) |
-| 4 · Avaliada | T8 Ensaio Geral (Monte Carlo) · T9 Portões (LGPD, experimento, custo/alçada, Governor) · T10 Aprovação (link mágico standalone) |
+| 4 · Avaliada | T8 Ensaio Geral (Monte Carlo) · T9 QA (LGPD, experimento, custo/alçada, Governor) · T10 Aprovação (link mágico standalone) |
 | 5 · Configurada | T11 Pré-voo (plan/apply com diff, seed test, drift zero) |
 | 6 · Disparada | T12 Torre de Lançamento (rampa canário 1→10→100%, breakers, kill switch) |
 | 7 · Monitorada | T13 Monitor (todo KPI previsto×realizado, IC95) · T14 Pergunte aos Dados · T15 Otimização & Retro (anti-peeking, clonar com aprendizados) |

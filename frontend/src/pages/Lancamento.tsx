@@ -1,6 +1,6 @@
 /**
  * T12 · Torre de Lançamento (mock T12 / SDD §8-M10): disparo nunca é binário — rampa
- * 1% → 10% → 100% com portão automático entre ondas (breakers da política CONGELADOS
+ * 1% → 10% → 100% com QA automático entre ondas (breakers da política CONGELADOS
  * no armar). Breaker disparado ⇒ rampa congela sozinha (a única ação autônoma é a
  * conservadora); retomar é sempre humano (SEV1 exige 2 aprovadores). Kill switch em
  * 2 etapas. Caminho 100% determinístico — zero LLM.
@@ -104,7 +104,7 @@ export function Lancamento() {
           <>
             Onda <b>{launch.onda_atual}</b> de {launch.ondas.length} no ar. Breakers
             avaliados a cada evento de telemetria e a cada avanço de onda — tudo nominal
-            até aqui. O portão da próxima onda é automático (§8-M10).
+            até aqui. O QA da próxima onda é automático (§8-M10).
           </>
         ) : launch.estado === "pausado_breaker" ? (
           <>
@@ -123,7 +123,7 @@ export function Lancamento() {
         )}
       </Copiloto>
 
-      <div className="ctx-title">Portão da próxima onda</div>
+      <div className="ctx-title">QA da próxima onda</div>
       <div className="mfield">
         <span className="text-[12px]">
           Avança só se os breakers seguirem verdes · retomada pós-breaker exige humano ·
@@ -177,7 +177,7 @@ export function Lancamento() {
         subtitulo="Breakers congelados da política no armar · rampa congela sozinha; retomar/abortar é sempre humano"
       />
 
-      {avancar.error != null && <BannerErro erro={avancar.error} contexto="Portão da onda" />}
+      {avancar.error != null && <BannerErro erro={avancar.error} contexto="QA da onda" />}
       {kill.error != null && <BannerErro erro={kill.error} contexto="Kill switch" />}
       {retomar.error != null && <BannerErro erro={retomar.error} contexto="Retomada" />}
 
@@ -204,12 +204,12 @@ export function Lancamento() {
                     Onda {n} · {onda.pct}%
                   </b>{" "}
                   {concluida
-                    ? "· concluída ✓ portão ok"
+                    ? "· concluída ✓ QA ok"
                     : corrente
                       ? launch.estado === "em_rampa"
                         ? "· em andamento · breakers ok"
                         : `· ${launch.estado}`
-                      : "· aguarda portão automático"}
+                      : "· aguarda QA automático"}
                 </div>
                 {i < launch.ondas.length - 1 && <span className="text-ghost">→</span>}
               </div>

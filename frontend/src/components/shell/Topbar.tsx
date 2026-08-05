@@ -30,7 +30,7 @@ const ROTULO_SECAO: Record<string, string> = {
   criativo: "Criativo",
   twin: "Twin · Jornada",
   simulacao: "Ensaio Geral",
-  portoes: "Portões",
+  portoes: "QA",
   prevoo: "Pré-voo",
   lancamento: "Lançamento",
   monitor: "Monitoramento",

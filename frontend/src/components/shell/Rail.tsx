@@ -41,7 +41,7 @@ const SECOES: Secao[] = [
     titulo: "Avaliação",
     itens: [
       { rotulo: "Ensaio Geral", destino: "os:simulacao" },
-      { rotulo: "Portões", destino: "os:portoes" },
+      { rotulo: "QA", destino: "os:portoes" },
       { rotulo: "Pré-voo", destino: "os:prevoo" },
     ],
   },

@@ -1,5 +1,5 @@
 /**
- * T9 · Portões de Governança (mock T9 / SDD §8-M8): os 4 portões duros antes do
+ * T9 · QA de Governança (mock T9 / SDD §8-M8): os 4 QAs bloqueantes antes do
  * pacote ir ao cliente — Certificado LGPD (Guard determinístico), experimento
  * pré-registrado (poder/n mínimo, anti-peeking), custo & alçada (faixas da política;
  * variação >10% re-dispara) e Contact Governor (colisão/pressão). Fecha com o
@@ -157,10 +157,10 @@ export function Portoes() {
         </div>
       )}
 
-      <div className="ctx-title">Documento do portão</div>
+      <div className="ctx-title">Documento do QA</div>
       <Copiloto titulo="Doc">
-        Documento executivo do portão: inputs, certificado, experimento, custo e
-        prontidão — gerado a cada portão e arquivado no dossiê da OS (.docx).
+        Documento executivo do QA: inputs, certificado, experimento, custo e
+        prontidão — gerado a cada QA e arquivado no dossiê da OS (.docx).
       </Copiloto>
     </>,
     [linkMagico],
@@ -169,15 +169,15 @@ export function Portoes() {
   return (
     <div>
       <TituloTela
-        titulo="Portões de Governança"
+        titulo="QA de Governança"
         subtitulo={
           portoes
-            ? `${verdes} de 4 verdes — portões duros, não avisos (vermelho bloqueia a materialização)`
+            ? `${verdes} de 4 verdes — QAs bloqueantes, não avisos (vermelho bloqueia a materialização)`
             : "Certificado LGPD · experimento · custo/alçada · Contact Governor"
         }
       />
 
-      {portoesQ.error != null && <BannerErro erro={portoesQ.error} contexto="Portões" />}
+      {portoesQ.error != null && <BannerErro erro={portoesQ.error} contexto="QA" />}
       {preRegistrar.error != null && (
         <BannerErro erro={preRegistrar.error} contexto="Pré-registro do experimento" />
       )}
@@ -190,7 +190,7 @@ export function Portoes() {
       {criarLink.error != null && <BannerErro erro={criarLink.error} contexto="Link mágico" />}
 
       {portoesQ.isLoading && (
-        <div className="mcard py-6 text-center text-[13px] text-muted">Carregando portões…</div>
+        <div className="mcard py-6 text-center text-[13px] text-muted">Carregando QAs…</div>
       )}
 
       {portoes && (

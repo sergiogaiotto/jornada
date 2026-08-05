@@ -125,7 +125,7 @@ export function Cockpit() {
         </>
       ) : (
         <div className="text-[12px] text-muted">
-          Selecione uma campanha no kanban para ver SLA, portões e ações.
+          Selecione uma campanha no kanban para ver SLA, QAs e ações.
         </div>
       )}
       <div className="ctx-title">Copiloto — digest</div>

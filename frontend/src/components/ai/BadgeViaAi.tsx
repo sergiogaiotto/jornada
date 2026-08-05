@@ -1,7 +1,7 @@
 /**
  * Contrato de UX da IA (SDD §12 / mocks): badge `via_ai` clicável — abre o rastro
  * completo (agente, versão da SKILL, evidências RAG, humano que aceitou).
- * "Copiloto, nunca portão."
+ * "Copiloto, nunca QA."
  */
 import { useState } from "react";
 

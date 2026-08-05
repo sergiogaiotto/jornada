@@ -86,7 +86,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "Fases do ciclo",
         definicao:
-          "Pensada → Discutida → Criada → Avaliada → Configurada → Disparada → Monitorada → Encerrada. Transições só acontecem com os portões da fase satisfeitos.",
+          "Pensada → Discutida → Criada → Avaliada → Configurada → Disparada → Monitorada → Encerrada. Transições só acontecem com os QAs da fase satisfeitos.",
       },
       {
         termo: "Saúde derivada",
@@ -207,7 +207,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
           "Toda validação retorna três checagens: contagem (a fonte devolve números plausíveis), schema (estrutura esperada) e frescor (idade do dado, ex.: Hybris D-1).",
       },
       {
-        termo: "Pendência (RAID)",
+        termo: "Pendência (ex-Hike)",
         definicao:
           "Item de risco/assunção/issue/dependência herdado do método Hike. Bloqueante = trava a etapa que ela indica (por padrão, o GO).",
       },
@@ -242,7 +242,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Vá ao War Room e tente o GO: 409 listando a pendência. Resolva-a e o GO libera.",
     ],
     pegadinhas: [
-      "Pendência bloqueante aberta trava o GO — o 409 lista exatamente o motivo; não é bug, é o portão funcionando.",
+      "Pendência bloqueante aberta trava o GO — o 409 lista exatamente o motivo; não é bug, é o QA funcionando.",
       "Validação consulta a fonte de verdade: se a fonte está defasada, o frescor reprova mesmo com o campo \"certo\".",
       "A pendência nasce com 1 clique, sem diálogo de título/descrição (achado A9) — detalhe-a depois no War Room.",
       "Aceitar um risco não é apagar: exige accountable + justificativa e fica auditável para sempre.",
@@ -422,7 +422,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Gerar o SQL de segmentação com rastreabilidade de cada coluna usada.",
       "Recontar após um ajuste de critério e entender o waterfall.",
       "Definir o holdout respeitando o mínimo da política.",
-      "Emitir o certificado de elegibilidade exigido pelos Portões.",
+      "Emitir o certificado de elegibilidade exigido pelos QA.",
     ],
     exemplo: [
       "Na OS-2026-0457 (segmento demo de 847.312), abra Audiência.",
@@ -645,9 +645,9 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     ],
     fundamentos: [
       {
-        termo: "Portão obrigatório",
+        termo: "QA obrigatório",
         definicao:
-          "Semáforo vermelho bloqueia Portões e Pré-voo. Vermelho = ROAS P50 < 1 ou colisão crítica do governor.",
+          "Semáforo vermelho bloqueia QA e Pré-voo. Vermelho = ROAS P50 < 1 ou colisão crítica do governor.",
       },
       {
         termo: "Previsto congelado",
@@ -662,7 +662,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "Poder estatístico",
         definicao:
-          "Se o n do holdout é menor que o mínimo para o MDE, o portão de experimento fica vermelho e a simulação amarela.",
+          "Se o n do holdout é menor que o mínimo para o MDE, o QA de experimento fica vermelho e a simulação amarela.",
       },
       {
         termo: "Reprodutibilidade",
@@ -691,7 +691,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Congele o Previsto: é contra ele que o Monitor comparará (na demo, o realizado veio +24,1pp de lift).",
     ],
     pegadinhas: [
-      "Semáforo vermelho bloqueia Portões e Pré-voo — ROAS P50 < 1 ou colisão crítica não passam; resolva a causa e re-simule.",
+      "Semáforo vermelho bloqueia QA e Pré-voo — ROAS P50 < 1 ou colisão crítica não passam; resolva a causa e re-simule.",
       "Poder insuficiente pinta o experimento de vermelho e a simulação de amarelo — aumente o holdout ou o público, ou aceite um MDE maior.",
       "Editou o twin depois de simular? A simulação não vale mais para a nova versão — re-simule antes de montar o snapshot.",
       "O Monitor compara contra o Previsto CONGELADO, nunca contra a última simulação — congelar é um ato consciente.",
@@ -701,19 +701,19 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
   },
 
   portoes: {
-    titulo: "Portões de Governança",
+    titulo: "QA de Governança",
     fase: "Avaliação",
     destino: "os:portoes",
     descricao:
-      "Os 4 portões duros — Certificado LGPD, Experimento, Custo & Alçada, Contact Governor — e o snapshot + link mágico.",
+      "Os 4 QAs bloqueantes — Certificado LGPD, Experimento, Custo & Alçada, Contact Governor — e o snapshot + link mágico.",
     oQueE: [
-      "Antes de qualquer pacote ir ao aprovador, quatro portões objetivos precisam estar verdes: o Certificado de Elegibilidade (Guard determinístico, LGPD), o experimento pré-registrado (holdout, n mínimo, MDE, janela), o custo dentro da alçada da política e o Contact Governor sem colisão crítica.",
-      "Com os portões satisfeitos, monta-se o snapshot: um pacote imutável com hash composto de JGC + SQL + criativos + políticas + custo + experimento. É esse hash — e somente ele — que segue para aprovação e depois para o SFMC.",
+      "Antes de qualquer pacote ir ao aprovador, quatro QAs objetivos precisam estar verdes: o Certificado de Elegibilidade (Guard determinístico, LGPD), o experimento pré-registrado (holdout, n mínimo, MDE, janela), o custo dentro da alçada da política e o Contact Governor sem colisão crítica.",
+      "Com os QAs satisfeitos, monta-se o snapshot: um pacote imutável com hash composto de JGC + SQL + criativos + políticas + custo + experimento. É esse hash — e somente ele — que segue para aprovação e depois para o SFMC.",
       "O fechamento é o link mágico (T10): uma URL pública de uso único enviada ao aprovador. Segregação garantida no servidor: quem cria o snapshot não pode aprová-lo.",
     ],
     fundamentos: [
       {
-        termo: "Portão (gate)",
+        termo: "QA (gate)",
         definicao:
           "Critério objetivo e bloqueante — não é checklist de boas intenções: vermelho segura o fluxo.",
       },
@@ -746,13 +746,13 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Gerar link mágico", significado: "URL pública de uso único para o aprovador (T10)." },
     ],
     casosDeUso: [
-      "Conferir de uma vez os 4 portões antes de envolver o aprovador.",
+      "Conferir de uma vez os 4 QAs antes de envolver o aprovador.",
       "Pré-registrar o experimento com poder estatístico validado.",
       "Enviar o custo à alçada certa segundo a política.",
       "Montar o snapshot e disparar o link mágico.",
     ],
     exemplo: [
-      "Na OS-2026-0457, abra Portões: os 4 cartões mostram seu estado.",
+      "Na OS-2026-0457, abra QA: os 4 cartões mostram seu estado.",
       "Confira o certificado emitido na Audiência (hash e validade).",
       "Valide o experimento pré-registrado (holdout 10%, n mínimo, MDE, janela).",
       "Monte o snapshot — o hash composto aparece — e gere o link mágico para o aprovador.",
@@ -761,7 +761,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Quem cria não aprova — a segregação é validada no servidor; peça o aceite a quem tem alçada.",
       "Variação de custo >10% APÓS a aprovação invalida a aprovação: snapshot novo, aprovação nova (aceite A4 do M8).",
       "Certificado expirado bloqueia — o Guard tem validade e o publish confere de novo.",
-      "Simulação vermelha segura o snapshot: os portões leem o semáforo do Ensaio.",
+      "Simulação vermelha segura o snapshot: os QAs leem o semáforo do Ensaio.",
       "Ressalvas do aprovador viram pendências automáticas na OS — elas não se perdem no e-mail.",
     ],
     relacionados: ["simulacao", "aprovacao", "prevoo"],
@@ -821,7 +821,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Decide \"Aprovar com ressalvas\" com um texto — as ressalvas aparecem como pendências na OS e a decisão grava IP/device.",
     ],
     pegadinhas: [
-      "O token é de uso ÚNICO e expira — link já usado ou vencido não abre; gere um novo em Portões.",
+      "O token é de uso ÚNICO e expira — link já usado ou vencido não abre; gere um novo em QA.",
       "A decisão é única e definitiva — não há \"mudar de ideia\" no mesmo token.",
       "Custo subir >10% depois da aprovação invalida a decisão — o fluxo volta para novo snapshot.",
       "A página é standalone de propósito: sem Bearer, sem shell — não estranhe a ausência do menu.",
@@ -904,7 +904,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     descricao:
       "Rampa canário 1% → 10% → 100% com breakers congelados, kill switch em 2 etapas e timeline de eventos.",
     oQueE: [
-      "Disparo aqui nunca é um botão binário: a campanha sobe em ondas — 1%, 10%, 100% — com um portão automático entre elas. Os breakers (limites de bounce, opt-out etc.) são congelados da política no momento de armar.",
+      "Disparo aqui nunca é um botão binário: a campanha sobe em ondas — 1%, 10%, 100% — com um QA automático entre elas. Os breakers (limites de bounce, opt-out etc.) são congelados da política no momento de armar.",
       "Se um breaker estoura durante uma onda, a rampa congela sozinha — essa é a única ação autônoma do sistema, e é a conservadora. Retomar é sempre decisão humana; incidentes SEV1 exigem dois aprovadores para retomada.",
       "O kill switch mata a campanha em 2 etapas (intenção + confirmação). Todo o caminho é 100% determinístico — zero LLM entre você e o disparo.",
     ],
@@ -1144,7 +1144,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     pegadinhas: [
       "Apurar antes da janela → 425 Too Early: não é bug, é proteção estatística (anti-peeking) do pré-registro.",
       "\"Significativo\" exige IC excluindo zero — lift positivo com IC cruzando zero é ruído, não resultado.",
-      "Aprovar proposta NÃO publica nada: dispara o mini-ciclo com nova simulação e nova aprovação — os portões continuam valendo.",
+      "Aprovar proposta NÃO publica nada: dispara o mini-ciclo com nova simulação e nova aprovação — os QAs continuam valendo.",
       "Calibração sem backtest aprovado não publica priors.",
       "Só aprendizados ACEITOS são herdados no clone — registre o aceite, senão a próxima campanha começa do zero.",
     ],
@@ -1156,10 +1156,10 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     fase: "Plataforma",
     destino: "/atelie",
     descricao:
-      "Roster por etapa, SKILL.md visível, harness como portão de publicação, policy-as-code e auditoria via_ai.",
+      "Roster por etapa, SKILL.md visível, harness como QA de publicação, policy-as-code e auditoria via_ai.",
     oQueE: [
       "O Ateliê é a sala de máquinas da IA: o roster de agentes organizado por etapa do workflow, cada um com versão publicada, perfil de modelo (120B/20B), SKILL vinculada e score no harness. O system prompt (SKILL.md canônico) é visível — nada de caixa-preta.",
-      "O ciclo de vida é no-code: editar a skill → rodar o harness (bateria de casos golden julgada por um judge 120B em correção, evidência, compliance e formato) → publicar. Harness verde (≥ 90 por dimensão) é o portão de release.",
+      "O ciclo de vida é no-code: editar a skill → rodar o harness (bateria de casos golden julgada por um judge 120B em correção, evidência, compliance e formato) → publicar. Harness verde (≥ 90 por dimensão) é o QA de release.",
       "Aqui também vivem as políticas (policy-as-code: caps, quiet hours, alçadas, breakers — draft → publicada) e a auditoria: todo evento via_ai é clicável (prompt + evidências + judge + humano) e reconstruível (LGPD Art. 20).",
     ],
     fundamentos: [
@@ -1169,7 +1169,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
           "Front-matter YAML (nome, versão, perfil, bases RAG, exige_evidencia) + corpo com as instruções. É o contrato do agente, versionado.",
       },
       {
-        termo: "Harness como portão",
+        termo: "Harness como QA",
         definicao:
           "Casos golden + judge 120B com rubrica fixa; publicar exige score ≥ 90 em TODAS as dimensões — senão 409.",
       },
@@ -1199,7 +1199,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     ],
     casosDeUso: [
       "Refinar o prompt de um agente sem escrever código e medir no harness.",
-      "Publicar uma versão nova com segurança (portão de qualidade).",
+      "Publicar uma versão nova com segurança (QA de qualidade).",
       "Alterar a política de contato (caps, quiet hours) com versionamento.",
       "Auditar uma decisão assistida por IA de ponta a ponta.",
     ],
@@ -1210,7 +1210,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Na auditoria, clique num evento via_ai da OS-2026-0457 e reconstrua a invocação: input, evidências e output da época.",
     ],
     pegadinhas: [
-      "Harness < 90 em qualquer dimensão → 409: não publica — o portão vale até para o admin.",
+      "Harness < 90 em qualquer dimensão → 409: não publica — o QA vale até para o admin.",
       "Publicar skill NÃO muda campanhas em voo (frozen do GO) — a versão nova só vale para OSs novas ou próximo GO.",
       "O Guard não aparece como skill editável de LLM: ele é determinístico por definição — o 20B apenas explica o veredito.",
       "Mudar EMBED_DIM exige re-embed completo da base RAG — a busca fica indisponível durante o reindex (aviso na UI).",

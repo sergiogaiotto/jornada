@@ -74,9 +74,9 @@ export const PASSOS_TOUR: PassoTour[] = [
     descricao: "Simulação da jornada com personas sintéticas antes do lançamento.",
   },
   {
-    rotulo: "Portões",
+    rotulo: "QA",
     destino: "os:portoes",
-    descricao: "Portões de qualidade: critérios objetivos que liberam (ou seguram) a OS.",
+    descricao: "QA de qualidade: critérios objetivos que liberam (ou seguram) a OS.",
   },
   {
     rotulo: "Pré-voo",

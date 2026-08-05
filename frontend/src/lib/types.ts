@@ -418,7 +418,7 @@ export interface Gargalo {
   espera_horas_p50: number;
 }
 
-/** Validação de poder (§6): insuficiente ⇒ portão experimento vermelho (A2). */
+/** Validação de poder (§6): insuficiente ⇒ QA experimento vermelho (A2). */
 export interface PoderOut {
   aplicavel: boolean;
   portao: string; // verde|vermelho|nao_aplicavel
@@ -490,10 +490,10 @@ export interface CompararOut {
   cenarios: CenarioComparado[];
 }
 
-// ----------------------------- M8 (parte 2) · Portões T9 + Aprovação T10 (§8-M8)
+// ----------------------------- M8 (parte 2) · QA T9 + Aprovação T10 (§8-M8)
 export type EstadoPortao = "verde" | "vermelho" | "pendente";
 
-/** Portão do painel T9 — campos extras variam por portão (hash, faixa, poder…). */
+/** QA do painel T9 — campos extras variam por QA (hash, faixa, poder…). */
 export interface PortaoOut {
   estado: EstadoPortao;
   motivo?: string | null;
