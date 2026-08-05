@@ -913,3 +913,8 @@ necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 ## 2026-08-05 · Melhoria UI (pós-vMS8): rebrand Jornada + "dinâmico"
 - Marca **Martech → Jornada** em toda a aplicação (topbar, cockpit, portal de aprovação, título da aba: "Jornada · Digital Twin de Campanhas").
 - Termo **"vivo" → "dinâmico"** com concordância (Monitoramento Dinâmico, modo Dinâmico do canvas, recontagem/telemetria/ata dinâmica, SQL/catálogo dinâmico); id interno do modo `aovivo` → `dinamico`. 24 substituições; verificação visual no dev server + build verde.
+
+## 2026-08-05 · Evoluções do demo público (pós-deploy)
+- **Deploy automático**: job `deploy` no ci.yml — push na main com os 3 gates verdes → SSH na VPS (chave dedicada em secret) → git reset + compose up --build + smoke. Concurrency `deploy-vps`.
+- **Langfuse na VPS**: serviços langfuse+db-langfuse no docker-compose.prod.yml; api com LANGFUSE_ENABLED=true (trace por invocação §10.8); UI pública em :13000 com signup desabilitado e credenciais provisionadas via .env da VPS (segredos gerados lá, fora do git).
+- **HTTPS preparado**: server block nginx (host) para jornada.falagaiotto.com.br → 127.0.0.1:8050; certbot presente. Pendente: registro DNS A → 187.77.46.137 (aí `certbot --nginx -d jornada.falagaiotto.com.br`). Adaptação consciente: Caddy substituído pelo nginx já existente no host (porta 80 ocupada).

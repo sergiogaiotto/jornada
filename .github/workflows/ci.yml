@@ -57,3 +57,28 @@ jobs:
         run: echo "frontend ainda não iniciado (MS3+ — SDD §9)"
 
   # e2e-compose:   # ativar no MS8 (§13): docker compose up + Playwright jornada feliz OS-2026-0457
+
+  deploy:
+    # Deploy automático: só em push na main, só com os 3 gates verdes.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, compose-validate]
+    runs-on: ubuntu-latest
+    concurrency: deploy-vps
+    steps:
+      - name: Deploy na VPS via SSH (git pull + compose up --build)
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@vps.falagaiotto.com.br \
+            'cd /opt/jornada && git fetch origin && git reset --hard origin/main \
+             && docker compose -f docker-compose.prod.yml --env-file .env up -d --build \
+             && docker compose -f docker-compose.prod.yml --env-file .env ps --format "{{.Name}} {{.Status}}"'
+      - name: Smoke pós-deploy
+        run: |
+          sleep 5
+          curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" http://vps.falagaiotto.com.br:8050/
+          curl -fsS http://vps.falagaiotto.com.br:8050/api/v1/os -H "X-Tenant: torre-movel" \
+            -H "Authorization: Bearer dev-analista" | grep -q "OS-2026-0457" && echo "demo OK"

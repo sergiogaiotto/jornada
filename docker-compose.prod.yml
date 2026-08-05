@@ -26,7 +26,10 @@ services:
       LLM_API_KEY: not-needed
       LLM_TIMEOUT_S: "300"
       LLM_DEGRADED_MODE: auto
-      LANGFUSE_ENABLED: "false"
+      LANGFUSE_ENABLED: "true"
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PK:?defina LANGFUSE_PK no .env}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SK:?defina LANGFUSE_SK no .env}
       SFMC_AUTH_URL: http://mock-sfmc:8080/v2/token
       SFMC_REST_URL: http://mock-sfmc:8080/rest
       SFMC_SOAP_URL: http://mock-sfmc:8080/soap
@@ -58,3 +61,47 @@ services:
       - "8050:80"
     depends_on:
       - api
+
+  # ---- Observabilidade dos agentes (Langfuse §10.8) — UI pública em :13000 ----
+  db-langfuse:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?defina LANGFUSE_DB_PASSWORD no .env}
+      POSTGRES_DB: langfuse
+    volumes:
+      - db-langfuse-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  langfuse:
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    depends_on:
+      db-langfuse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?}@db-langfuse:5432/langfuse
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://vps.falagaiotto.com.br:13000}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?defina LANGFUSE_NEXTAUTH_SECRET no .env}
+      SALT: ${LANGFUSE_SALT:?defina LANGFUSE_SALT no .env}
+      TELEMETRY_ENABLED: "false"
+      AUTH_DISABLE_SIGNUP: "true"          # UI pública: só o usuário provisionado entra
+      LANGFUSE_INIT_ORG_ID: jornada
+      LANGFUSE_INIT_ORG_NAME: Jornada
+      LANGFUSE_INIT_PROJECT_ID: jornada-demo
+      LANGFUSE_INIT_PROJECT_NAME: jornada-demo
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PK:?}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SK:?}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_EMAIL:?defina LANGFUSE_INIT_EMAIL no .env}
+      LANGFUSE_INIT_USER_NAME: Sergio
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_PASSWORD:?defina LANGFUSE_INIT_PASSWORD no .env}
+    ports:
+      - "13000:3000"
+
+volumes:
+  db-langfuse-data:
