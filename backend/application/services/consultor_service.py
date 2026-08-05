@@ -89,8 +89,35 @@ class ServicoConsultor:
         )
         inicio = self._relogio.agora()
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
-        fim = self._relogio.agora()
         saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
+        # §7.3: modelo que conversa sem preencher `inferencias` recebe reforço de
+        # contrato (achado da validação com o hub real — FakeLLM nunca exercitava).
+        max_retries = int(skill.meta.get("max_retries", 2))
+        tentativa = 0
+        while (
+            not saida.inferencias
+            and pedido.faltantes
+            and len(mensagem.strip()) >= 20
+            and tentativa < max_retries
+        ):
+            tentativa += 1
+            mensagens = [
+                *mensagens,
+                {"role": "assistant", "content": texto},
+                {
+                    "role": "user",
+                    "content": (
+                        "SISTEMA: a mensagem do solicitante acima contém informações de "
+                        "briefing. Extraia AGORA em `inferencias` TODOS os campos "
+                        "obrigatórios presentes na conversa, com evidencias: "
+                        '["informado pelo solicitante"]. Se realmente nenhum campo '
+                        "estiver presente, devolva inferencias: []."
+                    ),
+                },
+            ]
+            texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+            saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
+        fim = self._relogio.agora()
 
         for inf in saida.inferencias:  # A3: inferido:true + evidências (precedentes)
             pedido.conteudo[inf.campo] = {
