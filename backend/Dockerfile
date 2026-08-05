@@ -10,6 +10,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./
+# Fixtures de fontes/read-model usadas em runtime (validação campo-a-campo, recontagem
+# de audiência): o código resolve <raiz>/mocks/seeds — na imagem, isso é /mocks/seeds.
+COPY mocks/seeds/ /mocks/seeds/
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
