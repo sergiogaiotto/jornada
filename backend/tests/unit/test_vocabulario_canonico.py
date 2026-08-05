@@ -19,4 +19,6 @@ def test_vocabulario_canonico_sem_termos_banidos():
             for termo in BANIDOS:
                 if termo in texto:
                     violacoes.append(f"{arq.relative_to(RAIZ)}: '{termo}'")
-    assert not violacoes, "Vocabulário banido reintroduzido (use 'pendência'): " + "; ".join(violacoes)
+    assert not violacoes, "Vocabulário banido reintroduzido (use 'pendência'): " + "; ".join(
+        violacoes
+    )
