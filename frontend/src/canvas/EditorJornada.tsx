@@ -32,6 +32,7 @@ import { PainelProblemas } from "./PainelProblemas";
 import { Paleta } from "./Paleta";
 import { aparencia } from "../components/twin/jgcParaFlow";
 import { NoJb, type DadosNoJb, type NoJbFlow } from "../components/twin/NoJb";
+import { useFecharForaEsc } from "../lib/hooks";
 import type { ArestaJgc, GrafoJgc, JornadaOut } from "../lib/types";
 
 const TIPOS_DE_NO = { jb: NoJb };
@@ -129,6 +130,9 @@ function EditorInterno({ jornada, problemasServidor, salvando, onSalvar, onSelec
   });
   const [noSelecionado, setNoSelecionado] = useState<string | null>(null);
   const [ajudaAberta, setAjudaAberta] = useState(false);
+  const fecharAjuda = useCallback(() => setAjudaAberta(false), []);
+  // clique fora / Esc fecham o popover de atalhos (padrão do DropdownGuia)
+  const raizAjuda = useFecharForaEsc(ajudaAberta, fecharAjuda);
   const baseRef = useRef(`${jornada.id}:${jornada.hash}`);
   const ultimoNoEditadoRef = useRef<string | null>(null);
 
@@ -443,11 +447,13 @@ function EditorInterno({ jornada, problemasServidor, salvando, onSalvar, onSelec
           >
             ↷ Refazer
           </button>
-          <div className="relative">
+          <div ref={raizAjuda} className="relative">
             <button
               type="button"
               className="mbtn-gh !px-2 !py-1 !text-[11px]"
               aria-label="Atalhos do editor"
+              aria-haspopup="dialog"
+              aria-expanded={ajudaAberta}
               onClick={() => setAjudaAberta((v) => !v)}
             >
               ?

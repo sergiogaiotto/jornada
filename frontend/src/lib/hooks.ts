@@ -1,6 +1,12 @@
 /** Hooks compartilhados: queries de OS (TanStack Query) e slot do painel contextual. */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, type DependencyList, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  type DependencyList,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { get } from "./api";
 import type { BriefingOut, OsOut, SaudeOut, WorkflowOut } from "./types";
@@ -43,6 +49,34 @@ export function useWorkflow(id: string | null | undefined) {
     queryFn: ({ signal }) => get<WorkflowOut>(`/os/${id}/workflow`, signal),
     enabled: Boolean(id),
   });
+}
+
+/**
+ * Fecha um dropdown/popover com clique-fora ou Esc (padrão do DropdownGuia).
+ * Retorna o ref a ser colocado no contêiner raiz (botão + painel); enquanto
+ * `aberto`, clique fora do contêiner ou tecla Escape chamam `fechar`.
+ */
+export function useFecharForaEsc(
+  aberto: boolean,
+  fechar: () => void,
+): RefObject<HTMLDivElement> {
+  const raiz = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!aberto) return;
+    const clique = (e: MouseEvent) => {
+      if (raiz.current && !raiz.current.contains(e.target as Node)) fechar();
+    };
+    const tecla = (e: KeyboardEvent) => {
+      if (e.key === "Escape") fechar();
+    };
+    document.addEventListener("mousedown", clique);
+    document.addEventListener("keydown", tecla);
+    return () => {
+      document.removeEventListener("mousedown", clique);
+      document.removeEventListener("keydown", tecla);
+    };
+  }, [aberto, fechar]);
+  return raiz;
 }
 
 /**

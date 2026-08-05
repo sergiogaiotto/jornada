@@ -5,8 +5,9 @@
  * - Exportar ▾ → download via GET /jornadas/{id}/export (JSON = spec de import
  *   NATIVO do Journey Builder · XML = integração/auditoria com manifest+XSD).
  */
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
+import { useFecharForaEsc } from "../lib/hooks";
 import type { JornadaResumoOut } from "../lib/types";
 
 interface Props {
@@ -33,6 +34,9 @@ export function HeaderVersoes({
   onExportar,
 }: Props) {
   const [exportAberto, setExportAberto] = useState(false);
+  const fecharExport = useCallback(() => setExportAberto(false), []);
+  // clique fora / Esc fecham o dropdown (padrão do DropdownGuia)
+  const raizExport = useFecharForaEsc(exportAberto, fecharExport);
   const ordenadas = [...versoes].sort((a, b) => b.versao - a.versao);
 
   return (
@@ -82,9 +86,11 @@ export function HeaderVersoes({
         </button>
       )}
 
-      <div className="relative ml-auto">
+      <div ref={raizExport} className="relative ml-auto">
         <button
           type="button"
+          aria-haspopup="menu"
+          aria-expanded={exportAberto}
           className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
           disabled={exportando}
           onClick={() => setExportAberto((v) => !v)}
