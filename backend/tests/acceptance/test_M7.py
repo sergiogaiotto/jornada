@@ -598,6 +598,71 @@ def test_M7_B5(client: TestClient, app: FastAPI) -> None:
     esquema.assertValid(etree.fromstring(outro.content))
 
 
+def test_M7_criar_manual_comecar_do_zero(client: TestClient, app: FastAPI) -> None:
+    """Emenda §8-M7 (editor T7): `POST /os/{id}/jornada` sem corpo cria NOVA versão
+    `rascunho` com o esqueleto mínimo entry→goal→exit — 100% determinístico, ZERO
+    LLM (funciona com o hub LLM FORA, §10.6)."""
+    os_ = _criar_os_com_segmento(client, app)
+    app.state.llm = LLMFake(disponivel=False)  # prova que o caminho não depende de LLM
+
+    resposta = client.post(f"/api/v1/os/{os_['id']}/jornada", headers=_h())
+    assert resposta.status_code == 201, resposta.text
+    corpo = resposta.json()
+    jornada = corpo["jornada"]
+    assert jornada["versao"] == 1 and jornada["estado"] == "rascunho"
+    assert jornada["premissas"] == [] and jornada["hash"]
+
+    grafo = jornada["grafo"]
+    assert [n["type"] for n in grafo["nodes"]] == ["entrySource", "goal", "exit"]
+    assert grafo["meta"]["osCodigo"] == os_["codigo"]  # escopo NUNCA vem do cliente
+    assert grafo["meta"]["tenant"] == TENANT and grafo["meta"]["reentrada"] == "nao"
+    # esqueleto passa no jgc_validate (§5.3): salvá-lo de volta é 200
+    salvo = client.put(
+        f"/api/v1/jornadas/{jornada['id']}/grafo", json={"grafo": grafo}, headers=_h()
+    )
+    assert salvo.status_code == 200, salvo.text
+    # sem nó de canal ⇒ taxímetro zerado (A2 — nada é inventado)
+    assert corpo["taximetro"]["custo_projetado"] == 0.0
+    assert corpo["taximetro"]["memoria"] == []
+
+    # versões seguem a linha do tempo: um segundo "começar do zero" nasce v2
+    v2 = client.post(f"/api/v1/os/{os_['id']}/jornada", json={}, headers=_h())
+    assert v2.status_code == 201 and v2.json()["jornada"]["versao"] == 2
+
+
+def test_M7_criar_manual_com_grafo_valida_e_persiste(client: TestClient, app: FastAPI) -> None:
+    """Emenda §8-M7: `POST /os/{id}/jornada` com `grafo` no corpo valida §5.3 ANTES de
+    persistir (422 apontando o nó — A1) e taxa o grafo aceito (A2, valor exato)."""
+    os_ = _criar_os_com_segmento(client, app)
+    app.state.llm = LLMFake(disponivel=False)
+
+    # grafo inválido (braço holdout órfão) → 422 problem+json e NADA persistido
+    invalido = _grafo(os_["codigo"])
+    invalido["edges"] = [e for e in invalido["edges"] if e["id"] != "e3"]
+    resposta = client.post(
+        f"/api/v1/os/{os_['id']}/jornada", json={"grafo": invalido}, headers=_h()
+    )
+    assert resposta.status_code == 422, resposta.text
+    assert resposta.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert any(e["regra"] == "braco_sem_destino" for e in resposta.json()["erros"])
+    assert client.get(f"/api/v1/os/{os_['id']}/jornadas", headers=_h()).json() == []
+
+    # grafo válido → 201 com taxímetro recalculado (mesmo valor do gerar — A2)
+    aceito = client.post(
+        f"/api/v1/os/{os_['id']}/jornada", json={"grafo": _grafo(os_["codigo"])}, headers=_h()
+    )
+    assert aceito.status_code == 201, aceito.text
+    assert aceito.json()["jornada"]["custo_projetado"] == 16_267.50
+    assert aceito.json()["taximetro"]["custo_projetado"] == 16_267.50
+
+    # RBAC (§8-M0): papel sem escrita → 403; OS inexistente → 404
+    proibido = client.post(f"/api/v1/os/{os_['id']}/jornada", headers=_h("dev-solicitante"))
+    assert proibido.status_code == 403
+    ausente = client.post(f"/api/v1/os/{uuid.uuid4()}/jornada", headers=_h())
+    assert ausente.status_code == 404
+    assert ausente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+
 def test_M7_gerar_degradado_503_e_put_sem_llm(client: TestClient, app: FastAPI) -> None:
     """Hub LLM fora (§10.6): gerar → 503 degraded; PUT do grafo (caminho crítico)
     segue funcionando SEM LLM."""

@@ -13,6 +13,8 @@ export type DadosNoJb = {
   categoria: CategoriaJb;
   icone: string;
   volumetria?: string;
+  /** lint/422 apontando este nó (editor T7) — anel vermelho */
+  erro?: boolean;
 };
 
 export type NoJbFlow = Node<DadosNoJb, "jb">;
@@ -39,7 +41,7 @@ export function NoJb({ data, selected }: NodeProps<NoJbFlow>) {
       <div
         className={`mx-auto grid place-items-center text-white shadow-tile ${COR_TILE[data.categoria]} ${
           losango ? "mt-1 h-7 w-7" : "h-9 w-9"
-        } ${selected ? "ring-2 ring-blue ring-offset-2" : ""}`}
+        } ${data.erro ? "ring-2 ring-crit ring-offset-2" : selected ? "ring-2 ring-blue ring-offset-2" : ""}`}
       >
         <span
           className={

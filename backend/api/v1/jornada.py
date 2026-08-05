@@ -6,6 +6,10 @@ recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff pro
 NUNCA aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o
 compilador gerará — §5.4, determinístico).
 
+Editor "começar do zero" (emenda 2026-08-05 — determinístico, ZERO LLM §10.6):
+`POST /os/{id}/jornada` (nova versão `rascunho` a partir de grafo manual validado
+§5.3, ou do esqueleto mínimo entry→goal→exit quando o corpo vem sem `grafo`).
+
 Versionamento/exportação (emenda 2026-08-05 — determinístico, ZERO LLM §10.6):
 `GET /os/{id}/jornadas` (lista resumida) · `GET /jornadas/{id}` (versão completa) ·
 `POST /jornadas/{id}/restaurar` (clona como NOVA versão rascunho — versões nunca são
@@ -179,6 +183,13 @@ class GrafoIn(BaseModel):
     grafo: dict[str, Any] = Field(min_length=1)
 
 
+class CriarJornadaIn(BaseModel):
+    """`POST /os/{id}/jornada` (emenda §8-M7): "começar do zero" no editor T7 —
+    `grafo` opcional; ausente ⇒ esqueleto mínimo entry→goal→exit gerado no servidor."""
+
+    grafo: dict[str, Any] | None = None
+
+
 class GrafoOut(BaseModel):
     jornada: JornadaOut
     taximetro: TaximetroOut
@@ -229,6 +240,27 @@ async def gerar_jornada(
         resumo=saida.resumo,
         taximetro=TaximetroOut(custo_projetado=jornada.custo_projetado or 0.0, **taximetro),
         invocacao_id=invocacao.id,
+    )
+
+
+@router.post("/os/{os_id}/jornada", status_code=201, response_model=GrafoOut)
+async def criar_jornada_manual(
+    os_id: uuid.UUID,
+    tenant: Tenant,
+    servico: Servico,
+    user: Escritor,
+    payload: CriarJornadaIn | None = None,
+) -> GrafoOut:
+    """ "Começar do zero" no editor T7 (emenda §8-M7): NOVA versão `rascunho` 100%
+    determinística — ZERO LLM (§10.6). Sem `grafo` no corpo, o servidor cria o
+    esqueleto mínimo entry→goal→exit (§5.2); com `grafo`, valida §5.3 (422 apontando
+    o nó — A1) antes de persistir; taxímetro recalculado (A2)."""
+    jornada, taximetro = servico.criar_manual(
+        tenant, os_id, grafo=(payload.grafo if payload else None), actor=user.email
+    )
+    return GrafoOut(
+        jornada=JornadaOut.model_validate(jornada),
+        taximetro=TaximetroOut(custo_projetado=jornada.custo_projetado or 0.0, **taximetro),
     )
 
 

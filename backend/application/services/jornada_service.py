@@ -7,6 +7,9 @@
 - `atualizar_grafo` (PUT /jornadas/{id}/grafo): valida §5.3 e RECALCULA o taxímetro
   (§8-M7); ZERO LLM — caminho crítico nunca depende de LLM (§10.6). Editar invalida
   simulação/previsto da versão (estado → rascunho; a régua congelada vive no snapshot).
+- `criar_manual` (POST /os/{id}/jornada — emenda §8-M7 2026-08-05): "começar do zero"
+  do editor T7 SEM LLM (§10.6): nova versão `rascunho` a partir de grafo informado
+  (validado §5.3) ou do esqueleto mínimo entry→goal→exit; taxímetro recalculado (A2).
 - `ajustar` (POST /jornadas/{id}/ajustar): texto livre → DIFF proposto — NUNCA aplica
   direto (§1.1.3: prévia com Aplicar/Rejeitar; aplicar = PUT do grafo proposto).
 - `sfmc_preview` (GET /jornadas/{id}/no/{noId}/sfmc-preview): JSON determinístico que o
@@ -151,6 +154,74 @@ class ServicoJornada:
             via_ai=True,
         )
         return jornada, saida, invocacao, {"memoria": memoria, "avisos": avisos}
+
+    # ----------------------------------------------------------- POST /os/{id}/jornada
+    def criar_manual(
+        self, tenant_id: str, os_id: uuid.UUID, *, grafo: dict[str, Any] | None, actor: str
+    ) -> tuple[JornadaVersao, dict[str, Any]]:
+        """ "Começar do zero" no editor T7 (emenda §8-M7): NOVA versão `rascunho` SEM
+        LLM (§10.6) — usa o grafo informado ou o esqueleto mínimo entry→goal→exit
+        (§5.2); `jgc_validate` (§5.3) reprova antes de persistir; taxímetro A2."""
+        os_ = self._exigir_os(tenant_id, os_id)
+        candidato = grafo if grafo is not None else self._grafo_minimo(os_)
+        candidato = self._normalizar_meta(candidato, os_)
+        self._validar(candidato, os_.id, POLITICA_PUBLICADA["conteudo"])  # A1/A3 → 422
+        custo, memoria, avisos = self._taximetro(candidato, os_.id)
+        jornada = JornadaVersao(
+            id=uuid.uuid4(),
+            os_id=os_.id,
+            versao=self._repo.proxima_versao(os_.id),
+            grafo=candidato,
+            hash=hash_jgc(candidato),
+            premissas=[],
+            custo_projetado=float(custo),
+            created_at=self._relogio.agora(),
+        )
+        self._repo.adicionar_jornada(jornada)
+        self._evento(
+            os_,
+            "jornada.versao_criada",
+            {
+                "jornada_id": str(jornada.id),
+                "versao": jornada.versao,
+                "hash": jornada.hash,
+                "custo_projetado": jornada.custo_projetado,
+                "origem": "manual",
+            },
+            actor=actor,
+        )
+        return jornada, {"memoria": memoria, "avisos": avisos}
+
+    @staticmethod
+    def _grafo_minimo(os_: OS) -> dict[str, Any]:
+        """Esqueleto §5.2/§5.3 do "começar do zero": entrySource → goal → exit —
+        o menor grafo que passa no `jgc_validate` (tem goal, nada órfão)."""
+        return {
+            "jgcVersion": "1.0",
+            "meta": {},  # osCodigo/tenant/reentrada reescritos por _normalizar_meta
+            "nodes": [
+                {
+                    "id": "entrada",
+                    "type": "entrySource",
+                    "data": {
+                        "deRef": f"DE_{os_.codigo}_entrada",
+                        "modo": "fire_once",
+                        "agenda": None,
+                        "reentrada": "nao",
+                    },
+                },
+                {
+                    "id": "meta",
+                    "type": "goal",
+                    "data": {"metrica": "conversao", "deRef": f"DE_{os_.codigo}_conversoes"},
+                },
+                {"id": "saida", "type": "exit", "data": {"motivo": "fim_da_jornada"}},
+            ],
+            "edges": [
+                {"id": "e1", "from": "entrada", "to": "meta", "cond": None},
+                {"id": "e2", "from": "meta", "to": "saida", "cond": None},
+            ],
+        }
 
     # ------------------------------------------------------ PUT /jornadas/{id}/grafo
     def atualizar_grafo(

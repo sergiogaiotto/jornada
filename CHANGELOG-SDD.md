@@ -3,6 +3,26 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — M7 · Editor "começar do zero" (emenda §8-M7)
+Emenda §1.3.3 — endpoint novo no router `jornada`, **determinístico, ZERO LLM**
+(§10.6), porta de entrada do editor visual T7 quando o usuário dispensa o Flow:
+- **Endpoint (§8-M7):** `POST /os/{id}/jornada` (201) cria NOVA versão `rascunho`
+  sem agente. Corpo `{grafo?}` OPCIONAL: com `grafo`, `jgc_validate` (§5.3) reprova
+  ANTES de persistir (422 `erros[{no, regra, mensagem}]` — A1); sem `grafo`, o
+  servidor gera o esqueleto mínimo `entrySource → goal → exit` (§5.2) que passa no
+  validador. `meta.osCodigo/tenant` SEMPRE reescritos com os valores da OS (§1.3.5);
+  taxímetro recalculado (A2); evento `jornada.versao_criada` com `origem: "manual"`;
+  RBAC escrita (§8-M0). Serviço: `ServicoJornada.criar_manual`.
+- **Motivação:** o canvas T7 ganhou edição nível Journey Builder (paleta drag&drop,
+  CRUD de nós/arestas, inspetor por tipo, lint local §5.3); sem versão persistida o
+  `PUT /jornadas/{id}/grafo` não tem alvo — "começar do zero" precisa nascer no
+  servidor como versão v1 editável.
+- **Aceites (robustez é LEI):** `test_M7_criar_manual_comecar_do_zero` (201 com
+  esqueleto válido re-salvável via PUT, taxímetro zerado sem canal, meta reescrita,
+  versões incrementais, hub LLM FORA) · `test_M7_criar_manual_com_grafo_valida_e_persiste`
+  (422 apontando o nó sem persistir nada, 201 com taxímetro exato A2, RBAC 403,
+  404 OS inexistente). Suíte M7: 14 → 16 verdes.
+
 ## 2026-08-05 — M7 · Versionamento & exportação da jornada (emenda §8-M7 + §4.1)
 Emenda §1.3.3 — endpoints novos no router `jornada`, todos **determinísticos, ZERO
 LLM** (§10.6; caminho de leitura/derivação — nada é gerado por agente):

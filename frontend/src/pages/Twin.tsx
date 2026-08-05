@@ -4,6 +4,10 @@
  * Desenho/Simulação/Dinâmico, TAXÍMETRO fixo no rodapé (Σ volume × tarifa — cálculo é
  * código), premissas em chips, ajuste por texto livre como DIFF Aplicar/Rejeitar
  * (nunca aplica direto) e inspetor de nó no painel direito com a prévia JSON SFMC.
+ * Modo Desenho = EDITOR nível Journey Builder (src/canvas/): paleta drag&drop, CRUD
+ * de nós/arestas com undo/redo, inspetor por tipo §5.2, lint local §5.3 e salvar
+ * via PUT (que invalida a simulação). Sem versão: gerar com Flow OU começar do zero
+ * (POST /os/{id}/jornada — emenda §8-M7, determinístico).
  */
 import "@xyflow/react/dist/style.css";
 
@@ -12,6 +16,8 @@ import { Background, Controls, ReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { EditorJornada } from "../canvas/EditorJornada";
+import { type ProblemaLint } from "../canvas/lint";
 import { BadgeViaAi } from "../components/ai/BadgeViaAi";
 import { ChipsPremissas } from "../components/ai/ChipsPremissas";
 import { Copiloto } from "../components/ai/Copiloto";
@@ -22,7 +28,7 @@ import { NoJb } from "../components/twin/NoJb";
 import { ApiError, get, post, put } from "../lib/api";
 import { fmtBRL, fmtCompacto, fmtTarifa } from "../lib/format";
 import { usePainelContextual } from "../lib/hooks";
-import type { AjustarOut, GerarJornadaOut, GrafoOut, JornadaOut } from "../lib/types";
+import type { AjustarOut, GerarJornadaOut, GrafoJgc, GrafoOut, JornadaOut } from "../lib/types";
 import { useProducao } from "../stores/producao";
 
 const TIPOS_DE_NO = { jb: NoJb };
@@ -121,6 +127,42 @@ export function Twin() {
       setProposta(null);
     },
   });
+
+  /** Salvar do EDITOR (modo desenho): PUT do grafo local — o servidor valida §5.3,
+   * recalcula o taxímetro e INVALIDA a simulação (estado → rascunho). */
+  const salvar = useMutation({
+    mutationFn: (grafo: GrafoJgc) => put<GrafoOut>(`/jornadas/${jornada?.id}/grafo`, { grafo }),
+    onSuccess: (saida) => {
+      setJornada(osId, {
+        jornada: saida.jornada,
+        taximetro: saida.taximetro,
+        resumo: estado?.resumo,
+      });
+    },
+  });
+
+  /** "Começar do zero" (emenda §8-M7): nova versão rascunho SEM LLM com o esqueleto
+   * mínimo entry→goal→exit — o editor abre pronto para desenhar. */
+  const comecarDoZero = useMutation({
+    mutationFn: () => post<GrafoOut>(`/os/${osId}/jornada`),
+    onSuccess: (saida) => {
+      setJornada(osId, { jornada: saida.jornada, taximetro: saida.taximetro });
+      setProposta(null);
+      setNoSelecionado(null);
+    },
+  });
+
+  /** Erros 422 do PUT do editor → painel de problemas (origem "servidor"). */
+  const problemasServidor = useMemo<ProblemaLint[]>(
+    () =>
+      errosDeValidacao(salvar.error).map((e) => ({
+        no: e.no ?? null,
+        regra: e.regra ?? "jgc_validate",
+        mensagem: e.mensagem ?? "",
+        origem: "servidor" as const,
+      })),
+    [salvar.error],
+  );
 
   const preview = useQuery({
     queryKey: ["jornadas", jornada?.id, "sfmc-preview", noSelecionado],
@@ -269,6 +311,12 @@ export function Twin() {
       )}
       {gerar.error != null && <BannerErro erro={gerar.error} contexto="Flow (gerar)" />}
       {ajustar.error != null && <BannerErro erro={ajustar.error} contexto="Flow (ajustar)" />}
+      {comecarDoZero.error != null && (
+        <BannerErro erro={comecarDoZero.error} contexto="Começar do zero" />
+      )}
+      {salvar.error != null && problemasServidor.length === 0 && (
+        <BannerErro erro={salvar.error} contexto="Salvar grafo (jgc_validate §5.3)" />
+      )}
       {aplicar.error != null && (
         <div>
           <BannerErro erro={aplicar.error} contexto="Validação do grafo (§5.3)" />
@@ -290,7 +338,7 @@ export function Twin() {
       ) : !jornada ? (
         <div className="mcard mb-3">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-[.08em] text-faint">
-            Flow desenha o rascunho a partir do briefing (prévia via_ai)
+            Flow desenha o rascunho a partir do briefing (prévia via_ai) — ou comece do zero
           </div>
           <div className="flex items-start gap-2">
             <textarea
@@ -307,6 +355,15 @@ export function Twin() {
               onClick={() => gerar.mutate()}
             >
               {gerar.isPending ? "Desenhando…" : "Gerar jornada (Flow)"}
+            </button>
+            <button
+              type="button"
+              className="mbtn-gh flex-none"
+              disabled={comecarDoZero.isPending}
+              title="POST /os/{id}/jornada — cria v1 rascunho com entry+goal+exit mínimos, sem LLM (§10.6)"
+              onClick={() => comecarDoZero.mutate()}
+            >
+              {comecarDoZero.isPending ? "Criando…" : "Começar do zero"}
             </button>
           </div>
         </div>
@@ -326,39 +383,52 @@ export function Twin() {
 
       {!jornada && !ultimaVersao.isLoading && (
         <EstadoVazio>
-          Sem versão do twin nesta OS — o Flow gera o JGC; `jgc_validate` (§5.3) e o
-          taxímetro são código, o agente não tem a palavra final.
+          Sem versão do twin nesta OS — gere com o Flow (o `jgc_validate` §5.3 e o
+          taxímetro são código, o agente não tem a palavra final) OU comece do zero:
+          o servidor cria entry+goal+exit mínimos e o editor abre para desenhar.
         </EstadoVazio>
       )}
 
       {/* ------------------------------------------------------------- canvas */}
       {jornada && (
         <>
-          {modo !== "desenho" && (
-            <div className="mb-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
-              {modo === "simulacao"
-                ? "Modo Simulação: o funil P10/P50/P90 do Ensaio Geral (T8) pinta as arestas — rode a simulação para dar vida a este modo."
-                : "Modo Dinâmico: telemetria ENS pinta o funil em tempo real após o lançamento (T12/T13)."}
-            </div>
+          {modo === "desenho" ? (
+            /* EDITOR nível Journey Builder (src/canvas/): paleta, CRUD, undo/redo,
+               inspetor §5.2, lint §5.3, MiniMap, auto-layout e salvar (PUT). */
+            <EditorJornada
+              jornada={jornada}
+              problemasServidor={problemasServidor}
+              salvando={salvar.isPending}
+              onSalvar={(grafo) => salvar.mutate(grafo)}
+              onSelecionar={setNoSelecionado}
+            />
+          ) : (
+            <>
+              <div className="mb-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
+                {modo === "simulacao"
+                  ? "Modo Simulação: o funil P10/P50/P90 do Ensaio Geral (T8) pinta as arestas — rode a simulação para dar vida a este modo."
+                  : "Modo Dinâmico: telemetria ENS pinta o funil em tempo real após o lançamento (T12/T13)."}
+              </div>
+              <div className="mcard relative h-[440px] overflow-hidden p-0">
+                <ReactFlow
+                  nodes={fluxo.nos}
+                  edges={fluxo.arestas}
+                  nodeTypes={TIPOS_DE_NO}
+                  fitView
+                  minZoom={0.4}
+                  maxZoom={1.6}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  deleteKeyCode={null}
+                  onNodeClick={(_, no) => setNoSelecionado(no.id)}
+                  onPaneClick={() => setNoSelecionado(null)}
+                >
+                  <Background gap={12} size={1} color="#DDE4EA" />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              </div>
+            </>
           )}
-          <div className="mcard relative h-[440px] overflow-hidden p-0">
-            <ReactFlow
-              nodes={fluxo.nos}
-              edges={fluxo.arestas}
-              nodeTypes={TIPOS_DE_NO}
-              fitView
-              minZoom={0.4}
-              maxZoom={1.6}
-              nodesDraggable={modo === "desenho"}
-              nodesConnectable={false}
-              deleteKeyCode={null}
-              onNodeClick={(_, no) => setNoSelecionado(no.id)}
-              onPaneClick={() => setNoSelecionado(null)}
-            >
-              <Background gap={12} size={1} color="#DDE4EA" />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-          </div>
 
           {/* legenda da paleta JB */}
           <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] text-slatex">
