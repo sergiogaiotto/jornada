@@ -1,5 +1,5 @@
 /**
- * Topbar vermelha Claro (fidelidade ao mock): logo Martech · breadcrumb · pill ⌘K ·
+ * Topbar vermelha Claro (fidelidade ao mock): logo Jornada · breadcrumb · pill ⌘K ·
  * pill de fase da OS em foco · avatar.
  */
 import { Link, useLocation } from "react-router-dom";
@@ -55,7 +55,7 @@ export function Topbar() {
     <header className="flex flex-none items-center gap-3 bg-claro px-4 py-2 text-[13px] text-claro-paper">
       <Link to="/" className="flex items-center gap-2 font-extrabold tracking-[.02em]">
         <span className="inline-block h-2.5 w-2.5 rounded-[3px] bg-white" />
-        Martech
+        Jornada
       </Link>
       <span className="truncate text-[12px] text-claro-rose2">{breadcrumb}</span>
       <span className="flex-1" />

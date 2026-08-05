@@ -1,5 +1,5 @@
 /**
- * T5a · Segmentos do Data Cloud (mock T5a / SDD §8-M5): catálogo vivo (consulta, não
+ * T5a · Segmentos do Data Cloud (mock T5a / SDD §8-M5): catálogo dinâmico (consulta, não
  * cópia) com membros, DMOs e frescor de republicação; relatório de tamanho de público
  * (bruto→elegível→líquido→sobreposição) e volume de abordagem por canal pós caps/quiet
  * hours/colisões do governor; "usar como entrada no Estúdio (T5)" com lineage.

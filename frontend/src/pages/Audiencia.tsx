@@ -1,6 +1,6 @@
 /**
  * T5 · Estúdio de Audiência (mock T5 / SDD §8-M5): waterfall base→líquido pós-compliance
- * com recontagem ao vivo, SQL vivo do Engineer (via_ai, explicação por cláusula),
+ * com recontagem dinâmica, SQL dinâmico do Engineer (via_ai, explicação por cláusula),
  * holdout (slider, política valida o mínimo) e certificação do Guard determinístico
  * (7 listas + opt-in → certificado com hash e validade).
  */
@@ -192,7 +192,7 @@ export function Audiencia() {
     <div>
       <TituloTela
         titulo="Estúdio de Audiência"
-        subtitulo="Base elegível → líquido pós-compliance · recontagem ao vivo · certificação do Guard"
+        subtitulo="Base elegível → líquido pós-compliance · recontagem dinâmica · certificação do Guard"
       />
 
       {gerarSql.error != null && <BannerErro erro={gerarSql.error} contexto="Engineer" />}
@@ -342,7 +342,7 @@ export function Audiencia() {
             </div>
           </div>
 
-          {/* ------------------------------------------------- SQL vivo */}
+          {/* ------------------------------------------------- SQL dinâmico */}
           <div className="mcard min-w-[320px] flex-1">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="text-[10px] font-bold uppercase tracking-[.08em] text-faint">

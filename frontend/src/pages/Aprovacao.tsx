@@ -96,7 +96,7 @@ export function Aprovacao() {
       <div className="flex items-center gap-2 border-b border-line bg-white px-5 py-3">
         <span className="text-[15px] font-extrabold text-ink2">
           <span className="mr-1.5 inline-block h-2.5 w-2.5 rounded-[3px] bg-claro" />
-          Martech
+          Jornada
         </span>
         <span className="text-[12px] text-muted">
           Aprovação segura · sem login · decisão única

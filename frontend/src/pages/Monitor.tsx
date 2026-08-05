@@ -1,5 +1,5 @@
 /**
- * T13 · Monitoramento Vivo — previsto × realizado (mock T13 / SDD §8-M10 §1.1.2):
+ * T13 · Monitoramento Dinâmico — previsto × realizado (mock T13 / SDD §8-M10 §1.1.2):
  * TODO KPI é um PAR contra o Previsto CONGELADO do snapshot (nunca a simulação
  * corrente). Gramática visual universal: barra fantasma (previsto) sob barra sólida
  * (realizado) — Recharts. Telemetria dupla reconciliada (ENS tempo real; extract é
@@ -68,7 +68,7 @@ export function Monitor() {
     queryKey: ["os", osId, "monitor"],
     queryFn: ({ signal }) => get<MonitorOut>(`/os/${osId}/monitor`, signal),
     enabled: Boolean(osId),
-    refetchInterval: 30_000, // telemetria viva — ENS near-real-time (§8-M10)
+    refetchInterval: 30_000, // telemetria dinâmica — ENS near-real-time (§8-M10)
     retry: (falhas, erro) => !(erro instanceof ApiError && erro.status === 409) && falhas < 2,
   });
 
@@ -198,7 +198,7 @@ export function Monitor() {
     return (
       <div>
         <TituloTela
-          titulo="Monitoramento Vivo"
+          titulo="Monitoramento Dinâmico"
           subtitulo="Todo KPI como par previsto × realizado — contra o Previsto congelado (§1.1.2)"
         />
         <EstadoVazio>
@@ -221,10 +221,10 @@ export function Monitor() {
       <TituloTela
         titulo={
           <>
-            Monitoramento Vivo{" "}
+            Monitoramento Dinâmico{" "}
             {m?.launch?.estado === "em_rampa" && (
               <span className="mchip-g align-middle">
-                ● Ao Vivo · onda {m.launch.onda_atual}/{m.launch.ondas.length}
+                ● Dinâmico · onda {m.launch.onda_atual}/{m.launch.ondas.length}
               </span>
             )}
             {m?.launch?.estado === "pausado_breaker" && (

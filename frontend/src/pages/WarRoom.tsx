@@ -96,7 +96,7 @@ export function WarRoom() {
 
   usePainelContextual(
     <>
-      <div className="ctx-title">Copiloto — ata viva</div>
+      <div className="ctx-title">Copiloto — ata dinâmica</div>
       <Copiloto titulo="Resumo da discussão">
         <b>Threads abertas:</b> {threads.length} · <b>Pendências na sessão:</b>{" "}
         {pendencias.filter((p) => p.status === "aberta").length} aberta(s).

@@ -1,5 +1,5 @@
 /**
- * T1 · Cockpit Martech — home do portfólio (mock T1): KPIs + kanban por fase, saúde
+ * T1 · Cockpit Jornada — home do portfólio (mock T1): KPIs + kanban por fase, saúde
  * DERIVADA (GET /os/{id}/saude — nunca editável), painel direito com a OS selecionada
  * e o digest do copiloto.
  */

@@ -1,7 +1,7 @@
 /**
  * T2 · Sala de Ideação — briefing assistido (mock T2): conversa livre à esquerda com o
- * Consultor de Campanhas (POST /pedidos + /pedidos/{id}/mensagem), briefing da OS ao
- * vivo à direita (inferido em âmbar → confirmado em verde via PATCH), medidor de
+ * Consultor de Campanhas (POST /pedidos + /pedidos/{id}/mensagem), briefing da OS de forma dinâmica
+ *  à direita (inferido em âmbar → confirmado em verde via PATCH), medidor de
  * completude do pedido e prévia/diff Aplicar/Rejeitar (contrato de UX da IA).
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -224,10 +224,10 @@ export function Ideacao() {
           </div>
         </div>
 
-        {/* Briefing ao vivo */}
+        {/* Briefing dinâmico */}
         <div className="mcard">
           <div className="mb-2 text-[10px] font-bold uppercase tracking-[.06em] text-faint">
-            Briefing estruturado · ao vivo
+            Briefing estruturado · dinâmico
           </div>
           {campos.length === 0 && (
             <EstadoVazio>Briefing vazio — os campos aparecem conforme a conversa.</EstadoVazio>

@@ -909,3 +909,7 @@ necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 - **Langfuse §10.8 validado no self-hosted 2.95** (compose): trace com `trace_id = invocacao.id`, spans rag_retrieve/generate/judge, metadados de agente — via TracerLangfuse de produção. Nota: SDK deve seguir o pin `langfuse~=2.53` do requirements (v4 usa OTel, incompatível com servidor v2; venv local estava desalinhado).
 - **Ambiente dev desta máquina**: docker-compose.override.yml LOCAL (gitignorado) com portas 18080/13000 por conflito com o projeto `agente_*` + restart unless-stopped (containers do projeto sofreram kill externo 255 duas vezes).
 - Hub oscilou durante os testes (ConnectTimeout após 20 min funcionando) — instabilidade de rede/VPN, não do código; caminho degradado agora responde 503.
+
+## 2026-08-05 · Melhoria UI (pós-vMS8): rebrand Jornada + "dinâmico"
+- Marca **Martech → Jornada** em toda a aplicação (topbar, cockpit, portal de aprovação, título da aba: "Jornada · Digital Twin de Campanhas").
+- Termo **"vivo" → "dinâmico"** com concordância (Monitoramento Dinâmico, modo Dinâmico do canvas, recontagem/telemetria/ata dinâmica, SQL/catálogo dinâmico); id interno do modo `aovivo` → `dinamico`. 24 substituições; verificação visual no dev server + build verde.

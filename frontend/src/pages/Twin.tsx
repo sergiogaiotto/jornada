@@ -1,7 +1,7 @@
 /**
  * T7 · Canvas do Digital Twin (mock T7 / SDD §8-M7): React Flow com a linguagem visual
  * do Journey Builder (nós custom na paleta JB — losangos laranja para splits), modos
- * Desenho/Simulação/Ao Vivo, TAXÍMETRO fixo no rodapé (Σ volume × tarifa — cálculo é
+ * Desenho/Simulação/Dinâmico, TAXÍMETRO fixo no rodapé (Σ volume × tarifa — cálculo é
  * código), premissas em chips, ajuste por texto livre como DIFF Aplicar/Rejeitar
  * (nunca aplica direto) e inspetor de nó no painel direito com a prévia JSON SFMC.
  */
@@ -27,12 +27,12 @@ import { useProducao } from "../stores/producao";
 
 const TIPOS_DE_NO = { jb: NoJb };
 
-type Modo = "desenho" | "simulacao" | "aovivo";
+type Modo = "desenho" | "simulacao" | "dinamico";
 
 const MODOS: { id: Modo; rotulo: string; ativo: string }[] = [
   { id: "desenho", rotulo: "● Desenho", ativo: "bg-blue text-white" },
   { id: "simulacao", rotulo: "Simulação", ativo: "bg-ch4 text-white" },
-  { id: "aovivo", rotulo: "Ao Vivo", ativo: "bg-good text-white" },
+  { id: "dinamico", rotulo: "Dinâmico", ativo: "bg-good text-white" },
 ];
 
 /** Erros §5.3 vindos do 422 (GrafoInvalido): `erros[{no, regra, mensagem}]`. */
@@ -304,7 +304,7 @@ export function Twin() {
             <div className="mb-2 rounded-md border border-line bg-surface2 px-3 py-1.5 text-[12px] text-slatex">
               {modo === "simulacao"
                 ? "Modo Simulação: o funil P10/P50/P90 do Ensaio Geral (T8) pinta as arestas — rode a simulação para dar vida a este modo."
-                : "Modo Ao Vivo: telemetria ENS pinta o funil em tempo real após o lançamento (T12/T13)."}
+                : "Modo Dinâmico: telemetria ENS pinta o funil em tempo real após o lançamento (T12/T13)."}
             </div>
           )}
           <div className="mcard relative h-[440px] overflow-hidden p-0">
