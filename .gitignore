@@ -27,3 +27,4 @@ node_modules/
 .DS_Store
 *.tsbuildinfo
 docker-compose.override.yml
+.env.prod-local

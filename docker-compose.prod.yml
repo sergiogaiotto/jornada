@@ -1,0 +1,60 @@
+# Jornada — deploy de demonstração (VPS) · porta pública 8050
+# Uso: criar .env com APP_SECRET (openssl rand -hex 32) e:
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Nota: repositórios em memória (demo); o hub LLM da Claro só responde de dentro da
+# rede Claro — fora dela a IA degrada para 503 + modo manual (§10.6), o restante
+# da plataforma funciona normalmente com a OS demo semeada.
+name: jornada
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Demo pública: APP_ENV=dev habilita as seeds da OS-2026-0457 e o Bearer de
+      # demonstração (sem IdP). Dados 100% sintéticos — nenhum dado real na VPS.
+      APP_ENV: dev
+      APP_SECRET: ${APP_SECRET:?defina APP_SECRET no .env (openssl rand -hex 32)}
+      DEFAULT_TENANT: torre-movel
+      DEMO_MODE: "true"
+      LLM_120B_BASE_URL: https://hub-gpus.claro.com.br/gpt120/v1
+      LLM_120B_MODEL: openai/gpt-oss-120b
+      LLM_20B_BASE_URL: https://hub-gpus.claro.com.br/gpt20/v1
+      LLM_20B_MODEL: openai/gpt-oss-20b
+      LLM_API_KEY: not-needed
+      LLM_TIMEOUT_S: "300"
+      LLM_DEGRADED_MODE: auto
+      LANGFUSE_ENABLED: "false"
+      SFMC_AUTH_URL: http://mock-sfmc:8080/v2/token
+      SFMC_REST_URL: http://mock-sfmc:8080/rest
+      SFMC_SOAP_URL: http://mock-sfmc:8080/soap
+      SFMC_CLIENT_ID: mock
+      SFMC_CLIENT_SECRET: mock
+      SFMC_ACCOUNT_MID: mock
+      DC_AUTH_URL: http://mock-datacloud:8081/oauth/token
+      DC_API_URL: http://mock-datacloud:8081/api/v2
+      DC_CLIENT_ID: mock
+      DC_CLIENT_SECRET: mock
+    depends_on:
+      - mock-sfmc
+      - mock-datacloud
+
+  mock-sfmc:
+    build: ./mocks/sfmc-server
+    restart: unless-stopped
+
+  mock-datacloud:
+    build:
+      context: ./mocks
+      dockerfile: datacloud-server/Dockerfile
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "8050:80"
+    depends_on:
+      - api
