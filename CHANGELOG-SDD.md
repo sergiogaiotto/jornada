@@ -3,6 +3,27 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — UAT-UI: correções (lote frontend A16/A14/A12/A10/A6)
+Complemento de frontend do mesmo UAT (relatório em `docs/UAT-VPS-2026-08-05.md`);
+nenhuma mudança de contrato de API além da emenda §8-M7 já registrada abaixo (A14).
+- **A16 · página branca (React #185) na rota `simulacao` sem twin:** causa raiz era
+  selector zustand com fallback instável (`cenarios[osId] ?? []` criava array novo a
+  cada snapshot → loop do `useSyncExternalStore`); fallback agora é a constante
+  `SEM_CENARIOS` (`pages/Ensaio.tsx`). Blindagem estrutural: `ErrorBoundary` global
+  em dois níveis — por rota dentro do shell (keyed por `pathname`, o chrome sobrevive)
+  e na raiz (último recurso) — com fallback amigável + Recarregar.
+- **A14 (parte front):** T7 carrega a última versão persistida via
+  `GET /os/{id}/jornada` ao montar com store vazio (reload do navegador); 404 mantém o
+  botão Gerar; erro não-404 vira `BannerErro`; estado de carregamento explícito.
+- **A12 · Data Cloud sem ação "usar":** botão "Usar como entrada no Estúdio (T5)" por
+  segmento (`POST /datacloud/segmentos/{id}/usar`, ação que já existia na API §8-M5)
+  com busy por linha e sucesso navegando ao T5 com o segmento em foco.
+- **A10 (não reproduzido no código atual — cada botão já POSTa o campo da própria
+  linha):** blindagem com busy/disabled POR LINHA via `mutation.variables` e rótulos
+  Validando…/Abrindo… em `pages/Validacao.tsx`.
+- **A6 (não reproduzido — o detail do 409 problem+json já vira banner):** o banner de
+  erro da esteira agora faz `scrollIntoView` ao surgir (nunca fica fora do viewport).
+
 ## 2026-08-05 — UAT real na VPS (gpt-oss-120b) · fixes A13/A14/A15/A2/A17
 - **A13 · KeyError 'to' no taxímetro (emenda de robustez, sem mudança de contrato do
   §5.1):** o 120b real gera arestas com aliases `source`/`target`. Correção em 3
