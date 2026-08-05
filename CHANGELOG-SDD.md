@@ -3,6 +3,23 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-05 — UI · "+ Nova Campanha" nativa + Sala de Ideação em modo pedido (T2)
+SEM mudança de contrato (nenhum endpoint novo — consome o CRUD §8-M3 da emenda
+abaixo). Frontend:
+- **"+ Nova Campanha"** (botão primário no Cockpit + item na busca ⌘K): `POST /pedidos`
+  com o usuário logado como solicitante (`solicitanteAtual()` em `lib/api.ts`, derivado
+  do token dev) → navega a `/pedidos/{id}` (rota nova, Sala de Ideação em modo pedido).
+- **Sala de Ideação em modo pedido** (`pages/Ideacao.tsx`): conversa à esquerda; à
+  direita os 5 campos obrigatórios com estado visível (vazio · inferido âmbar ·
+  confirmado verde) e EDIÇÃO INLINE (clicar → editar → `PATCH /pedidos/{id}/campos`);
+  medidor de completude vivo no painel contextual com chips de faltantes clicáveis;
+  completude 100% → CTA "Converter em OS" (nome + t-shirt) → navega à OS. Convertido/
+  arquivado ficam somente leitura com banner (rastro de governança §8-M3).
+- **Cockpit:** bloco "Pedidos em aberto" (fila do intake, `GET /pedidos`) acima do
+  kanban com completude, faltantes, estado e ações Abrir/Arquivar (soft).
+- **Guia** (`guia/conteudo.ts`) atualizado: tour do Cockpit/Ideação, campos e jornadas
+  cobrem o fluxo "+ Nova Campanha" → 100% → converter.
+
 ## 2026-08-05 — M3 · CRUD de pedidos + fix A2-vazamento do retry §7.3 (emenda §8-M3 + §4.1)
 Emenda §1.3.3 — o Portal do Solicitante NÃO existe mais; a criação de pedidos vive na
 app (o token de portal segue aceito como auth de link nas rotas de intake). Achado do
