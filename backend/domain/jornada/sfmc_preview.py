@@ -9,6 +9,7 @@ do M9 — aqui o contrato é o esqueleto do payload.
 from typing import Any
 
 from domain.campanha.erros import NaoEncontrado
+from domain.jornada.adjacencia import saidas_do_grafo
 
 # type → (tipo de recurso SFMC, "Compila para" da tabela §5.2)
 COMPILA_PARA: dict[str, tuple[str | None, str]] = {
@@ -46,10 +47,12 @@ def preview_do_no(grafo: dict[str, Any], hash_jgc: str, no_id: str) -> dict[str,
         raise NaoEncontrado(f"Nó {no_id!r} não existe no grafo desta jornada (§8-M7).")
     tipo = str(no.get("type", ""))
     tipo_sfmc, compila_para = COMPILA_PARA.get(tipo, (None, "—"))
+    # Adjacência pela fonte ÚNICA (D07 · UAT #5) — a prévia tinha a MESMA cópia
+    # inline do compilador e mostrava `decisionSplit` roteado por `regras[].to`
+    # sem nenhuma saída, exatamente como o payload que o apply mandava ao SFMC.
     saidas = [
         {"id": str(a.get("id")), "to": str(a.get("to")), "cond": a.get("cond")}
-        for a in grafo.get("edges") or []
-        if str(a.get("from")) == no_id
+        for a in saidas_do_grafo(grafo).get(no_id, [])
     ]
     chave = external_key(hash_jgc, no_id)
     preview: dict[str, Any] = {

@@ -100,7 +100,7 @@ class RepositorioOsMemoria:
         self._ordem_policy: list[uuid.UUID] = []
         self._eventos: list[EventoDominio] = []
         self._seq_evento = itertools.count(1)
-        self._seq_os: dict[int, itertools.count[int]] = {}
+        self._seq_os: dict[tuple[str | None, int], itertools.count[int]] = {}
 
     # --- OS ---
     def adicionar_os(self, os_: OS) -> None:
@@ -110,8 +110,19 @@ class RepositorioOsMemoria:
         os_ = self._os.get(os_id)
         return os_ if os_ is not None and os_.tenant_id == tenant_id else None
 
-    def obter_os_por_codigo(self, codigo: str) -> OS | None:
-        return next((o for o in self._os.values() if o.codigo == codigo), None)
+    def obter_os_por_codigo(self, codigo: str, tenant_id: str | None = None) -> OS | None:
+        """Achado 22/UAT5: `codigo` é unique POR TENANT (migração 0014) — informe o
+        tenant e a busca fica escopada. `tenant_id=None` = busca GLOBAL, reservada aos
+        chamadores legitimamente cross-tenant (o loader de extracts §8-M10, que confere
+        o tenant da OS logo depois)."""
+        return next(
+            (
+                o
+                for o in self._os.values()
+                if o.codigo == codigo and (tenant_id is None or o.tenant_id == tenant_id)
+            ),
+            None,
+        )
 
     def obter_os_por_id(self, os_id: uuid.UUID) -> OS | None:
         """Sem escopo de tenant — só o link mágico usa (C03: o token é a credencial e
@@ -126,8 +137,10 @@ class RepositorioOsMemoria:
     def salvar_os(self, os_: OS) -> None:
         self._os[os_.id] = os_
 
-    def proximo_sequencial_os(self, ano: int) -> int:
-        return next(self._seq_os.setdefault(ano, itertools.count(1)))
+    def proximo_sequencial_os(self, ano: int, tenant_id: str | None = None) -> int:
+        """Contador POR (tenant, ano) — achado 22/UAT5: o número da OS não pode contar
+        o volume de TODOS os clientes (vazamento de negócio no próprio código)."""
+        return next(self._seq_os.setdefault((tenant_id, ano), itertools.count(1)))
 
     # --- Pendências ---
     def adicionar_pendencia(self, pendencia: Pendencia) -> None:

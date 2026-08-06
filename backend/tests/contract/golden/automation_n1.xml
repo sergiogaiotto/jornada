@@ -1,1 +1,1 @@
-<CreateRequest xmlns="http://exacttarget.com/wsdl/partnerAPI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Objects xsi:type="Automation"><CustomerKey>jrn-db9f9a02c298-n1-agenda</CustomerKey><Name>Agenda OS-2026-0457 (n1)</Name></Objects></CreateRequest>
+<CreateRequest xmlns="http://exacttarget.com/wsdl/partnerAPI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><Objects xsi:type="Automation"><CustomerKey>jrn-78d1823c1a45-n1-agenda</CustomerKey><Name>Agenda OS-2026-0457 (n1)</Name></Objects></CreateRequest>

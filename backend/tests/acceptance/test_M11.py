@@ -388,7 +388,20 @@ def test_M11_A3(client: TestClient, app: FastAPI) -> None:
     assert repo.listar_aprendizados(os_id=os_id, status="sinal")
 
     # ------- calibração: previsto congelado × realizado, backtest OBRIGATÓRIO
-    publicada = client.post("/api/v1/calibracao/publicar", headers=_h())
+    # UAT5 achado 4: o realizado do experimento (40 conversões) é ordens de grandeza
+    # menor que o Previsto congelado (P50 1625) — essa é a forma EXATA do bug da VPS e
+    # agora REPROVA no piso de score (test_uat5_calibracao). Para exercitar o caminho
+    # feliz da calibração, o realizado precisa ser plausível: 1260 conversões ENS a
+    # mais (só `conversion`, nenhum `sent` novo — a apuração acima já é imutável).
+    _semear_telemetria(
+        app,
+        os_id,
+        n_sents=0,
+        conv_tratado=1260,
+        conv_holdout=0,
+        inicio=datetime.now(UTC) - timedelta(days=20),
+    )
+    publicada = client.post("/api/v1/calibracao/publicar", headers=_h("dev-lider"))
     assert publicada.status_code == 201, publicada.text
     calibracao = publicada.json()
     assert calibracao["versao"] == 2  # v1 = PRIORS_DEFAULT em código (priors.py)
@@ -464,8 +477,10 @@ def test_M11_calibracao_exige_dados_e_experimento_inexistente_404(
     client: TestClient, app: FastAPI
 ) -> None:
     """Calibrar sem previsto×realizado no tenant → 409 (backtest não tem insumo);
-    apurar experimento inexistente → 404 sem vazar existência."""
-    sem_dados = client.post("/api/v1/calibracao/publicar", headers=_h())
+    apurar experimento inexistente → 404 sem vazar existência.
+
+    Publicar priors exige `lider` desde o UAT5 achado 4 (priors são do TENANT inteiro)."""
+    sem_dados = client.post("/api/v1/calibracao/publicar", headers=_h("dev-lider"))
     assert sem_dados.status_code == 409
     assert sem_dados.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 

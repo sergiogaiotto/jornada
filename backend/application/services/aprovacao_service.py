@@ -14,6 +14,13 @@ expira, ip/device; ressalvas viram pendências) e a invalidação por variação
 C03 (A5 — emenda 2026-08-06): o fluxo público do link mágico NÃO depende de `X-Tenant`.
 O token é a credencial E o escopo: `_por_token` deriva o tenant do pacote (token →
 aprovação → snapshot → OS). O header segue aceito e, quando presente, é conferido.
+
+A6 (§10.5 — emenda 2026-08-06, UAT #5 achado 2): "criador ≠ aprovador" passa a EXISTIR
+em código. O link mágico nasce ENDEREÇADO — `criar_link_magico` exige `aprovador_email`,
+recusa (409) quando ele é o `criado_por` do snapshot e confere o papel contra o roster
+quando o e-mail é de um usuário do sistema. `decidir` não aceita mais identidade pelo
+corpo: o actor da decisão é o e-mail congelado na emissão (mesma doutrina do C03 — o que
+o cliente declara é asserção a CONFERIR, nunca fonte da verdade).
 """
 
 import hashlib
@@ -24,7 +31,7 @@ from typing import Any
 
 from application.ports.clock import ClockPort
 from application.ports.repositorio_aprovacao import RepositorioAprovacao
-from domain.campanha.erros import CodigoDuplicado, NaoEncontrado
+from domain.campanha.erros import CodigoDuplicado, EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio, Pendencia
 from domain.experimento.modelos import Experimento
 from domain.experimento.poder import ALFA, PODER_ALVO, n_minimo_por_mde
@@ -51,6 +58,48 @@ VERDE, VERMELHO, PENDENTE = "verde", "vermelho", "pendente"
 
 
 # ------------------------------------------------------------- helpers puros/compartilhados
+def _email_normalizado(valor: str | None) -> str:
+    """Forma canônica para COMPARAR e-mails (§10.5/A6): sem espaços de borda, caixa baixa.
+
+    Só normaliza — a validação de formato mora na borda (Pydantic em api/v1/portoes.py)
+    e a de vazio/`@` em `criar_link_magico`, que é a fronteira de segurança de verdade.
+    Sem isso `Analista@Dev.Jornada.Local ` driblaria a segregação por diferença de caixa.
+    """
+    return (valor or "").strip().lower()
+
+
+def _chave_identidade(valor: str | None) -> str:
+    """Chave da PESSOA por trás do e-mail — usada só para SEGREGAR (§10.5/A6).
+
+    `_email_normalizado` casa caixa e espaço, mas não subendereçamento: em qualquer
+    servidor de correio corrente `analista+aprova@dominio` cai na MESMA caixa que
+    `analista@dominio`, então bastaria um `+tag` para o criador emitir o link mágico
+    para si próprio. Aqui o rótulo depois do `+` é descartado antes de comparar.
+
+    Só ALARGA o conjunto barrado — é comparação de segurança, e errar para o lado de
+    recusar custa um link a reemitir. O endereço GRAVADO segue sendo o normalizado, que
+    é o que o destinatário de fato usa; esta chave nunca é persistida nem exibida.
+    """
+    normalizado = _email_normalizado(valor)
+    local, arroba, dominio = normalizado.partition("@")
+    if not arroba:
+        return normalizado
+    return f"{local.partition('+')[0]}@{dominio}"
+
+
+def _papeis_aptos(faixa: dict[str, Any], politica: dict[str, Any]) -> set[str]:
+    """Papéis que PODEM aprovar a faixa (§11.4 `alcadas` + §10.5).
+
+    `alcadas` é uma ESCADA de escalonamento — quem responde pela faixa de R$ 1M também
+    responde pela de R$ 100k, senão o `aprovador` seria barrado numa campanha barata
+    justamente por ter alçada maior. Vale, então, o papel da faixa e o de toda faixa
+    ACIMA dela; `admin` passa sempre, como em `require_role` (§8-M0).
+    """
+    teto = float(faixa["ate"])
+    aptos = {str(f["papel"]) for f in (politica.get("alcadas") or []) if float(f["ate"]) >= teto}
+    return aptos | {"admin"}
+
+
 def _jornada_corrente_simulada(
     repositorio: RepositorioAprovacao, os_id: uuid.UUID
 ) -> JornadaVersao | None:
@@ -508,11 +557,25 @@ class ServicoAprovacao(_Base):
         tenant_id: str,
         snapshot_id: uuid.UUID,
         *,
+        aprovador_email: str,
+        papeis_aprovador: tuple[str, ...] | None = None,
         validade_horas: int = VALIDADE_LINK_HORAS_DEFAULT,
         actor: str,
     ) -> dict[str, Any]:
         """Token ÚNICO retornado uma só vez; persiste apenas o sha256 (`token_hash`).
-        Alçada = papel da faixa da política para o custo congelado no snapshot."""
+        Alçada = papel da faixa da política para o custo congelado no snapshot.
+
+        A6 (§10.5): o link nasce ENDEREÇADO. É AQUI que a segregação de funções é
+        checada, porque aqui existe sessão autenticada e o `criado_por` do snapshot está
+        à mão — no `decidir` só existe o token. Três recusas, todas 409:
+        · `aprovador_email` == `criado_por` do snapshot ⇒ auto-aprovação (o furo do UAT #5);
+        · snapshot sem `criado_por` ⇒ não dá para conferir, então não se emite (falha alto);
+        · e-mail do roster (§8-M0) sem o papel da faixa ⇒ alçada de fachada.
+
+        `papeis_aprovador` vem da borda (api/v1/portoes.py sabe do roster; a camada de
+        aplicação não importa `app.*`). `None` = aprovador de FORA do sistema (o cliente,
+        caso normal do link mágico) — sem informação, não se inventa veredito.
+        """
         snapshot, os_ = self._snapshot_da_os(tenant_id, snapshot_id)
         custo = float(snapshot.conteudo["componentes"]["custo"]["previsto_p50"])
         faixa = faixa_alcada(custo, POLITICA_PUBLICADA["conteudo"])
@@ -521,13 +584,40 @@ class ServicoAprovacao(_Base):
                 f"Custo do snapshot (R$ {custo:.2f}) acima da maior faixa de alçada — "
                 "sem papel apto a aprovar (§11.4)."
             )
+        aprovador = _email_normalizado(aprovador_email)
+        partes = aprovador.split("@")
+        if len(partes) != 2 or not all(partes):
+            raise EstadoInvalido(
+                "`aprovador_email` inválido — informe o e-mail de quem vai aprovar; o link "
+                "mágico é endereçado e o token vale como credencial dele (§10.5)."
+            )
+        criador = _email_normalizado(snapshot.conteudo.get("criado_por"))
+        if not criador:
+            raise EstadoInvalido(
+                "Snapshot sem `criado_por` registrado — sem ele não há como conferir "
+                "criador ≠ aprovador (§10.5). Monte um snapshot novo antes de emitir o link."
+            )
+        # comparação pela CHAVE da pessoa, não pelo texto: `+tag` cai na mesma caixa
+        if _chave_identidade(aprovador) == _chave_identidade(criador):
+            raise EstadoInvalido(
+                f"{aprovador} montou este snapshot e não pode aprová-lo: criador ≠ aprovador "
+                "é checagem server-side (§10.5). Emita o link para outra pessoa."
+            )
+        papel_exigido = str(faixa["papel"])
+        aptos = _papeis_aptos(faixa, POLITICA_PUBLICADA["conteudo"])
+        if papeis_aprovador is not None and not (aptos & set(papeis_aprovador)):
+            raise ForaDeAlcada(
+                f"{aprovador} é usuário do sistema com papéis {sorted(papeis_aprovador)}, e a "
+                f"faixa de custo deste snapshot exige `{papel_exigido}` ou acima "
+                f"({sorted(aptos)} — §11.4/§10.5)."
+            )
         token = secrets.token_urlsafe(32)
         aprovacao = Aprovacao(
             id=uuid.uuid4(),
             snapshot_id=snapshot.id,
             token_hash=_hash_token(token),
             expira_em=self._relogio.agora() + timedelta(hours=validade_horas),
-            alcada=str(faixa["papel"]),
+            alcada=papel_exigido,
         )
         self._repo.adicionar_aprovacao(aprovacao)
         self._evento(
@@ -538,6 +628,11 @@ class ServicoAprovacao(_Base):
                 "snapshot_id": str(snapshot.id),
                 "alcada": aprovacao.alcada,
                 "expira_em": aprovacao.expira_em.isoformat(),
+                # A6: o CARIMBO do destinatário — lido de volta por `_destinatario_do_link`
+                # na hora de decidir. E-mail em `domain_event` é a prática já vigente aqui
+                # (`actor` é e-mail desde o M1); §10.2 proíbe PII de CONTATO em prompt/log/
+                # `telemetry_event`, não a identidade de quem age na trilha de auditoria.
+                "aprovador_email": aprovador,
             },
             actor,
         )
@@ -547,6 +642,7 @@ class ServicoAprovacao(_Base):
             "token": token,  # única vez em claro (A3) — nunca persistido/logado
             "url": f"{self._web_base_url}/aprovacao/{token}",  # rota standalone §12
             "alcada": aprovacao.alcada,
+            "aprovador_email": aprovador,  # a quem o link foi endereçado (§10.5)
             "expira_em": aprovacao.expira_em.isoformat(),
         }
 
@@ -569,6 +665,7 @@ class ServicoAprovacao(_Base):
                 "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
             },
             "alcada": aprovacao.alcada,
+            "aprovador_email": self._destinatario_do_link(os_, aprovacao),  # A6 (§10.5)
             "expira_em": aprovacao.expira_em.isoformat(),
             "resumo": {
                 "custo": componentes["custo"],
@@ -603,7 +700,13 @@ class ServicoAprovacao(_Base):
         ip/device; ressalvas viram pendências automáticas (bloqueantes, origem
         `aprovacao:{id}`). Aprovado* marca a versão do twin como `aprovado`.
 
-        C03: `tenant_id` é OPCIONAL — o tenant sai do próprio token (ver `_por_token`)."""
+        C03: `tenant_id` é OPCIONAL — o tenant sai do próprio token (ver `_por_token`).
+
+        A6 (§10.5): a IDENTIDADE do aprovador NÃO vem do corpo. O actor da decisão é o
+        e-mail carimbado na emissão do link; `decidido_por` sobrevive apenas como asserção
+        a conferir (mesma doutrina que o C03 aplicou ao `X-Tenant`) e divergiu → 409, para
+        que uma tentativa de forjar identidade apareça na cara do chamador em vez de sumir
+        num descarte silencioso."""
         aprovacao, snapshot, os_ = self._por_token(token, tenant_id)
         invalidar_aprovacoes_por_custo(self._repo, os_, self._relogio)
         if aprovacao.invalidada_em is not None:
@@ -614,6 +717,17 @@ class ServicoAprovacao(_Base):
             raise LinkJaUtilizado("Link mágico já utilizado — a decisão é de uso único (§8-M8-A3).")
         if self._relogio.agora() > aprovacao.expira_em:
             raise LinkExpirado("Link mágico expirado — solicite um novo (§8-M8-A3).")
+        aprovador = self._destinatario_do_link(os_, aprovacao)
+        if aprovador is None:
+            raise EstadoInvalido(
+                "Link mágico sem destinatário carimbado (emitido antes da segregação §10.5) — "
+                "gere um link novo nomeando o aprovador."
+            )
+        if decidido_por is not None and _email_normalizado(decidido_por) != aprovador:
+            raise EstadoInvalido(
+                "`decidido_por` diverge do aprovador para quem o link foi emitido — a "
+                "identidade vem do token, nunca do corpo da requisição (§10.5)."
+            )
         if decisao not in DECISOES:
             raise RessalvasObrigatorias(f"Decisão inválida: {decisao!r} (§4.1 `aprovacao`).")
         if decisao == "aprovado_ressalvas" and not [r for r in ressalvas if r.strip()]:
@@ -624,7 +738,7 @@ class ServicoAprovacao(_Base):
             )
 
         agora = self._relogio.agora()
-        actor = decidido_por or "aprovador@link-magico"
+        actor = aprovador  # A6: quem RECEBEU o link, não quem o corpo declarou ser
         pendencias_criadas: list[int] = []
         registro_ressalvas: list[dict[str, Any]] = []
         for texto in [r.strip() for r in ressalvas if r.strip()]:
@@ -662,7 +776,8 @@ class ServicoAprovacao(_Base):
 
         aprovacao.decisao = decisao
         aprovacao.decidido_em = agora
-        aprovacao.decidido_meta = {"ip": ip, "device": device, "decidido_por": decidido_por}
+        # ip/device continuam na trilha (A3); `decidido_por` agora é o e-mail congelado (A6)
+        aprovacao.decidido_meta = {"ip": ip, "device": device, "decidido_por": aprovador}
         aprovacao.ressalvas = registro_ressalvas
         self._repo.salvar_aprovacao(aprovacao)
 
@@ -698,6 +813,26 @@ class ServicoAprovacao(_Base):
         }
 
     # ----------------------------------------------------------------- privados
+    def _destinatario_do_link(self, os_: OS, aprovacao: Aprovacao) -> str | None:
+        """E-mail CONGELADO na emissão do link mágico (A6 §10.5), já normalizado.
+
+        A fonte é o evento `aprovacao.link_criado` — a trilha de auditoria do §2.3, que
+        é append-only e viaja no outbox junto com o resto da governança. O carimbo é um
+        FATO da emissão ("a quem esta credencial foi entregue"), não um estado mutável da
+        linha; e `aprovacao` (§4.1) não tem coluna para ele. A coluna dedicada
+        (`aprovacao.aprovador_email`) é a evolução natural e está proposta na emenda —
+        até lá a leitura é por evento, que já é durável nos dois adapters.
+
+        Link emitido ANTES desta emenda não tem carimbo ⇒ `None`, e `decidir` recusa:
+        um link a regerar custa menos que uma auto-aprovação silenciosa.
+        """
+        alvo = str(aprovacao.id)
+        eventos = self._repo.listar_eventos(os_id=os_.id, tipo="aprovacao.link_criado")
+        for evento in reversed(eventos):  # o mais recente do MESMO link
+            if evento.payload.get("aprovacao_id") == alvo:
+                return _email_normalizado(evento.payload.get("aprovador_email")) or None
+        return None
+
     def _snapshot_da_os(self, tenant_id: str, snapshot_id: uuid.UUID) -> tuple[Snapshot, OS]:
         snapshot = self._repo.obter_snapshot(snapshot_id)
         os_ = self._repo.obter_os(tenant_id, snapshot.os_id) if snapshot is not None else None

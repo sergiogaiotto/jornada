@@ -39,10 +39,13 @@ class ServicoOs:
         codigo: str | None = None,
     ) -> OS:
         agora = self._relogio.agora()
+        # Achado 22/UAT5: sequência e duplicidade são DENTRO do tenant. Globais, o
+        # número da OS contava o volume de todos os clientes e o 409 virava oráculo de
+        # existência (código alheio → "Já existe OS com código ...", enumerável).
         if codigo is None:
-            sequencial = self._repo.proximo_sequencial_os(agora.year)
+            sequencial = self._repo.proximo_sequencial_os(agora.year, tenant_id)
             codigo = f"OS-{agora.year}-{sequencial:04d}"
-        if self._repo.obter_os_por_codigo(codigo) is not None:
+        if self._repo.obter_os_por_codigo(codigo, tenant_id) is not None:
             raise CodigoDuplicado(f"Já existe OS com código {codigo!r} (unique §4.1).")
         os_ = OS(
             id=uuid.uuid4(),

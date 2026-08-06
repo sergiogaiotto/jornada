@@ -275,9 +275,12 @@ _H_EXTERNO = {"User-Agent": "pytest-aprovador-externo"}
 
 
 def _preparar_snapshot(
-    client: TestClient, app: FastAPI
+    client: TestClient, app: FastAPI, *, token: str = "dev-analista"
 ) -> tuple[uuid.UUID, uuid.UUID, dict[str, Any]]:
-    """Jornada simulada + previsto congelado + snapshot criado (pré-requisitos §8-M8)."""
+    """Jornada simulada + previsto congelado + snapshot criado (pré-requisitos §8-M8).
+
+    `token` escolhe QUEM monta o snapshot — é o que vira `criado_por` e, portanto, o lado
+    esquerdo da segregação do A6 (§10.5). Default `dev-analista`, como sempre foi."""
     jornada_id, os_id = _semear_jornada(client, app)
     assert (
         client.post(f"/api/v1/jornadas/{jornada_id}/simular", json=PARAMS, headers=_h()).status_code
@@ -287,7 +290,7 @@ def _preparar_snapshot(
         client.post(f"/api/v1/jornadas/{jornada_id}/congelar-previsto", headers=_h()).status_code
         == 200
     )
-    resposta = client.post("/api/v1/snapshots", json={"os_id": str(os_id)}, headers=_h())
+    resposta = client.post("/api/v1/snapshots", json={"os_id": str(os_id)}, headers=_h(token))
     assert resposta.status_code == 201, resposta.text
     return jornada_id, os_id, resposta.json()
 
@@ -329,7 +332,11 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
     jornada_id, os_id, snap = _preparar_snapshot(client, app)
     assert len(snap["hash"]) == 64  # hash composto sha256 (§4.1)
 
-    link = client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h())
+    link = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador@claro.com.br"},  # A6: link nasce endereçado
+        headers=_h(),
+    )
     assert link.status_code == 201, link.text
     corpo_link = link.json()
     token = corpo_link["token"]
@@ -376,7 +383,11 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
     assert repetida.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 
     # expiração: segundo link, vencido → 410 Gone no GET e no decidir
-    link2 = client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h()).json()
+    link2 = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador@claro.com.br"},
+        headers=_h(),
+    ).json()
     aprovacao2 = next(
         a
         for a in repo.listar_aprovacoes(uuid.UUID(snap["id"]))
@@ -402,7 +413,11 @@ def test_M8_A4(client: TestClient, app: FastAPI) -> None:
     """A4: variação de custo >10% APÓS a aprovação invalida a aprovação — snapshot
     novo obrigatório (colunas `invalidada_*`, migração 0006)."""
     _, os_id, snap = _preparar_snapshot(client, app)
-    token = client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h()).json()["token"]
+    token = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador@claro.com.br"},
+        headers=_h(),
+    ).json()["token"]
     assert (
         client.post(
             f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_PUBLICO
@@ -445,7 +460,11 @@ def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> Non
     fechado: header anunciando OUTRO tenant → 404 sem vazar a existência do link, e o
     resto da API v1 segue exigindo o header (§8-M0-A2)."""
     jornada_id, os_id, snap = _preparar_snapshot(client, app)
-    token = client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h()).json()["token"]
+    token = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador.externo@claro.com.br"},
+        headers=_h(),
+    ).json()["token"]
 
     # 1) página pública SEM X-Tenant
     pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_EXTERNO)
@@ -481,6 +500,143 @@ def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> Non
     sem_tenant = client.get("/api/v1/os", headers={"Authorization": "Bearer dev-analista"})
     assert sem_tenant.status_code == 400
     assert client.post(f"/api/v1/snapshots/{snap['id']}/link-magico").status_code == 400
+
+
+def test_M8_A6_criador_nao_aprova(client: TestClient, app: FastAPI) -> None:
+    """A6 (§10.5 — UAT #5 achado 2): criador ≠ aprovador, checado SERVER-SIDE.
+
+    O buraco provado na VPS: a mesma pessoa montava o snapshot, gerava o link mágico
+    para si própria e decidia mandando `decidido_por` no corpo — endpoint público, string
+    livre, ninguém lia o `criado_por` do snapshot. A correção carimba o DESTINATÁRIO na
+    EMISSÃO (o token é a credencial, e nasce endereçado): a identidade do aprovador
+    passa a vir do link, nunca do corpo do POST.
+    """
+    repo = app.state.repositorio_os
+    jornada_id, os_id, snap = _preparar_snapshot(client, app)
+    criador = "analista@dev.jornada.local"  # dono do Bearer `dev-analista` de `_h()`
+    assert repo.obter_snapshot(uuid.UUID(snap["id"])).conteudo["criado_por"] == criador
+
+    # 1) AUTO-APROVAÇÃO: o cenário exato da VPS morre na emissão (caixa/espaços normalizados)
+    auto = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "  Analista@DEV.Jornada.Local  "},
+        headers=_h(),
+    )
+    assert auto.status_code == 409, auto.text
+    assert auto.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    # a mensagem PRECISA ser a da segregação: o `analista` também não tem a alçada da
+    # faixa, e sem checar o texto este 409 passaria mesmo com a guarda do criador morta
+    assert "não pode aprová-lo" in auto.json()["detail"]
+    assert not repo.listar_aprovacoes(uuid.UUID(snap["id"]))  # nenhum link foi emitido
+
+    # 2) destinatário é OBRIGATÓRIO — não há mais link anônimo
+    assert (
+        client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h()).status_code == 422
+    )
+
+    # 3) roster (§8-M0): usuário do sistema sem o papel da faixa de alçada → 409
+    sem_papel = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "solicitante@dev.jornada.local"},
+        headers=_h(),
+    )
+    assert sem_papel.status_code == 409, sem_papel.text
+    assert "lider" in sem_papel.json()["detail"]
+
+    # 3a) o roster do PORTAL (§8-M3) conta igual: `portal@` é solicitante e não aprova.
+    # Varrer só `DEV_TOKENS` fazia este e-mail passar por "de fora" e pular a alçada.
+    portal = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "portal@dev.jornada.local"},
+        headers=_h(),
+    )
+    assert portal.status_code == 409, portal.text
+    assert "solicitante" in portal.json()["detail"]
+
+    # 3b) alçada é ESCADA: papel de faixa superior (`aprovador`, até R$1M) cobre a de R$100k
+    acima = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador@dev.jornada.local"},
+        headers=_h(),
+    )
+    assert acima.status_code == 201, acima.text
+
+    # 4) aprovação legítima por OUTRA pessoa segue funcionando
+    link = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "Aprovador.Externo@Claro.com.BR"},
+        headers=_h(),
+    )
+    assert link.status_code == 201, link.text
+    assert link.json()["aprovador_email"] == "aprovador.externo@claro.com.br"
+    token = link.json()["token"]
+    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_EXTERNO)
+    assert pagina.status_code == 200, pagina.text
+    assert pagina.json()["aprovador_email"] == "aprovador.externo@claro.com.br"
+
+    # 5) forjar `decidido_por` no corpo falha ALTO e não decide nada
+    forjada = client.post(
+        f"/api/v1/aprovacao/{token}/decidir",
+        json={"decisao": "aprovado", "decidido_por": criador},
+        headers=_H_EXTERNO,
+    )
+    assert forjada.status_code == 409, forjada.text
+    assert forjada.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert repo.obter_jornada(jornada_id).estado != "aprovado"  # link continua intacto
+    assert not repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")
+
+    # 6) sem identidade no corpo: o registrado é o e-mail congelado na emissão
+    ok = client.post(
+        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_EXTERNO
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["decidido_meta"]["decidido_por"] == "aprovador.externo@claro.com.br"
+    aprovado = repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")[-1]
+    assert aprovado.actor == "aprovador.externo@claro.com.br"  # trilha real, não declarada
+
+
+def test_M8_A6_evasoes_da_segregacao(client: TestClient, app: FastAPI) -> None:
+    """A6 (§10.5): a guarda criador ≠ aprovador SOZINHA, e o subendereçamento.
+
+    Aqui quem monta o snapshot é o `lider` — que TEM a alçada da faixa. Sem isso a
+    recusa poderia vir da checagem de papel e a segregação passaria por testada sem
+    nunca ter sido exercida (foi o que aconteceu no primeiro corte deste aceite).
+    """
+    repo = app.state.repositorio_os
+    _, _, snap = _preparar_snapshot(client, app, token="dev-lider")
+    assert repo.obter_snapshot(uuid.UUID(snap["id"])).conteudo["criado_por"] == (
+        "lider@dev.jornada.local"
+    )
+
+    # 1) o criador tem o papel apto e AINDA ASSIM não emite o link para si próprio:
+    # só a segregação pode recusar isto
+    auto = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "lider@dev.jornada.local"},
+        headers=_h("dev-lider"),
+    )
+    assert auto.status_code == 409, auto.text
+    assert "não pode aprová-lo" in auto.json()["detail"]
+
+    # 2) subendereçamento: `lider+aprova@` é a MESMA caixa postal do criador
+    plus = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "Lider+aprova@Dev.Jornada.Local"},
+        headers=_h("dev-lider"),
+    )
+    assert plus.status_code == 409, plus.text
+    assert "não pode aprová-lo" in plus.json()["detail"]
+    assert not repo.listar_aprovacoes(uuid.UUID(snap["id"]))
+
+    # 3) o `+tag` de OUTRA pessoa continua válido — a chave só colapsa a mesma caixa
+    outro = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador+jornada@claro.com.br"},
+        headers=_h("dev-lider"),
+    )
+    assert outro.status_code == 201, outro.text
+    # o endereço GRAVADO preserva o rótulo (é o que o destinatário usa de verdade)
+    assert outro.json()["aprovador_email"] == "aprovador+jornada@claro.com.br"
 
 
 # ------------------------------------------------- Contrato das demais rotas §8-M8 (T9)

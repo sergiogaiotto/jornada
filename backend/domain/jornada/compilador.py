@@ -13,7 +13,9 @@ CÓDIGO PURO, zero I/O e **LLM PROIBIDO neste caminho** (§5.4): mesmo JGC + mes
 - **eventDefinition** — por `entrySource`; `eventDefinitionKey` = externalKey §5.4.1.
 - **asset** — por `channel.*`; `customerKey` = externalKey; assetType por canal.
 - **journey (interaction)** — um por grafo; `key` = `jrn-{hash[0:12]}`; triggers dos
-  entrySources; activities = demais nós com `outcomes` das arestas.
+  entrySources; activities = demais nós com `outcomes` vindos da adjacência ÚNICA
+  (`domain/jornada/adjacencia.py` — arestas **e** regras de `decisionSplit` que
+  carregam `to` direto; emenda D07 estendida ao compilador no UAT #5).
 - **automation** — por `entrySource` com `modo=scheduled` (agenda do disparo).
 
 Nó `exception` (§5.2) NÃO compila: `GrafoNaoCompilavel` (bloqueia publish).
@@ -24,6 +26,7 @@ cliente.py) — corpo do CreateRequest sem envelope/token (golden `*.xml`).
 from typing import Any
 from xml.sax.saxutils import escape
 
+from domain.jornada.adjacencia import saidas_do_grafo
 from domain.jornada.erros import GrafoNaoCompilavel
 from domain.jornada.sfmc_preview import COMPILA_PARA, external_key
 
@@ -73,7 +76,11 @@ def _recurso(tipo: str, chave: str, no_id: str, payload: dict[str, Any]) -> dict
 def compilar_recursos(grafo: dict[str, Any], hash_jgc: str) -> list[dict[str, Any]]:
     """Recursos SFMC do grafo na ordem de dependência §5.4.1 — determinístico."""
     nodes: list[dict[str, Any]] = list(grafo.get("nodes") or [])
-    edges: list[dict[str, Any]] = list(grafo.get("edges") or [])
+    # Adjacência pela fonte ÚNICA (D07 · UAT #5): a cópia inline daqui iterava só
+    # `edges` e todo `decisionSplit` roteado por `data.regras[].to` saía sem NENHUMA
+    # saída — o JB importava o split com os nós a jusante órfãos, e o drift comparava
+    # contra esse payload já errado.
+    saidas = saidas_do_grafo(grafo)
     os_codigo = str((grafo.get("meta") or {}).get("osCodigo", ""))
 
     excecoes = [str(n["id"]) for n in nodes if n.get("type") == "exception"]
@@ -157,8 +164,7 @@ def compilar_recursos(grafo: dict[str, Any], hash_jgc: str) -> list[dict[str, An
                         "next": external_key(hash_jgc, str(a.get("to"))),
                         "cond": a.get("cond"),
                     }
-                    for a in edges
-                    if str(a.get("from")) == no_id
+                    for a in saidas.get(no_id, [])
                 ],
             }
         )

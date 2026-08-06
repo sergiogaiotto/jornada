@@ -77,6 +77,8 @@ export function Portoes() {
   const [mde, setMde] = useState(1.8);
   const [janela, setJanela] = useState(15);
   const [holdout, setHoldout] = useState(10);
+  // A6 (§10.5): o link mágico nasce ENDEREÇADO — sem destinatário não há emissão.
+  const [aprovadorEmail, setAprovadorEmail] = useState("");
 
   const portoesQ = useQuery({
     queryKey: ["os", osId, "portoes"],
@@ -113,7 +115,9 @@ export function Portoes() {
 
   const criarLink = useMutation({
     mutationFn: (snapshotId: string) =>
-      post<LinkMagicoOut>(`/snapshots/${snapshotId}/link-magico`),
+      post<LinkMagicoOut>(`/snapshots/${snapshotId}/link-magico`, {
+        aprovador_email: aprovadorEmail.trim().toLowerCase(),
+      }),
     onSuccess: (l) => {
       setLinkMagico(osId, l);
       recarregar();
@@ -133,7 +137,8 @@ export function Portoes() {
       <div className="mfield">
         <span className="text-[12px]">
           Criador (R) · aprovador interno (alçada) · aprovador final (cliente, link
-          mágico) — <b>papéis distintos obrigatórios</b>, checados server-side (§10.5).
+          mágico) — <b>papéis distintos obrigatórios</b>. O servidor carimba o
+          destinatário na emissão e recusa (409) quem montou o snapshot (§10.5).
         </span>
       </div>
 
@@ -141,7 +146,8 @@ export function Portoes() {
       {linkMagico ? (
         <div className="mfield block">
           <span className="block text-[11.5px] text-slatex">
-            Alçada <b>{linkMagico.alcada}</b> · expira{" "}
+            Alçada <b>{linkMagico.alcada}</b> · endereçado a{" "}
+            <b>{linkMagico.aprovador_email}</b> · expira{" "}
             {new Date(linkMagico.expira_em).toLocaleString("pt-BR")}
           </span>
           <span className="mt-1 block break-all rounded-md bg-surface2 px-2 py-1 font-mono text-[10.5px] text-steel">
@@ -351,7 +357,7 @@ export function Portoes() {
                   📦 Aprovação do cliente (snapshot imutável){" "}
                   <span className={CHIP[aprovacao.estado]}>{ESTADO_ROTULO[aprovacao.estado]}</span>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
@@ -361,11 +367,22 @@ export function Portoes() {
                   >
                     {criarSnapshot.isPending ? "Montando…" : "Montar snapshot"}
                   </button>
+                  {/* A6 (§10.5): o destinatário é carimbado na EMISSÃO — quem montou o
+                      snapshot não pode ser o aprovador (o servidor recusa com 409). */}
+                  <input
+                    type="email"
+                    value={aprovadorEmail}
+                    onChange={(e) => setAprovadorEmail(e.target.value)}
+                    placeholder="e-mail de quem vai aprovar"
+                    title="O link vale como credencial desta pessoa — criador ≠ aprovador (§10.5)"
+                    className="w-[210px] rounded-md border border-line2 px-2 py-1 text-[11.5px] outline-none focus:border-blue"
+                  />
                   <button
                     type="button"
                     className="mbtn !px-2.5 !py-1 !text-[11px]"
                     disabled={
                       criarLink.isPending ||
+                      aprovadorEmail.trim().length === 0 ||
                       (snapshot?.id ?? aprovacao["snapshot_id"]) == null
                     }
                     onClick={() =>
@@ -401,8 +418,9 @@ export function Portoes() {
                     /aprovacao/{linkMagico.token.slice(0, 18)}…
                   </Link>
                   <span className="text-[11px] text-faint">
-                    uso único · expira {new Date(linkMagico.expira_em).toLocaleString("pt-BR")} ·
-                    registra ip/device · SLA pausado com o cliente
+                    endereçado a <b>{linkMagico.aprovador_email}</b> · uso único · expira{" "}
+                    {new Date(linkMagico.expira_em).toLocaleString("pt-BR")} · registra
+                    ip/device · SLA pausado com o cliente
                   </span>
                 </div>
               )}

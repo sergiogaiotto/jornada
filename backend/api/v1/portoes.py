@@ -5,10 +5,11 @@ Portões: `GET /os/{id}/portoes` (certificado, experimento, custo/alçada, gover
 stub) · `POST /experimentos` (pré-registro + poder/n mínimo) ·
 `POST /os/{id}/custo/enviar-alcada` (faixas `alcadas` da política §11.4).
 Aprovação: `POST /snapshots` (hash composto §4.1) · `POST /snapshots/{id}/link-magico`
-· `GET /aprovacao/{token}` (página standalone — o TOKEN é a credencial, sem Bearer e
-sem X-Tenant: o tenant é derivado do token no servidor, emenda C03 §8-M8-A5) ·
+(A6: exige `aprovador_email` — o link nasce endereçado e criador ≠ aprovador é checado
+aqui, §10.5) · `GET /aprovacao/{token}` (página standalone — o TOKEN é a credencial, sem
+Bearer e sem X-Tenant: o tenant é derivado do token no servidor, emenda C03 §8-M8-A5) ·
 `POST /aprovacao/{token}/decidir` (A3: uso único, expira, ip/device; ressalvas →
-pendências. A4: custo >10% pós-aprovação invalida).
+pendências. A4: custo >10% pós-aprovação invalida. A6: identidade vem do token).
 
 ZERO LLM em todo o caminho (§10.6). Erros: mapa RFC-7807 do M1 + tradução própria:
 LinkExpirado→410 Gone · HoldoutAbaixoDaPolitica/RessalvasObrigatorias→422.
@@ -21,10 +22,11 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from adapters.relogio import RelogioSistema
 from api.v1.os_governanca import Escritor, Tenant, _problema_de_dominio, get_repositorio_os
+from app.auth import DEV_TOKENS, PORTAL_TOKENS
 from app.config import get_settings
 from app.errors import problem_response
 from application.ports.repositorio_aprovacao import RepositorioAprovacao
@@ -139,13 +141,30 @@ class SnapshotOut(BaseModel):
 
 
 class LinkMagicoCriar(BaseModel):
+    """A6 (§10.5): `aprovador_email` é OBRIGATÓRIO — o link mágico nasce endereçado.
+
+    O `pattern` só barra lixo óbvio na borda (422); a regra que importa — criador ≠
+    aprovador e papel vs. alçada — é do serviço, que é onde ela é inescapável."""
+
+    aprovador_email: Annotated[
+        str,
+        StringConstraints(  # normaliza ANTES do pattern (caixa/espaços não driblam §10.5)
+            strip_whitespace=True,
+            to_lower=True,
+            min_length=5,
+            max_length=254,
+            pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        ),
+    ]
     validade_horas: int = Field(default=VALIDADE_LINK_HORAS_DEFAULT, ge=1, le=720)
 
 
 class Decisao(BaseModel):
     decisao: Literal["aprovado", "aprovado_ressalvas", "reprovado"]
     ressalvas: list[str] = Field(default_factory=list)  # exigidas em aprovado_ressalvas (A3)
-    decidido_por: str | None = None  # identificação declarada do aprovador (meta)
+    # A6 (§10.5): ASSERÇÃO a conferir contra o e-mail congelado no link, nunca a fonte da
+    # identidade — divergiu, 409. Mantido por compatibilidade com clientes já publicados.
+    decidido_por: str | None = None
 
 
 # ---------------------------------------------------------------- Rotas · Portões T9
@@ -205,19 +224,42 @@ async def criar_snapshot(
     return SnapshotOut.model_validate(snapshot)
 
 
+def _papeis_no_roster(email: str) -> tuple[str, ...] | None:
+    """Papéis do e-mail QUANDO ele é um usuário do sistema (roster do §8-M0).
+
+    Fica na borda porque o roster mora em `app.auth` e a camada de aplicação não importa
+    `app.*` (§2.1). `None` = e-mail fora do roster — o caso normal do link mágico, em que
+    o aprovador é o cliente; sem informação, o serviço não inventa veredito de alçada.
+    Dev usa os tokens estáticos; quando o IdP entrar, só esta função muda.
+
+    Varre os DOIS rosters: `DEV_TOKENS` (login pleno) e `PORTAL_TOKENS` (§8-M3). Olhar só
+    o primeiro deixava o solicitante do portal passar por "e-mail de fora" e escapar da
+    checagem de alçada — justamente o papel que o §10.5 quer barrar."""
+    alvo = email.strip().lower()
+    roster = (*DEV_TOKENS.values(), *PORTAL_TOKENS.values())
+    return next((u.papeis for u in roster if u.email.lower() == alvo), None)
+
+
 @router_aprovacao.post("/snapshots/{snapshot_id}/link-magico", status_code=201)
 async def criar_link_magico(
     snapshot_id: uuid.UUID,
+    payload: LinkMagicoCriar,
     tenant: Tenant,
     servico: Aprovacoes,
     user: Escritor,
-    payload: LinkMagicoCriar | None = None,
 ) -> dict[str, Any]:
     """Link mágico (T10): token único retornado UMA vez (persistido só o sha256),
-    expiração e alçada da faixa da política — URL standalone §12 `/aprovacao/:token`."""
-    parametros = payload or LinkMagicoCriar()
+    expiração e alçada da faixa da política — URL standalone §12 `/aprovacao/:token`.
+
+    A6 (§10.5): o corpo passa a exigir `aprovador_email` (o destinatário é carimbado na
+    emissão) — criador ≠ aprovador → 409, papel fora da alçada → 409."""
     return servico.criar_link_magico(
-        tenant, snapshot_id, validade_horas=parametros.validade_horas, actor=user.email
+        tenant,
+        snapshot_id,
+        aprovador_email=payload.aprovador_email,
+        papeis_aprovador=_papeis_no_roster(payload.aprovador_email),
+        validade_horas=payload.validade_horas,
+        actor=user.email,
     )
 
 
@@ -237,7 +279,8 @@ async def decidir_aprovacao(
 ) -> dict[str, Any]:
     """A3: decisão de uso ÚNICO com registro de ip/device; ressalvas viram pendências
     automáticas bloqueantes. A4: aprovação invalidada por custo → 409 (snapshot novo).
-    C03: sem X-Tenant — o tenant vem do token."""
+    C03: sem X-Tenant — o tenant vem do token. A6: a identidade do aprovador vem do
+    link (§10.5); `decidido_por` divergente → 409."""
     return servico.decidir(
         token,
         tenant_id=tenant,

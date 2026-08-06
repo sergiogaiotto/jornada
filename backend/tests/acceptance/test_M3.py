@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from adapters.llm.fake import LLMFake
 from app.auth import PORTAL_TOKENS
 from app.errors import PROBLEM_CONTENT_TYPE
+from tests.conftest import TENANT_ALHEIO
 
 TENANT = "torre-movel"
 
@@ -285,19 +286,30 @@ def test_M3_A4(client: TestClient, app: FastAPI) -> None:
     assert ok.json()["conteudo"]["verba"]["inferido"] is True
 
 
-def test_M3_B1(client: TestClient) -> None:
+def test_M3_B1(client: TestClient, tokens_outro_tenant: dict[str, str]) -> None:
     """B1 (CRUD): GET /pedidos lista o resumo do tenant (id, solicitante, completude,
     faltantes, estado, os_id, updated_at — SEM conteudo), isolado por tenant e com
     login pleno; GET /pedidos/{id} devolve o detalhe completo."""
     parcial = _criar_pedido(client, CONTEUDO_PARCIAL)
     completo = _criar_pedido(client, CONTEUDO_COMPLETO)
-    # pedido de OUTRO tenant não pode aparecer na lista de torre-movel
+    # pedido de OUTRO tenant não pode aparecer na lista de torre-movel — criado pelo
+    # PORTADOR daquele tenant (achado 5/UAT5: o X-Tenant é conferido contra a
+    # credencial, então forjar o header não cria mais nada em tenant alheio)
     outro_tenant = client.post(
         "/api/v1/pedidos",
         json={"solicitante": {"nome": "Beto"}, "conteudo": {}},
-        headers={"X-Tenant": "outra-torre", "Authorization": "Bearer portal-dev"},
+        headers={
+            "X-Tenant": TENANT_ALHEIO,
+            "Authorization": f"Bearer {tokens_outro_tenant['portal']}",
+        },
     )
     assert outro_tenant.status_code == 201
+    forjado = client.post(
+        "/api/v1/pedidos",
+        json={"solicitante": {"nome": "Beto"}, "conteudo": {}},
+        headers={"X-Tenant": TENANT_ALHEIO, "Authorization": "Bearer portal-dev"},
+    )
+    assert forjado.status_code == 403, forjado.text
 
     lista = client.get("/api/v1/pedidos", headers=_h("dev-analista"))
     assert lista.status_code == 200, lista.text

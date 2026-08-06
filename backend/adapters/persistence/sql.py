@@ -725,8 +725,15 @@ class RepositorioSql(RepositorioOsMemoria):
         )
         return _linha_para_os(linha) if linha is not None else None
 
-    def obter_os_por_codigo(self, codigo: str) -> OS | None:
-        linha = self._primeira(select(tabela_os).where(tabela_os.c.codigo == codigo))
+    def obter_os_por_codigo(self, codigo: str, tenant_id: str | None = None) -> OS | None:
+        """Achado 22/UAT5: `codigo` é unique POR TENANT (migração 0014) — informe o
+        tenant e a busca fica escopada. `tenant_id=None` = busca GLOBAL, reservada aos
+        chamadores legitimamente cross-tenant (o loader de extracts §8-M10, que confere
+        o tenant da OS logo depois)."""
+        consulta = select(tabela_os).where(tabela_os.c.codigo == codigo)
+        if tenant_id is not None:
+            consulta = consulta.where(tabela_os.c.tenant_id == tenant_id)
+        linha = self._primeira(consulta)
         return _linha_para_os(linha) if linha is not None else None
 
     def obter_os_por_id(self, os_id: uuid.UUID) -> OS | None:
@@ -748,10 +755,15 @@ class RepositorioSql(RepositorioOsMemoria):
     def salvar_os(self, os_: OS) -> None:
         self.adicionar_os(os_)  # upsert por id — mesma semântica do dict em memória
 
-    def proximo_sequencial_os(self, ano: int) -> int:
+    def proximo_sequencial_os(self, ano: int, tenant_id: str | None = None) -> int:
         """max+1 dos códigos `OS-{ano}-NNNN` existentes — sobrevive a restart (o
-        contador em memória zerava; CodigoDuplicado §8-M1 segue protegendo)."""
+        contador em memória zerava; CodigoDuplicado §8-M1 segue protegendo).
+
+        Achado 22/UAT5: o max+1 é POR TENANT quando o tenant é informado — o número da
+        OS não pode contar o volume de TODOS os clientes (vazamento de negócio)."""
         consulta = select(tabela_os.c.codigo).where(tabela_os.c.codigo.like(f"OS-{ano}-%"))
+        if tenant_id is not None:
+            consulta = consulta.where(tabela_os.c.tenant_id == tenant_id)
         padrao = re.compile(rf"OS-{ano}-(\d+)$")
         sequenciais = [
             int(m.group(1))

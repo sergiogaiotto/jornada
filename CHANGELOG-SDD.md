@@ -3,6 +3,89 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — UAT #5 onda 1 · Os cinco achados críticos (E01–E05) + smoke funcional
+Achados do `docs/UAT5-2026-08-06-cacada.md`. Cada correção foi escrita por um agente e depois
+**reprovada ou aprovada por um auditor cético** que reproduziu o ataque original, tentou variações
+novas e verificou a inversão de cada teste (revertendo o fix para confirmar que o teste morre).
+Quatro dos cinco auditores acharam evasão residual e a fecharam; um **reprovou** a entrega.
+
+### E01 · Guard das 7 listas: de substring para análise estrutural (§8-M5)
+O Guard perguntava apenas se as sete palavras apareciam no texto depois do primeiro `WHERE`
+(`agents/guard/elegibilidade.py`). Aprovava, entre outros: `EXISTS` no lugar de `NOT EXISTS` (SQL
+que seleciona **exatamente** os suprimidos), `WHERE (1=1 OR blacklist=1 OR …)`, as sete listas
+dentro de um comentário `--`, e dentro de um literal de string. Ou seja: certificado de
+elegibilidade válido e pré-voo `pass` para uma campanha que mira Procon/blacklist/não-perturbe.
+Quem escreve esse SQL é o LLM, e o pré-voo não era segunda barreira (chamava a mesma função).
+Agora o SQL é higienizado (comentários e literais removidos) antes da varredura, supressão sob `OR`
+de topo é recusada, e `EXISTS` não-negado sobre tabela de supressão é reprovado com motivo
+nomeado. O auditor encontrou **mais 4 evasões** que sobreviviam à primeira correção e as fechou.
+
+### E02 · Segregação criador ≠ aprovador (§10.5, aceite novo M8-A6) — REPROVADO na 1ª volta
+`criado_por` era gravado no snapshot e **nunca lido**; `decidido_por` vinha do corpo, texto livre,
+num endpoint público. A mesma pessoa criava o pacote, emitia o link mágico para si e aprovava,
+destravando o apply em produção com trilha dizendo `alcada: lider`. Agora `criar_link_magico`
+exige `aprovador_email` e recusa (409) quando bate com o criador; `decidir` **ignora** o corpo e usa
+o e-mail congelado na emissão. O auditor reprovou a primeira entrega por dois motivos concretos: o
+aceite passava com a guarda inteira deletada (ele media junto a checagem de alçada), e a
+comparação era burlável por subendereçamento (`lider+aprova@…`) e pelo roster do portal, que
+pulava a checagem de alçada. Corrigidos, com aceite que isola só a segregação.
+**Segue aberto (onda de autenticação):** o `201` da emissão devolve o token em claro para quem
+emite, então o criador continua de posse da credencial do aprovador. O fecho correto é a aprovação
+exigir sessão autenticada — o link mágico anônimo existia porque não havia login real.
+
+### E03 · Calibração: backtest que pode reprovar, e rollback (§8-M11)
+`POST /calibracao/publicar {}` escalava os priors **vigentes** e publicava; repetindo, compunha —
+na VPS três chamadas levaram `email.conversao` de 0,032 a 0,000125 (256× abaixo), deixando todo
+Ensaio Geral vermelho, sem rollback. O backtest dito obrigatório **não conseguia reprovar**: os
+casos usavam o P50 congelado no snapshot, imune aos priors novos, então "melhorou" era garantido
+por aritmética (publicou com score 0,0 e MAPE de 1804%). Também usava régua diferente da do monitor
+M10, apesar do docstring afirmar o contrário. Agora: mesmo recorte do monitor, re-previsão com os
+priors vigentes (a segunda publicação idêntica reprova), piso de melhora/score, 409 idempotente,
+`GET /calibracao` e rollback para qualquer versão publicada — inclusive os `PRIORS_DEFAULT`.
+
+### E04 · Tenant vem do token; `X-Tenant` é asserção conferida (§8, §10.3)
+O middleware usava o header como fonte da verdade, embora o usuário autenticado já carregue
+`tenant_id`. Header divergente do token agora é recusado. As rotas públicas do link mágico (emenda
+C03) seguem intactas — lá o tenant vem do token do pacote. O auditor escreveu 23 variações e achou
+uma que passava: `Authorization: bearer …` em caixa baixa autenticava na rota (o `HTTPBearer`
+compara em minúsculas) enquanto o middleware antigo não conferia nada — virou aceite parametrizado.
+Junto (achado 22): sequência de código da OS e checagem de duplicidade passam a ser **por tenant**
+(migração `0014`, unique `(tenant_id, codigo)`) — antes a numeração vazava o volume de todos os
+clientes e o 409 de código duplicado servia de oráculo de existência entre tenants.
+
+### E05 · Fix do D07 completado no compilador/export/pré-voo/drift (§5.4)
+O D07 (UAT #4) criou `domain/jornada/adjacencia.py` como fonte única e converteu validador,
+taxímetro e motor — e **deixou a quarta cópia** em `compilador.py`, herdada por `exportacao`,
+`sfmc_preview`, plan/apply e drift. Todo `decisionSplit` roteado por `regras[].to` saía do
+compilador **sem nenhuma saída**: na jornada aprovada da demo, `outcomes: 0` no `n13`, com push,
+SMS, WhatsApp e goal órfãos no Journey Builder — cerca de R$ 3.810 dos R$ 4.246 projetados que o
+taxímetro cobra e o canvas desenha. O golden do M9-A2 não tinha nenhum `decisionSplit`, por isso o
+CI ficava verde. Convertido, golden regenerado com as duas formas de roteamento, e o auditor
+mediu o que o relatório só inferia: sem o fix o drift diz `em_sincronia` com a jornada quebrada e o
+plan diz `manter` (o apply nunca reconvergiria).
+
+### Smoke FUNCIONAL pós-deploy (§13)
+O smoke existente provava só a **versão** no ar (emenda A22, que pegou o deploy-fantasma) — não que
+a aplicação funcionasse. Foi assim que o 500 do simulador viveu em produção com o deploy verde.
+`scripts/smoke_funcional.py` agora exercita o caminho crítico contra a VPS recém-deployada: cria OS
+marcada `SMOKE-<sha>`, monta um JGC com `decisionSplit` roteado só por `regras[].to` (o caso do
+E05), simula, exporta JSON e XML conferindo que nenhum split sai com `outcomes` vazio, e faz um
+caso negativo (`wait.duracao` fora do ISO → 422 com `regra=duracao_invalida`, provando que a
+validação está viva). Qualquer passo falhando **derruba o deploy**.
+
+### Achado novo, para a próxima onda
+O auditor do E05 encontrou um defeito **da própria emenda D07**: um `decisionSplit` roteado ao mesmo
+tempo por `regras[].to` e por aresta `cond` produz saída **duplicada** — o taxímetro contava +33% de
+volume desde o UAT #4, e agora o export/apply/drift carregam a duplicata (dois braços idênticos no
+JB). Latente (nenhum grafo do repo dispara), com gatilho natural num grafo do Flow. A correção certa
+é o §5.3 recusar roteamento ambíguo (`roteamento_ambiguo`), não deduplicar mudo na adjacência.
+
+### E02 · Seed demo com identidade real
+`demo_seeds.py` semeava `criado_por: "analista@claro.com.br"`, endereço que não corresponde a
+nenhuma identidade do roster — com ele a comparação nunca casava e a segregação era **vazia
+justamente na OS da VPS**. Passa a semear `analista@dev.jornada.local`. O campo mora em `conteudo`,
+não em `componentes`: `hash_composto` e o `snapshot.id` uuid5 seguem idênticos (§11.4).
+
 ## 2026-08-06 — D07 · Adjacência do JGC vira fonte única (§5.3) — HTTP 500 no simulador
 Achado **D07** do UAT #4 (`docs/UAT4-VPS-2026-08-06-twin.md`, UC12): `POST /jornadas/{id}/simular`
 respondia **HTTP 500** (`KeyError: 'to'` em `domain/simulacao/motor.py:79`) para um grafo que o

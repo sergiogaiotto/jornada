@@ -21,7 +21,13 @@ from domain.jornada.compilador import TIPOS_SOAP, compilar_recursos, corpo_soap_
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
 
 # JGC §5 de referência (OS demo §11.4): entrada AGENDADA (gera Automation §5.4.1) →
-# randomSplit 90/10 (holdout) → wait → e-mail → goal; braço holdout → exit.
+# randomSplit 90/10 (holdout) → wait → e-mail → decisionSplit → goal; holdout → exit.
+#
+# Os DOIS `decisionSplit` são deliberados (achado 3 do UAT #5): até aqui o JGC de
+# referência não tinha NENHUM, e por isso o CI ficou verde enquanto o compilador
+# descartava o roteamento por `data.regras[].to` — n7 cobre essa forma e n8 cobre a
+# forma clássica (regra sem `to`, destino na aresta `cond`). Nenhum dos dois cria
+# recurso SFMC novo (só activities no journey), então as contagens do M9-A2 seguem.
 JGC_GOLDEN: dict[str, Any] = {
     "jgcVersion": "1.0",
     "meta": {
@@ -54,13 +60,30 @@ JGC_GOLDEN: dict[str, Any] = {
         },
         {"id": "n5", "type": "goal", "data": {"metrica": "conversion", "deRef": "DE_457_conv"}},
         {"id": "n6", "type": "exit", "data": {"motivo": "holdout"}},
+        {
+            "id": "n7",  # roteamento por `data.regras[].to` (forma da seed §11.4)
+            "type": "decisionSplit",
+            "data": {
+                "regras": [
+                    {"expr": "abriu_email == false", "to": "n5"},
+                    {"expr": "senao", "to": "n8"},
+                ]
+            },
+        },
+        {
+            "id": "n8",  # roteamento clássico: regra sem `to`, destino na aresta `cond`
+            "type": "decisionSplit",
+            "data": {"regras": [{"id": "vip", "cond": "score > 90"}, {"id": "resto"}]},
+        },
     ],
     "edges": [
         {"id": "e1", "from": "n1", "to": "n2", "cond": None},
         {"id": "e2", "from": "n2", "to": "n3", "cond": "tratado"},
         {"id": "e3", "from": "n2", "to": "n6", "cond": "holdout"},
         {"id": "e4", "from": "n3", "to": "n4", "cond": None},
-        {"id": "e5", "from": "n4", "to": "n5", "cond": None},
+        {"id": "e5", "from": "n4", "to": "n7", "cond": None},
+        {"id": "e6", "from": "n8", "to": "n5", "cond": "vip"},
+        {"id": "e7", "from": "n8", "to": "n6", "cond": "resto"},
     ],
 }
 

@@ -21,8 +21,14 @@ class RepositorioLancamento(Protocol):
     # --- OS / snapshot (escopo de tenant via OS — §4.1) ---
     def obter_os(self, tenant_id: str, os_id: uuid.UUID) -> OS | None: ...
 
-    def obter_os_por_codigo(self, codigo: str) -> OS | None:
-        """Extract referencia OS por `codigo` (§4.1) — o loader resolve p/ id."""
+    def obter_os_por_codigo(self, codigo: str, tenant_id: str | None = None) -> OS | None:
+        """Extract referencia OS por `codigo` (§4.1) — o loader resolve p/ id.
+
+        `tenant_id` é OBRIGATÓRIO na prática aqui: desde a emenda E22 (achado 22/UAT5,
+        migração 0014) o `codigo` é unique POR TENANT, então dois clientes podem ter
+        `OS-2026-0457` e a busca global devolveria uma OS arbitrária — o batch do outro
+        sumiria calado em `ignorados`. O default existe só para casar com a assinatura
+        da porta `RepositorioOs` (§2.1, mesma instância implementa as duas)."""
         ...
 
     def obter_snapshot(self, snapshot_id: uuid.UUID) -> Snapshot | None: ...

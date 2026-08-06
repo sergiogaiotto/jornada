@@ -662,7 +662,12 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
                 "waterfall": segmento.waterfall,
                 "volume_abordagem": segmento.volume_abordagem,
             },
-            "criado_por": "analista@claro.com.br",
+            # §10.5 (achado 2 do UAT #5): o e-mail tem de ser uma identidade REAL do
+            # roster — com o fictício `analista@claro.com.br` a comparação criador ≠
+            # aprovador nunca casava, e na OS demo (a da VPS) o líder emitia o link
+            # mágico para si mesmo e aprovava. Mora em `conteudo`, não em `componentes`:
+            # o `hash_composto` e o `snapshot.id` uuid5 seguem idênticos (§11.4).
+            "criado_por": "analista@dev.jornada.local",
         },
         previsto=jornada.previsto,
         created_at=agora - timedelta(days=21),

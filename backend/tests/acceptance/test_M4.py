@@ -18,6 +18,7 @@ from adapters.publicacoes import TARIFARIO_VIGENTE_ID, PublicacoesLocais
 from app.errors import PROBLEM_CONTENT_TYPE
 from domain.esteira.modelos import ETAPAS
 from domain.governanca.politicas import POLITICA_PUBLICADA
+from tests.conftest import TENANT_ALHEIO
 
 TENANT = "torre-movel"
 
@@ -215,7 +216,7 @@ def test_M4_A3(client: TestClient, app: FastAPI) -> None:
     assert eventos and eventos[-1].payload["hash"] == documento["hash"]
 
 
-def test_M4_A4(client: TestClient) -> None:
+def test_M4_A4(client: TestClient, tokens_outro_tenant: dict[str, str]) -> None:
     """A4 (emenda B01): o estado da validação é RECUPERÁVEL por leitura —
     `GET /os/{id}/validacoes` devolve a decisão vigente de cada campo (veredito,
     checagens, evidência, quem/quando) e `GET /os/{id}/pendencias` o que está aberto.
@@ -271,9 +272,16 @@ def test_M4_A4(client: TestClient) -> None:
         client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=_h("dev-solicitante")).status_code
         == 200
     )
-    outro_tenant = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
-    assert client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=outro_tenant).status_code == 404
-    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=outro_tenant).status_code == 404
+    # achado 5/UAT5: id vazado + usuário de outro tenant → 404 (não vaza existência);
+    # X-Tenant forjado com credencial daqui não passa do middleware → 403.
+    alheio = {
+        "X-Tenant": TENANT_ALHEIO,
+        "Authorization": f"Bearer {tokens_outro_tenant['pleno']}",
+    }
+    assert client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=alheio).status_code == 404
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=alheio).status_code == 404
+    forjado = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
+    assert client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=forjado).status_code == 403
 
 
 def test_M4_A5(client: TestClient, app: FastAPI) -> None:

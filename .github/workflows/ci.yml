@@ -84,6 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     concurrency: deploy-vps
     steps:
+      - uses: actions/checkout@v4  # o smoke funcional roda scripts/ do repo
       - name: Deploy na VPS via SSH (git pull + compose up --build)
         env:
           SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -116,3 +117,13 @@ jobs:
           curl -fsS http://vps.falagaiotto.com.br:8050/api/v1/os -H "X-Tenant: torre-movel" \
             -H "Authorization: Bearer dev-analista" | grep -q "OS-2026-0457" && echo "demo OK"
           echo "version-stamp OK"
+      - name: Smoke FUNCIONAL pós-deploy (caminho crítico — §13)
+        # O smoke acima prova a VERSÃO; este prova que a APLICAÇÃO FUNCIONA. Foi por
+        # falta dele que o HTTP 500 do simulador (achado D07) ficou vivo em produção
+        # com o deploy verde. Roteiro e limpeza do resíduo: scripts/smoke_funcional.py.
+        # Só stdlib — nada a instalar (o python3 do runner basta).
+        timeout-minutes: 5
+        run: |
+          python3 scripts/smoke_funcional.py \
+            --base-url http://vps.falagaiotto.com.br:8050 \
+            --sha "${GITHUB_SHA:0:7}"

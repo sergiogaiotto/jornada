@@ -617,6 +617,8 @@ export interface LinkMagicoOut {
   token: string;
   url: string;
   alcada: string;
+  /** A6 (§10.5): a quem o link foi ENDEREÇADO — o servidor recusa o criador do snapshot. */
+  aprovador_email: string;
   expira_em: string;
 }
 
@@ -632,6 +634,8 @@ export interface AprovacaoPayloadOut {
   os: { codigo: string; nome: string; fase: string };
   snapshot: { id: string; hash: string; created_at: string | null };
   alcada: string;
+  /** A6 (§10.5): quem o servidor vai registrar como decisor — null em link antigo. */
+  aprovador_email: string | null;
   expira_em: string;
   resumo: {
     custo: { previsto_p50: number; moeda: string };

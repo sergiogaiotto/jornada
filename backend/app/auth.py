@@ -55,6 +55,24 @@ PORTAL_TOKENS: dict[str, Usuario] = {
 _bearer = HTTPBearer(auto_error=False)
 
 
+def usuario_do_authorization(authorization: str | None) -> Usuario | None:
+    """Portador do header `Authorization` (login pleno OU portal) — SEM levantar 401.
+
+    Serve o middleware de tenant (`app/main.py`, achado 5/UAT5): ele só precisa saber
+    QUAL é o escopo real do portador para conferir o `X-Tenant` anunciado; quem decide
+    acesso continua sendo a dependência da rota (`get_current_user`/`get_portador`/
+    `require_role`). Credencial ausente, de esquema errado ou desconhecida → `None`
+    (a rota responde 401 — o middleware não vira um oráculo de tokens válidos).
+    """
+    if not authorization:
+        return None
+    esquema, _, token = authorization.partition(" ")
+    if esquema.lower() != "bearer":
+        return None
+    token = token.strip()
+    return DEV_TOKENS.get(token) or PORTAL_TOKENS.get(token)
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> Usuario:

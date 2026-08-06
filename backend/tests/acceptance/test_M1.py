@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import DEV_TOKENS
 from app.errors import PROBLEM_CONTENT_TYPE
+from tests.conftest import TENANT_ALHEIO
 
 TENANT = "torre-movel"
 
@@ -146,7 +147,7 @@ def test_M1_A3(client: TestClient, app: FastAPI) -> None:
         assert set(operacoes) == {"get"}, (caminho, sorted(operacoes))
 
 
-def test_M1_A4(client: TestClient) -> None:
+def test_M1_A4(client: TestClient, tokens_outro_tenant: dict[str, str]) -> None:
     """A4 (emenda B01, UAT #2): `GET /os/{id}/pendencias` — a rota só aceitava POST (405),
     então o que estava aberto sumia da tela a cada reload. A leitura devolve TODAS as
     pendências da OS em ordem de `numero`, com o que a governança precisa decidir:
@@ -192,5 +193,12 @@ def test_M1_A4(client: TestClient) -> None:
     # leitura é de qualquer autenticado (§8-M0) e escopada por tenant
     de_leitor = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h("dev-solicitante"))
     assert de_leitor.status_code == 200
-    outro = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
-    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=outro).status_code == 404
+    # achado 5/UAT5: com id VAZADO, o usuário do outro tenant leva 404 (sem vazar
+    # existência); e forjar o X-Tenant com credencial daqui não passa do middleware (403).
+    alheio = {
+        "X-Tenant": TENANT_ALHEIO,
+        "Authorization": f"Bearer {tokens_outro_tenant['pleno']}",
+    }
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=alheio).status_code == 404
+    forjado = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=forjado).status_code == 403

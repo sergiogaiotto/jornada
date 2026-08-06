@@ -183,9 +183,11 @@ def _snapshot_da_jornada(client: TestClient, jornada_id: uuid.UUID, os_id: uuid.
 
 
 def _aprovar(client: TestClient, snapshot_id: str) -> None:
-    token = client.post(f"/api/v1/snapshots/{snapshot_id}/link-magico", headers=_h()).json()[
-        "token"
-    ]
+    token = client.post(
+        f"/api/v1/snapshots/{snapshot_id}/link-magico",
+        json={"aprovador_email": "aprovador@claro.com.br"},  # A6 §10.5: link endereçado
+        headers=_h(),
+    ).json()["token"]
     decidida = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
         json={"decisao": "aprovado", "decidido_por": "aprovador@claro.com.br"},

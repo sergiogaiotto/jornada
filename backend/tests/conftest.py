@@ -10,6 +10,7 @@ chamado em teste — testes que precisam de resposta específica trocam o fake) 
 nenhuma rede).
 """
 
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient
 from adapters.embedding.fake import EmbeddingFake
 from adapters.llm.fake import LLMFake
 from adapters.observabilidade.langfuse import TracerLangfuse
+from app.auth import DEV_TOKENS, PORTAL_TOKENS, Usuario
 from app.config import Settings
 from app.main import create_app, ping_db
 
@@ -53,3 +55,40 @@ def app() -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
+
+
+TENANT_ALHEIO = "outra-torre"
+
+
+@pytest.fixture()
+def tokens_outro_tenant(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Segunda identidade REAL (achado 5/UAT5): tokens de dev e de portal de `outra-torre`.
+
+    Os tokens seed (§8) são todos de `torre-movel`. Desde que o `X-Tenant` é conferido
+    contra o portador (o header é asserção, não fonte da verdade), provar isolamento
+    exige um USUÁRIO do outro tenant — forjar o header é exatamente o que o fix proíbe.
+    Devolve `{"pleno": ..., "portal": ...}`."""
+    pleno, portal = "dev-analista-outra-torre", "portal-outra-torre"
+    monkeypatch.setitem(
+        DEV_TOKENS,
+        pleno,
+        Usuario(
+            id=uuid.uuid5(uuid.NAMESPACE_URL, "jornada/dev/analista/outra-torre"),
+            tenant_id=TENANT_ALHEIO,
+            nome="Dev Analista (outra torre)",
+            email="analista@outra-torre.local",
+            papeis=("analista",),
+        ),
+    )
+    monkeypatch.setitem(
+        PORTAL_TOKENS,
+        portal,
+        Usuario(
+            id=uuid.uuid5(uuid.NAMESPACE_URL, "jornada/portal/outra-torre"),
+            tenant_id=TENANT_ALHEIO,
+            nome="Solicitante (Portal, outra torre)",
+            email="portal@outra-torre.local",
+            papeis=("solicitante",),
+        ),
+    )
+    return {"pleno": pleno, "portal": portal}

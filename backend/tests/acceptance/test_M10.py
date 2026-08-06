@@ -174,9 +174,11 @@ def _snapshot_aplicado(client: TestClient, app: FastAPI) -> tuple[uuid.UUID, dic
     assert snapshot.status_code == 201, snapshot.text
     snapshot = snapshot.json()
 
-    token = client.post(f"/api/v1/snapshots/{snapshot['id']}/link-magico", headers=_h()).json()[
-        "token"
-    ]
+    token = client.post(
+        f"/api/v1/snapshots/{snapshot['id']}/link-magico",
+        json={"aprovador_email": "aprovador@claro.com.br"},  # A6 §10.5: link endereçado
+        headers=_h(),
+    ).json()["token"]
     decidida = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
         json={"decisao": "aprovado", "decidido_por": "aprovador@claro.com.br"},

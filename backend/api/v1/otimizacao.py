@@ -9,14 +9,17 @@ OBRIGATÓRIO — vira sinal) · `POST /experimentos/{id}/apurar` (ANTI-PEEKING: 
 Early antes do fim da janela — A1; depois lift com IC95 e significativo SÓ com IC
 excluindo zero — A2) · `POST /os/{id}/clonar-com-aprendizados` (A3) ·
 `POST /calibracao/publicar` (CalibrateService — backtest OBRIGATÓRIO, versionado em
-`calibracao_prior`).
+`calibracao_prior`) · `GET /calibracao` (histórico de priors, v1 default → vigente) ·
+`POST /calibracao/{versao}/rollback` (republica priors de uma versão anterior).
 
 ZERO LLM em apurar/aprovar/rejeitar/clonar/calibrar (§10.6) — só o PROPOR invoca o
 optimize (e degrada com hub fora, sem 503 num GET). Erros: mapa RFC-7807 do M1 +
 traduções próprias: ApuracaoAntesDaJanela→425 Too Early ·
 GrafoInvalido/MotivoObrigatorio/SaidaDoOptimizeInvalida→422 · LLMIndisponivel→503.
-RBAC (§8-M0): mutações exigem analista|lider; GET propostas é leitura autenticada
-(a geração é a ação autônoma do agente — decidir continua humano §1.1.3).
+RBAC (§8-M0): mutações exigem analista|lider; GET propostas/calibração é leitura
+autenticada (a geração é a ação autônoma do agente — decidir continua humano §1.1.3).
+EXCEÇÃO: publicar/rollback de priors exige `lider` — priors são do TENANT INTEIRO
+(UAT5 achado 4: qualquer analista destruía a régua do tenant com um POST vazio).
 """
 
 import uuid
@@ -37,6 +40,7 @@ from api.v1.os_governanca import (
     get_repositorio_os,
 )
 from api.v1.simulador import get_servico_simulador
+from app.auth import Usuario, require_role
 from app.errors import problem_response
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMIndisponivel
@@ -123,6 +127,9 @@ def get_servico_calibracao(request: Request) -> ServicoCalibracao:
 
 Servico = Annotated[ServicoOtimizacao, Depends(get_servico_otimizacao)]
 Calibrador = Annotated[ServicoCalibracao, Depends(get_servico_calibracao)]
+# Priors valem para o TENANT INTEIRO: publicar/rollback seguem o papel de publicação
+# do Ateliê e da plataforma — `lider` (§8-M0), nunca `analista` sozinho.
+PublicadorPriors = Annotated[Usuario, Depends(require_role("lider"))]
 
 # ------------------------------------------------- Contratos Pydantic (§1.3.2, §4.1)
 
@@ -208,15 +215,49 @@ async def clonar_com_aprendizados(
     )
 
 
+@router.get("/calibracao")
+async def listar_calibracoes(
+    tenant: Tenant,
+    servico: Calibrador,
+    _user: Autenticado,
+    tipo_campanha: str | None = None,
+) -> dict[str, Any]:
+    """Histórico de priors do tenant (§4.1 `calibracao_prior`), em ordem CRESCENTE de
+    versão — da v1 `PRIORS_DEFAULT` (sintética, mora em código) à vigente. É o mapa
+    para escolher o alvo do rollback (UAT5 achado 4: não havia como ver nem desfazer)."""
+    return servico.listar(tenant, tipo_campanha=tipo_campanha)
+
+
 @router.post("/calibracao/publicar", status_code=201)
 async def publicar_calibracao(
     tenant: Tenant,
     servico: Calibrador,
-    user: Escritor,
+    user: PublicadorPriors,
     payload: CalibrarIn | None = None,
 ) -> dict[str, Any]:
-    """CalibrateService (§8-M11): compara previsto congelado × realizado, propõe
-    priors novos e publica SÓ com backtest aprovado — versionado em
-    `calibracao_prior` (§4.1); o simulador passa a preferi-los (§6)."""
+    """CalibrateService (§8-M11): compara previsto congelado × realizado (RE-PREVISTO
+    sob os priors vigentes) e publica SÓ com backtest aprovado — versionado em
+    `calibracao_prior` (§4.1); o simulador passa a preferi-los (§6).
+
+    Priors valem para o TENANT INTEIRO, então o papel é o mesmo de publicar política
+    ou criativo: `lider` (§8-M0). Backtest reprovado ou rodada idêntica à vigente
+    → 409, sem publicar (UAT5 achado 4)."""
     parametros = payload or CalibrarIn()
     return servico.publicar(tenant, tipo_campanha=parametros.tipo_campanha, actor=user.email)
+
+
+@router.post("/calibracao/{versao}/rollback", status_code=201)
+async def rollback_calibracao(
+    versao: int,
+    tenant: Tenant,
+    servico: Calibrador,
+    user: PublicadorPriors,
+    payload: CalibrarIn | None = None,
+) -> dict[str, Any]:
+    """Republica os priors da versão `versao` como versão NOVA (append-only §4.1 —
+    o histórico não é apagado). Alvo inexistente → 404. `versao=1` volta ao
+    `PRIORS_DEFAULT` mesmo com N calibrações publicadas por cima."""
+    parametros = payload or CalibrarIn()
+    return servico.rollback(
+        tenant, versao, tipo_campanha=parametros.tipo_campanha, actor=user.email
+    )

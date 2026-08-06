@@ -31,7 +31,7 @@ import json
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol, cast
 
 from agents import otimizacao as agente_optimize
 from application.ports.clock import ClockPort
@@ -41,11 +41,12 @@ from application.ports.observabilidade import TracerPort
 from application.ports.repositorio_otimizacao import RepositorioOtimizacao
 from application.services.simulador_service import ServicoSimulador
 from domain.agentes.modelos import AgenteEvidence, Invocacao, agente_uuid
-from domain.campanha.erros import NaoEncontrado
+from domain.campanha.erros import EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento import apuracao
 from domain.experimento.modelos import Experimento, experimento_travado
+from domain.governanca.modelos import Snapshot
 from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.jornada import taximetro
 from domain.jornada.canonico import hash_jgc
@@ -53,6 +54,7 @@ from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido
 from domain.jornada.modelos import JornadaVersao
 from domain.jornada.validacao import validar_grafo
+from domain.lancamento.modelos import Launch
 from domain.otimizacao import calibracao as regras_calibracao
 from domain.otimizacao import ranking
 from domain.otimizacao.erros import (
@@ -75,6 +77,14 @@ from domain.simulacao.priors import PRIORS_DEFAULT
 
 BASE_RAG_RESULTADOS = "resultados"  # §8-M11-A3: aprendizados promovidos entram aqui
 _LIMITE_OS_CALIBRACAO = 500
+
+
+class _RepositorioComLaunches(Protocol):
+    """`listar_launches` é da porta do M10, mas a calibração precisa dela para usar a
+    MESMA régua do monitor (§8-M10). O repositório é UM objeto que implementa todas as
+    portas (tipagem estrutural §2.1) — este Protocol só informa o mypy no cast."""
+
+    def listar_launches(self, snapshot_id: uuid.UUID) -> list[Launch]: ...
 
 
 def priors_vigentes(
@@ -463,7 +473,8 @@ class ServicoOtimizacao(_Base):
         (última `calibracao_prior` publicada — o Ensaio Geral da nova OS já os usa)."""
         origem = self._os(tenant_id, os_id)
         agora = self._relogio.agora()
-        sequencial = self._repo.proximo_sequencial_os(agora.year)
+        # achado 22/UAT5: sequencial DENTRO do tenant (o clone nasce no tenant da origem)
+        sequencial = self._repo.proximo_sequencial_os(agora.year, origem.tenant_id)
         codigo = f"OS-{agora.year}-{sequencial:04d}"
         nova = OS(
             id=uuid.uuid4(),
@@ -789,35 +800,153 @@ class ServicoOtimizacao(_Base):
 class ServicoCalibracao(_Base):
     """CalibrateService (§8-M11): compara previsto×realizado, propõe priors novos e SÓ
     publica com BACKTEST aprovado — versionado em `calibracao_prior` (§4.1). O agente
-    calibrate (§7.2) apenas NARRA; todo o cálculo é código determinístico (§10.6)."""
+    calibrate (§7.2) apenas NARRA; todo o cálculo é código determinístico (§10.6).
+
+    Guarda-corpos do UAT5 (achado 4 — três cliques levaram `email.conversao` de 0,032
+    a 0,000125 na VPS): (a) a régua é a MESMA do monitor (snapshot do LAUNCH); (b) o
+    previsto é RE-PREVISTO sob os priors vigentes antes do backtest, então repetir o
+    clique dá razão 1,0, reproduz a régua vigente e vira 409 idempotente em vez de
+    compor; (c) o backtest exige ganho mínimo de MAPE e piso de score — previsão
+    absurda não vira prior; (d) `rollback` republica os priors de qualquer versão
+    anterior, inclusive a v1 `PRIORS_DEFAULT`.
+    """
 
     # ------------------------------------------------- POST /calibracao/publicar
     def publicar(self, tenant_id: str, *, tipo_campanha: str | None, actor: str) -> dict[str, Any]:
-        casos = self._casos_previsto_realizado(tenant_id)
+        atuais = priors_vigentes(self._repo, tenant_id, tipo_campanha)
+        casos = self._casos_previsto_realizado(tenant_id, tipo_campanha, atuais)
         if not casos:
             raise SemDadosParaCalibrar(
                 "Sem OS com Previsto congelado E telemetria realizada no tenant — "
-                "calibração compara previsto×realizado (§8-M11)."
+                "calibração compara previsto×realizado (§8-M11). Snapshots cuja régua "
+                "de congelamento é desconhecida (Previsto sem `priors_versao`) também "
+                "ficam de fora: re-simule a OS para congelar um Previsto carimbado."
             )
         razao = regras_calibracao.razao_calibracao(casos)
+        novos = regras_calibracao.propor_priors(
+            atuais, razao, self._proxima_versao(tenant_id, tipo_campanha)
+        )
+        if regras_calibracao.mesma_regua(novos, atuais):
+            raise EstadoInvalido(  # idempotência: o clique repetido não compõe
+                f"Calibração idempotente: razão {razao} sobre os mesmos {len(casos)} casos "
+                f"reproduz as taxas da versão vigente v{int(atuais.get('versao', 1))} — "
+                "nada a publicar. Rode a campanha (telemetria nova) para recalibrar, ou "
+                "POST /calibracao/{versao}/rollback para voltar a uma versão anterior."
+            )
         backtest = regras_calibracao.backtest(casos, razao)
         if not backtest["melhora"]:
             raise BacktestReprovado(
                 f"Backtest reprovado (§8-M11: obrigatório): MAPE {backtest['mape_antigo']} → "
-                f"{backtest['mape_novo']} não melhora — priors NÃO publicados."
+                f"{backtest['mape_novo']} (razão {razao}) — {backtest['motivo']}. "
+                "Priors NÃO publicados."
             )
-        atuais = priors_vigentes(self._repo, tenant_id, tipo_campanha)
-        anteriores = self._repo.listar_calibracoes(tenant_id, tipo_campanha)
-        versao_nova = max((c.versao for c in anteriores), default=int(PRIORS_DEFAULT["versao"])) + 1
-        novos = regras_calibracao.propor_priors(atuais, razao, versao_nova)
+        return self._registrar(
+            tenant_id,
+            tipo_campanha,
+            priors=novos,
+            score=float(backtest["score"]),
+            backtest=backtest,
+            actor=actor,
+            evento="calibracao.publicada",
+            extra={"razao": razao, "casos": len(casos)},
+        )
+
+    # ------------------------------------------------------- GET /calibracao
+    def listar(self, tenant_id: str, *, tipo_campanha: str | None) -> dict[str, Any]:
+        """Histórico de priors do tenant (§4.1 `calibracao_prior`), da v1 à vigente.
+
+        A v1 entra SINTÉTICA (`PRIORS_DEFAULT` mora em código, não na tabela) para o
+        rollback ao default ser descobrível pela API — é a versão para a qual se volta
+        quando uma sequência de calibrações estragou a régua.
+        """
+        publicadas = self._publicadas(tenant_id, tipo_campanha)
+        versoes: list[dict[str, Any]] = [
+            {
+                "id": None,
+                "versao": int(PRIORS_DEFAULT["versao"]),
+                "origem": "default",
+                "priors": PRIORS_DEFAULT,
+                "score": None,
+                "razao_aplicada": None,
+                "casos": None,
+                "publicada_em": None,
+                "vigente": not publicadas,
+            }
+        ]
+        versoes += [
+            {
+                "id": str(c.id),
+                "versao": c.versao,
+                "origem": (c.priors or {}).get("origem", "calibracao"),
+                "priors": c.priors,
+                "score": c.score,
+                "razao_aplicada": (c.priors or {}).get("razao_aplicada"),
+                "casos": len((c.backtest or {}).get("casos") or []),
+                "publicada_em": c.publicada_em.isoformat() if c.publicada_em else None,
+                "vigente": c is publicadas[-1],
+            }
+            for c in publicadas
+        ]
+        return {
+            "tenant_id": tenant_id,
+            "tipo_campanha": tipo_campanha,
+            "vigente": versoes[-1]["versao"],
+            "versoes": versoes,  # ordem crescente de versão (v1 primeiro, vigente por último)
+        }
+
+    # -------------------------------------- POST /calibracao/{versao}/rollback
+    def rollback(
+        self, tenant_id: str, versao_alvo: int, *, tipo_campanha: str | None, actor: str
+    ) -> dict[str, Any]:
+        """Republica os priors da versão `versao_alvo` como versão NOVA (append-only).
+
+        SEM backtest: rollback não é uma hipótese nova, é o desfazer de uma publicação
+        ruim — o gate é o PAPEL (líder, como todo publicar §8-M0). Funciona para a v1
+        `PRIORS_DEFAULT` mesmo com N versões publicadas por cima (UAT5 achado 4).
+        """
+        alvo = self._priors_da_versao(tenant_id, tipo_campanha, versao_alvo)
+        if alvo is None:
+            raise NaoEncontrado(
+                f"Versão de priors {versao_alvo} não existe no tenant {tenant_id!r}"
+                f"{'' if tipo_campanha is None else f' (tipo {tipo_campanha!r})'} — "
+                "veja GET /calibracao."
+            )
+        versao_nova = self._proxima_versao(tenant_id, tipo_campanha)
+        novos = regras_calibracao.priors_de_rollback(alvo, versao_nova)
+        return self._registrar(
+            tenant_id,
+            tipo_campanha,
+            priors=novos,
+            score=None,  # rollback não pontua: não há hipótese sendo testada
+            backtest={"rollback_de": versao_alvo, "melhora": None, "casos": []},
+            actor=actor,
+            evento="calibracao.rollback",
+            extra={"rollback_de": versao_alvo},
+        )
+
+    # ----------------------------------------------------------------- privados
+    def _registrar(
+        self,
+        tenant_id: str,
+        tipo_campanha: str | None,
+        *,
+        priors: dict[str, Any],
+        score: float | None,
+        backtest: dict[str, Any],
+        actor: str,
+        evento: str,
+        extra: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Grava a `calibracao_prior` nova + evento no ledger (§2.3) e devolve o corpo
+        único das rotas de publicar/rollback."""
         agora = self._relogio.agora()
         calibracao = CalibracaoPrior(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
             tipo_campanha=tipo_campanha,
-            versao=versao_nova,
-            priors=novos,
-            score=float(backtest["score"]),
+            versao=int(priors["versao"]),
+            priors=priors,
+            score=score,
             backtest=backtest,
             publicada_em=agora,
         )
@@ -825,14 +954,13 @@ class ServicoCalibracao(_Base):
         self._evento(
             tenant_id,
             None,  # evento de plataforma (sem OS única — casos no backtest)
-            "calibracao.publicada",
+            evento,
             {
                 "calibracao_id": str(calibracao.id),
-                "versao": versao_nova,
+                "versao": calibracao.versao,
                 "tipo_campanha": tipo_campanha,
-                "razao": razao,
-                "score": calibracao.score,
-                "casos": len(casos),
+                "score": score,
+                **extra,
             },
             actor,
         )
@@ -840,27 +968,60 @@ class ServicoCalibracao(_Base):
             "id": str(calibracao.id),
             "tenant_id": tenant_id,
             "tipo_campanha": tipo_campanha,
-            "versao": versao_nova,
-            "priors": novos,
-            "score": calibracao.score,
+            "versao": calibracao.versao,
+            "priors": priors,
+            "score": score,
             "backtest": backtest,
             "publicada_em": agora.isoformat(),
         }
 
-    # ----------------------------------------------------------------- privados
-    def _casos_previsto_realizado(self, tenant_id: str) -> list[dict[str, Any]]:
-        """Um caso por OS com Previsto CONGELADO (snapshot §1.1.2) e exposição real:
-        previsto = conversões P50 congeladas; realizado = conversões ENS do tratado
-        (mesmo recorte do monitor M10 — extract é conciliação, não soma)."""
+    def _publicadas(self, tenant_id: str, tipo_campanha: str | None) -> list[CalibracaoPrior]:
+        return [
+            c
+            for c in self._repo.listar_calibracoes(tenant_id, tipo_campanha)
+            if c.publicada_em is not None
+        ]
+
+    def _proxima_versao(self, tenant_id: str, tipo_campanha: str | None) -> int:
+        anteriores = self._repo.listar_calibracoes(tenant_id, tipo_campanha)
+        return max((c.versao for c in anteriores), default=int(PRIORS_DEFAULT["versao"])) + 1
+
+    def _priors_da_versao(
+        self, tenant_id: str, tipo_campanha: str | None, versao: int
+    ) -> dict[str, Any] | None:
+        """Priors de uma versão específica; a v1 mora em código (`PRIORS_DEFAULT`)."""
+        if versao == int(PRIORS_DEFAULT["versao"]):
+            return PRIORS_DEFAULT
+        return next(
+            (c.priors for c in self._publicadas(tenant_id, tipo_campanha) if c.versao == versao),
+            None,
+        )
+
+    def _casos_previsto_realizado(
+        self, tenant_id: str, tipo_campanha: str | None, vigentes: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Um caso por OS com Previsto CONGELADO (snapshot §1.1.2) e exposição real.
+
+        Régua = a MESMA do monitor M10 (`_snapshot_de_referencia`: snapshot do LAUNCH,
+        não o último snapshot com previsto) — antes do UAT5 as duas divergiam na mesma
+        OS (monitor 248 × calibração 20644 contra o mesmo realizado 271).
+
+        `previsto` é o P50 congelado RE-PREVISTO sob os priors VIGENTES (§6: conversões
+        são lineares na taxa); `previsto_congelado` guarda o P50 cru para auditoria.
+        Sem a re-previsão o backtest compara sempre a régua congelada e nunca reprova.
+        `realizado` = conversões ENS do tratado (extract é conciliação, não soma).
+
+        OS cuja régua de congelamento é DESCONHECIDA fica de fora (`_priors_do_snapshot`
+        devolve None): re-prever sob uma base chutada faz a razão oscilar (0,8 → 1,25 →
+        0,8…) e cada clique publica versão nova — a mesma classe do achado 4.
+        """
         casos: list[dict[str, Any]] = []
         for os_ in self._repo.listar_os(tenant_id, _LIMITE_OS_CALIBRACAO, 0):
-            snapshot = next(
-                (s for s in reversed(self._repo.listar_snapshots(os_.id)) if s.previsto), None
-            )
+            snapshot = self._snapshot_de_referencia(os_.id)
             if snapshot is None:
                 continue
-            previsto = ((snapshot.previsto or {}).get("conversoes") or {}).get("p50")
-            if not previsto:
+            congelado = ((snapshot.previsto or {}).get("conversoes") or {}).get("p50")
+            if not congelado:
                 continue
             ens = [e for e in self._repo.listar_telemetria(os_.id) if e.fonte != "extract"]
             if not any(e.tipo == "sent" for e in ens):
@@ -870,10 +1031,59 @@ class ServicoCalibracao(_Base):
                 for e in ens
                 if e.tipo == "conversion" and (e.payload or {}).get("grupo") != "holdout"
             )
+            base = self._priors_do_snapshot(tenant_id, tipo_campanha, snapshot)
+            if base is None:
+                continue  # régua do congelamento desconhecida — ver _priors_do_snapshot
+            escala = regras_calibracao.escala_entre(vigentes, base)
             casos.append(
-                {"os": os_.codigo, "previsto": float(previsto), "realizado": float(realizado)}
+                {
+                    "os": os_.codigo,
+                    "previsto_congelado": float(congelado),
+                    "previsto": float(congelado) * escala,
+                    "realizado": float(realizado),
+                    "escala_priors": escala,
+                }
             )
         return casos
+
+    def _priors_do_snapshot(
+        self, tenant_id: str, tipo_campanha: str | None, snapshot: Snapshot
+    ) -> dict[str, Any] | None:
+        """Priors SOB OS QUAIS o Previsto foi congelado — o simulador carimba a versão
+        em `parametros.priors_versao` (simulador_service §6). É a BASE da re-previsão.
+
+        Sem carimbo (previsto legado) ou com carimbo de versão que não existe neste
+        escopo, a base é DESCONHECIDA. Nesse caso só há uma resposta honesta:
+        - tenant SEM calibração publicada → a base é o `PRIORS_DEFAULT` v1 por dedução
+          (não havia outra régua possível quando o Previsto foi congelado);
+        - tenant COM calibração publicada → `None`, e a OS fica de fora da rodada.
+          Chutar o default aqui reintroduz o achado 4 numa forma mais lenta: o P50 já
+          congelado sob priors calibrados seria escalado de novo, a razão oscilaria
+          entre 0,8 e 1,25 e CADA clique publicaria uma versão nova, para sempre.
+        """
+        versao = ((snapshot.previsto or {}).get("parametros") or {}).get("priors_versao")
+        if isinstance(versao, int):
+            base = self._priors_da_versao(tenant_id, tipo_campanha, versao)
+            if base is not None:
+                return base
+        return None if self._publicadas(tenant_id, tipo_campanha) else PRIORS_DEFAULT
+
+    def _snapshot_de_referencia(self, os_id: uuid.UUID) -> Snapshot | None:
+        """MESMA régua do monitor (§8-M10 — `lancamento_service._launch_de_referencia`):
+        o snapshot do último LAUNCH; sem launch, o último snapshot com Previsto.
+
+        O repositório é um só objeto e implementa todas as portas (tipagem estrutural
+        §2.1) — a porta do M11 não declara `listar_launches` (é do M10), daí o cast.
+        """
+        repo = cast(_RepositorioComLaunches, self._repo)
+        launch_visto = False
+        escolhido: Snapshot | None = None
+        for candidato in self._repo.listar_snapshots(os_id):
+            if repo.listar_launches(candidato.id):
+                launch_visto, escolhido = True, candidato
+            elif not launch_visto and candidato.previsto:
+                escolhido = candidato
+        return escolhido if escolhido is not None and escolhido.previsto else None
 
 
 # ------------------------------------------------------------- helpers puros do módulo

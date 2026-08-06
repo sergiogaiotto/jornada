@@ -54,7 +54,6 @@ export function Aprovacao() {
 
   const [decisaoEscolhida, setDecisaoEscolhida] = useState<DecisaoAprovacao | null>(null);
   const [ressalvas, setRessalvas] = useState("");
-  const [decididoPor, setDecididoPor] = useState("");
   const [replayAberto, setReplayAberto] = useState(false);
   const [resultado, setResultado] = useState<DecisaoOut | null>(null);
 
@@ -76,7 +75,8 @@ export function Aprovacao() {
                 .map((r) => r.trim())
                 .filter(Boolean)
             : [],
-        decidido_por: decididoPor.trim() || null,
+        // A6 (§10.5): identidade NÃO viaja no corpo — o servidor usa o e-mail
+        // congelado na emissão do link. Mandar aqui só serviria para tomar 409.
       }),
     onSuccess: setResultado,
   });
@@ -335,12 +335,12 @@ export function Aprovacao() {
                   {decidir.error != null && (
                     <BannerErro erro={decidir.error} contexto="Decisão" />
                   )}
-                  <input
-                    value={decididoPor}
-                    onChange={(e) => setDecididoPor(e.target.value)}
-                    placeholder="Sua identificação (nome/e-mail do aprovador)"
-                    className="mb-2 w-full rounded-md border border-line2 px-3 py-2 text-[12.5px] outline-none focus:border-blue"
-                  />
+                  {/* A6 (§10.5): nada de digitar quem é você — o link já sabe. */}
+                  <div className="mb-2 rounded-md bg-surface2 px-3 py-2 text-[12px] text-slatex">
+                    Decidindo como{" "}
+                    <b>{dados.aprovador_email ?? "aprovador deste link"}</b> — identidade
+                    carimbada na emissão do link, não declarada agora.
+                  </div>
                   {decisaoEscolhida === "aprovado_ressalvas" && (
                     <textarea
                       value={ressalvas}

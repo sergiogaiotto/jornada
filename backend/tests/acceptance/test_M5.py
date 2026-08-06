@@ -34,6 +34,19 @@ SQL_CONFORME = (
 )
 # SQL ADULTERADO (A1): alguém removeu procon e inadimplente do WHERE
 SQL_ADULTERADO = SQL_CONFORME.replace("'procon',", "").replace("'inadimplente',", "")
+# SQL QUE MIRA OS SUPRIMIDOS (UAT5 · achado 1): cita as 7 listas e o opt-in, mas com o
+# filtro invertido — EXISTS no lugar de NOT EXISTS e `opt_in = 0`. Enquanto a varredura
+# foi por substring, ISTO tirava certificado 201. Evasões em detalhe: tests/unit/
+# test_guard_evasoes.py.
+SQL_MIRA_SUPRIMIDOS = (
+    "SELECT c.contato_hash FROM hybris_base_clientes c WHERE "
+    + " AND ".join(
+        f"EXISTS (SELECT 1 FROM lista_supressao s WHERE s.contato_hash = c.contato_hash "
+        f"AND s.lista = '{lista}')"
+        for lista in SETE_LISTAS
+    )
+    + " AND c.opt_in_email = 0"
+)
 
 
 def _h(token: str = "dev-analista") -> dict[str, str]:
@@ -134,6 +147,25 @@ def test_M5_A1(client: TestClient, app: FastAPI) -> None:
         headers=_h("dev-solicitante"),
     )
     assert negado.status_code == 403
+
+
+def test_M5_A1_sql_que_mira_os_suprimidos_nao_certifica(client: TestClient, app: FastAPI) -> None:
+    """A1 (UAT5 · achado 1): o Guard varre ESTRUTURA, não substring.
+
+    O SQL cita as 7 listas e o opt-in — e mira exatamente blacklist/Procon/optout.
+    Tem de reprovar (422), avisar já na prévia e registrar `gate.blocked`."""
+    gerado = _gerar_segmento(client, app, SQL_MIRA_SUPRIMIDOS)
+    assert gerado["avisos"]  # pré-check do guard já denuncia na prévia (§1.1.3)
+    reprovado = client.post(
+        f"/api/v1/segmentos/{gerado['segmento']['id']}/certificar", headers=_h()
+    )
+    assert reprovado.status_code == 422, reprovado.text
+    corpo = reprovado.json()
+    assert corpo["listas_faltantes"] == list(SETE_LISTAS)  # nenhuma lista suprime nada
+    problemas = " ".join(corpo["problemas"]).lower()
+    assert "exists" in problemas and "opt-in" in problemas
+    bloqueios = app.state.repositorio_os.listar_eventos(tipo="gate.blocked")
+    assert bloqueios and bloqueios[-1].payload["portao"] == "guard"
 
 
 def test_M5_A2(client: TestClient, app: FastAPI) -> None:

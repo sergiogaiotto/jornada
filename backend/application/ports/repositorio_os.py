@@ -16,16 +16,19 @@ class RepositorioOs(Protocol):
 
     def obter_os(self, tenant_id: str, os_id: uuid.UUID) -> OS | None: ...
 
-    def obter_os_por_codigo(self, codigo: str) -> OS | None:
-        """`os.codigo` é unique GLOBAL (DDL §4.1), por isso sem tenant aqui."""
+    def obter_os_por_codigo(self, codigo: str, tenant_id: str | None = None) -> OS | None:
+        """`os.codigo` é unique POR TENANT (achado 22/UAT5 — migração 0014). Sem
+        `tenant_id` a busca é GLOBAL: só para chamadores legitimamente cross-tenant."""
         ...
 
     def listar_os(self, tenant_id: str, limit: int, offset: int) -> list[OS]: ...
 
     def salvar_os(self, os_: OS) -> None: ...
 
-    def proximo_sequencial_os(self, ano: int) -> int:
-        """Sequencial para gerar codigo `OS-{ano}-{seq:04d}` quando não informado."""
+    def proximo_sequencial_os(self, ano: int, tenant_id: str | None = None) -> int:
+        """Sequencial para gerar codigo `OS-{ano}-{seq:04d}` quando não informado —
+        contado DENTRO do tenant (achado 22/UAT5: o número não conta o volume dos
+        outros clientes)."""
         ...
 
     # --- Pendências ---

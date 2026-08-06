@@ -355,9 +355,11 @@ class ServicoLancamento:
         for bruto in self._extracts.listar_eventos():
             codigo = str(bruto.get("os_codigo") or "")
             if codigo not in os_por_codigo:
-                candidata = self._repo.obter_os_por_codigo(codigo)
-                do_tenant = candidata is not None and candidata.tenant_id == tenant_id
-                os_por_codigo[codigo] = candidata if do_tenant else None
+                # Busca ESCOPADA no tenant (achado 22/UAT5): `os.codigo` passou a ser
+                # unique por tenant (migração 0014), então a busca global devolveria
+                # uma OS arbitrária entre os clientes que compartilham o código — e a
+                # conferência abaixo descartaria o batch legítimo em silêncio.
+                os_por_codigo[codigo] = self._repo.obter_os_por_codigo(codigo, tenant_id)
             os_ = os_por_codigo[codigo]
             if os_ is None:
                 ignorados += 1

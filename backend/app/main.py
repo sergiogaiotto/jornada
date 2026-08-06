@@ -1,7 +1,8 @@
 """Factory FastAPI — SDD §2.2 (`backend/app/main.py`) e §8-M0.
 
-Convenções de API (§8): prefixo /api/v1, header X-Tenant obrigatório (400 sem ele),
-erros RFC-7807, auth Bearer dev. `GET /healthz` fora do prefixo (ops).
+Convenções de API (§8): prefixo /api/v1, header X-Tenant obrigatório (400 sem ele) e
+CONFERIDO contra o portador autenticado (403 se divergir — achado 5/UAT5), erros
+RFC-7807, auth Bearer dev. `GET /healthz` fora do prefixo (ops).
 """
 
 import asyncio
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from adapters.persistence.sql import RepositorioSql, criar_repositorio
 from api.v1 import api_router
+from app.auth import usuario_do_authorization
 from app.config import get_settings
 from app.errors import problem_response, register_error_handlers
 from application.ports.embedding import EmbeddingPort
@@ -84,24 +86,49 @@ def create_app(*, demo: bool | None = None, embedding: EmbeddingPort | None = No
     )
 
     @app.middleware("http")
-    async def exigir_x_tenant(
+    async def resolver_tenant(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """Header X-Tenant obrigatório em /api/v1/* (§8) — 400 problem+json sem ele.
+        """Tenant efetivo do request em /api/v1/* (§8 + achado 5/UAT5).
 
-        Exceção: ROTAS_PUBLICAS (link mágico — C03) seguem sem header; o tenant vem do
-        token. Se o header vier, é repassado e o serviço o confere contra o pacote."""
+        O header X-Tenant é uma ASSERÇÃO do cliente, NUNCA a fonte da verdade — o
+        portador autenticado já carrega o escopo (`Usuario.tenant_id`, §8-M0) e é ele
+        que vale. Mesma regra que o C03 adotou para o link mágico, agora no resto da API:
+
+        · header ausente → 400 problem+json (contrato §8 preservado, inclusive M0-A2);
+        · portador reconhecido e header DIVERGENTE → 403 (nada chega à rota; antes o
+          cliente escolhia o próprio escopo e lia/escrevia em tenant inventado);
+        · portador reconhecido e header igual → segue com o tenant do USUÁRIO;
+        · sem portador reconhecido → o header segue como estava e a rota responde 401
+          (o middleware não pode virar oráculo de "este token existe?").
+
+        Exceção: ROTAS_PUBLICAS (link mágico — C03) seguem sem header e sem Bearer; o
+        tenant vem do token do pacote. Se o header vier, é repassado e o serviço o
+        confere contra o pacote — comportamento intacto."""
         if request.url.path.startswith(API_PREFIX):
-            tenant = request.headers.get(TENANT_HEADER)
-            publica = request.url.path.startswith(ROTAS_PUBLICAS)
-            if not tenant and not publica:
+            anunciado = request.headers.get(TENANT_HEADER)
+            if request.url.path.startswith(ROTAS_PUBLICAS):
+                request.state.tenant_id = anunciado or None
+                return await call_next(request)
+            if not anunciado:
                 return problem_response(
                     400,
                     "Bad Request",
                     detail=f"Header {TENANT_HEADER} é obrigatório (SDD §8).",
                     instance=request.url.path,
                 )
-            request.state.tenant_id = tenant or None
+            portador = usuario_do_authorization(request.headers.get("Authorization"))
+            if portador is not None and portador.tenant_id != anunciado:
+                return problem_response(
+                    403,
+                    "Forbidden",
+                    detail=(
+                        f"Header {TENANT_HEADER} diverge do escopo da credencial "
+                        "(o tenant vem do portador autenticado — SDD §8)."
+                    ),
+                    instance=request.url.path,
+                )
+            request.state.tenant_id = portador.tenant_id if portador else anunciado
         return await call_next(request)
 
     register_error_handlers(app)

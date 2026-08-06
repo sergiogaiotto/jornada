@@ -13,17 +13,17 @@
           }
         ]
       },
-      "key": "jrn-db9f9a02c298-n2",
+      "key": "jrn-78d1823c1a45-n2",
       "outcomes": [
         {
           "cond": "tratado",
           "key": "e2",
-          "next": "jrn-db9f9a02c298-n3"
+          "next": "jrn-78d1823c1a45-n3"
         },
         {
           "cond": "holdout",
           "key": "e3",
-          "next": "jrn-db9f9a02c298-n6"
+          "next": "jrn-78d1823c1a45-n6"
         }
       ],
       "type": "randomSplit"
@@ -32,12 +32,12 @@
       "arguments": {
         "duracao": "PT4H"
       },
-      "key": "jrn-db9f9a02c298-n3",
+      "key": "jrn-78d1823c1a45-n3",
       "outcomes": [
         {
           "cond": null,
           "key": "e4",
-          "next": "jrn-db9f9a02c298-n4"
+          "next": "jrn-78d1823c1a45-n4"
         }
       ],
       "type": "wait"
@@ -48,12 +48,12 @@
         "optIn": true,
         "throttlePorHora": 25000
       },
-      "key": "jrn-db9f9a02c298-n4",
+      "key": "jrn-78d1823c1a45-n4",
       "outcomes": [
         {
           "cond": null,
           "key": "e5",
-          "next": "jrn-db9f9a02c298-n5"
+          "next": "jrn-78d1823c1a45-n7"
         }
       ],
       "type": "emailSend"
@@ -63,7 +63,7 @@
         "deRef": "DE_457_conv",
         "metrica": "conversion"
       },
-      "key": "jrn-db9f9a02c298-n5",
+      "key": "jrn-78d1823c1a45-n5",
       "outcomes": [],
       "type": "goal"
     },
@@ -71,19 +71,74 @@
       "arguments": {
         "motivo": "holdout"
       },
-      "key": "jrn-db9f9a02c298-n6",
+      "key": "jrn-78d1823c1a45-n6",
       "outcomes": [],
       "type": "exit"
+    },
+    {
+      "arguments": {
+        "regras": [
+          {
+            "expr": "abriu_email == false",
+            "to": "n5"
+          },
+          {
+            "expr": "senao",
+            "to": "n8"
+          }
+        ]
+      },
+      "key": "jrn-78d1823c1a45-n7",
+      "outcomes": [
+        {
+          "cond": "abriu_email == false",
+          "key": "n7:n5",
+          "next": "jrn-78d1823c1a45-n5"
+        },
+        {
+          "cond": "senao",
+          "key": "n7:n8",
+          "next": "jrn-78d1823c1a45-n8"
+        }
+      ],
+      "type": "decisionSplit"
+    },
+    {
+      "arguments": {
+        "regras": [
+          {
+            "cond": "score > 90",
+            "id": "vip"
+          },
+          {
+            "id": "resto"
+          }
+        ]
+      },
+      "key": "jrn-78d1823c1a45-n8",
+      "outcomes": [
+        {
+          "cond": "vip",
+          "key": "e6",
+          "next": "jrn-78d1823c1a45-n5"
+        },
+        {
+          "cond": "resto",
+          "key": "e7",
+          "next": "jrn-78d1823c1a45-n6"
+        }
+      ],
+      "type": "decisionSplit"
     }
   ],
-  "key": "jrn-db9f9a02c298",
+  "key": "jrn-78d1823c1a45",
   "name": "OS-2026-0457",
   "triggers": [
     {
       "arguments": {
-        "eventDefinitionKey": "jrn-db9f9a02c298-n1"
+        "eventDefinitionKey": "jrn-78d1823c1a45-n1"
       },
-      "key": "jrn-db9f9a02c298-n1",
+      "key": "jrn-78d1823c1a45-n1",
       "type": "APIEvent"
     }
   ],
