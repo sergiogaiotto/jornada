@@ -401,7 +401,15 @@ JSON Schema em `backend/domain/jornada/jgc.schema.json` (fonte da verdade; Pydan
 | `exception` | payloadOriginal (Adopt Wizard: nó não mapeável) | — (bloqueia publish até resolução) |
 
 ### 5.3 Validação semântica (serviço `jgc_validate`, executa a cada save)
-Erros bloqueantes: nó órfão/braço sem destino; `channel.*` sem opt-in configurado; soma de pcts ≠ 100; holdout ausente quando experimento pré-registrado; `reentrada != nao` com holdout (quebra o experimento); throttle acima do cap da política; wait que ultrapassa janela da oferta; grafo sem `goal`. Warnings: custo projetado > budget; pressão de contato prevista > cap.
+Erros bloqueantes: nó órfão/braço sem destino; `channel.*` sem opt-in configurado; soma de pcts ≠ 100; holdout ausente quando experimento pré-registrado; `reentrada != nao` com holdout (quebra o experimento); throttle acima do cap da política; `wait` com `duracao` fora do ISO-8601 (**D03**); wait que ultrapassa janela da oferta; grafo sem `goal`. Warnings: custo projetado > budget; pressão de contato prevista > cap.
+
+**Adjacência é fonte única** (`domain/jornada/adjacencia.py` — emenda **D07**): validador, taxímetro e motor Monte Carlo respondem "quais as saídas deste nó?" pelo MESMO código — `edges` mais as `regras` de `decisionSplit` que trazem `to` direto. Cada consumidor tinha a sua cópia até o UAT #4, e a emenda A13 (dado torto não estoura `KeyError`) só havia alcançado duas: um `decisionSplit` com `regras` sem `to` — grafo VÁLIDO, roteado pelas arestas `cond`, e gerado pelo próprio Flow — derrubava `POST /jornadas/{id}/simular` com HTTP 500. Aresta ou regra malformada é ignorada na adjacência; quem reporta o erro ao usuário é sempre o `jgc_validate`, com nó e regra nomeados.
+
+**`wait.duracao` é conferida, não só exigida** (**D03**): até o UAT #4 bastava o campo existir. O gpt-oss-120b emitiu `"imediato_apos_quiet_hours"`, que passou no save, escapou em silêncio da regra `wait_alem_da_janela` (ela ignora duração não-parseável) e seguiria torta para o compilador SFMC. Agora vale o mesmo ISO-8601 do `duracao_em_dias` (`P1D`, `P2W`, `PT12H`); `ate` (data-alvo) segue como alternativa do anyOf.
+
+**`frequencySplit` casa classe por `id`** (**D05**): a comparação era contra a repr do dict inteiro, então classe na forma do §5.2 (`{id, min/max}`) nunca casava com a `cond` da aresta e o nó era impossível de salvar — mesmo com todas as arestas certas. Casa por `id`, igual ao `randomSplit`; classe como string segue valendo.
+
+**Limitação conhecida — `wait_alem_da_janela` está inerte** (**D04**): a regra existe e está testada, mas nenhum chamador de produção passa `janela_oferta_dias` (`validar_grafo` tem default `None`, e `JornadaService._validar` omite). A janela da oferta vive como TEXTO LIVRE no briefing (`"01/07 a 15/08 (rampa canário…)"`), e derivá-la por parser seria inventar semântica — o oposto do §1.3.5. Ligar a regra exige janela estruturada (`janela_inicio`/`janela_fim`) no briefing; até lá, wait longo demais não é barrado.
 
 ### 5.4 Compilador plan/apply (determinístico — LLM proibido neste caminho)
 1. `plan(snapshot, ambiente)` → resolve dependências (DEs → EventDef → Assets → Journey → Automations), gera lista `{recurso, ação, aviso}` com **externalKey = `jrn-{hash[0:12]}-{noId}`** (idempotência).

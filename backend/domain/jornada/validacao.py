@@ -188,7 +188,9 @@ def _validar_no(no_id: str, no: dict[str, Any]) -> list[dict[str, Any]]:
         if "duracao" not in data and "ate" not in data:  # anyOf do schema
             erros.append(
                 _erro(
-                    no_id, "campo_obrigatorio", f"Nó {no_id} (wait) exige `duracao` OU `ate` (§5.2)."
+                    no_id,
+                    "campo_obrigatorio",
+                    f"Nó {no_id} (wait) exige `duracao` OU `ate` (§5.2).",
                 )
             )
         elif "duracao" in data and duracao_em_dias(str(data["duracao"])) is None:
