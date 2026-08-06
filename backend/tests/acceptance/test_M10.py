@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 from adapters.fontes.extracts import ExtractsFixtures
 from adapters.fontes.lista_supressao import SupressaoFixtures
 from adapters.llm.fake import LLMFake
+from adapters.publicacoes import PublicacoesLocais
 from adapters.sfmc.cliente import SfmcHttp
 from api.v1.compilador import _relogio
 from app.config import Settings, get_settings
@@ -546,7 +547,9 @@ def test_M10_A3(client: TestClient, app_sfmc: FastAPI, mock_sfmc) -> None:  # ty
 
     # D+1: job extracts loader + reconciliação — casos de uso SEM endpoint (§8-M10
     # define como job; padrão M9-drift), reusáveis pelo agendador
-    servico = ServicoLancamento(repo, _relogio, SupressaoFixtures(), extracts=ExtractsFixtures())
+    servico = ServicoLancamento(
+        repo, _relogio, SupressaoFixtures(), PublicacoesLocais(), extracts=ExtractsFixtures()
+    )
     carga = servico.carregar_extracts(TENANT)
     assert carga["carregados"] == 204 and carga["ignorados"] == 0
     # extract NÃO soma nas taxas dos breakers (conciliação — não dobra contagem)

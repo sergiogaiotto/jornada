@@ -185,9 +185,20 @@ class ServicoValidacao:
         slas, clocks = regras.congelar_slas(os_.id, self._repo.listar_etapas(os_.id), agora)
         for clock in clocks:
             self._repo_os.adicionar_sla_clock(clock)
+        # §3: a política congelada é a DO TENANT da OS. Sem o tenant, o adapter
+        # devolvia a última `policy_versao` publicada de QUALQUER tenant — e o
+        # relatório de drift (§8-M12), que é por tenant, pulava a OS pelo
+        # `congelada >= publicada` comparando versões de origens diferentes.
+        politica = self._publicacoes.politica_publicada(os_.tenant_id)
         frozen: dict[str, Any] = {  # §4.1: {agent_versions, policy_version, tarifario_id, slas}
             "agent_versions": self._publicacoes.versoes_agentes(),
-            "policy_version": self._publicacoes.politica_publicada()["versao"],
+            "policy_version": politica["versao"],
+            # A ORIGEM entra junto porque o número sozinho é ambíguo: tenant sem linha
+            # em `policy_versao` é governado pelo SEED §11.4 e congelaria "1"; a
+            # primeira política que ele publicar pela T16 também nasce v1. Sem este
+            # campo o pacote assinado (§8-M4-A2) buscaria no banco um conteúdo que
+            # nunca governou esta OS.
+            "policy_origem": politica.get("origem"),
             "tarifario_id": self._publicacoes.tarifario_id(),
             "slas": slas,
             "congelado_em": agora.isoformat(),

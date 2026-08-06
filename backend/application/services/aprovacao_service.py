@@ -47,6 +47,7 @@ from datetime import timedelta
 from typing import Any
 
 from application.ports.clock import ClockPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.repositorio_aprovacao import RepositorioAprovacao
 from domain.campanha.erros import (
     AcaoNaoPermitida,
@@ -68,7 +69,7 @@ from domain.governanca.erros import (
     TokenInvalido,
 )
 from domain.governanca.modelos import DECISOES, VARIACAO_CUSTO_MAX, Aprovacao, Snapshot
-from domain.governanca.politicas import POLITICA_PUBLICADA, faixa_alcada
+from domain.governanca.politicas import faixa_alcada
 from domain.governanca.snapshot import hash_composto
 from domain.jornada.modelos import JornadaVersao
 from domain.simulacao.priors import PRIORS_DEFAULT
@@ -229,9 +230,23 @@ def invalidar_aprovacoes_por_custo(
 
 
 class _Base:
-    def __init__(self, repositorio: RepositorioAprovacao, relogio: ClockPort) -> None:
+    def __init__(
+        self,
+        repositorio: RepositorioAprovacao,
+        relogio: ClockPort,
+        publicacoes: PublicacoesPort,
+    ) -> None:
         self._repo = repositorio
         self._relogio = relogio
+        self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
+
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
+
+        Era `POLITICA_PUBLICADA["conteudo"]`, a constante compilada: publicar alçadas
+        novas em T16 não mudava a faixa que este serviço devolvia (achado 8 UAT #5).
+        """
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     def _os(self, tenant_id: str, os_id: uuid.UUID) -> OS:
         os_ = self._repo.obter_os(tenant_id, os_id)
@@ -330,7 +345,7 @@ class ServicoPortoes(_Base):
         custo = _custo_previsto(self._repo, os_.id)
         if custo is None:
             return {"estado": PENDENTE, "motivo": "Sem custo previsto — rode o Ensaio Geral (§6)."}
-        faixa = faixa_alcada(custo, POLITICA_PUBLICADA["conteudo"])
+        faixa = faixa_alcada(custo, self._politica(os_))
         if faixa is None:
             return {
                 "estado": VERMELHO,
@@ -436,7 +451,7 @@ class ServicoPortoes(_Base):
         (duas proporções, α=0,05, poder 0,80 — mesmas premissas do motor §6). O
         pré-registro nasce TRAVADO (`travado_em`) — anti-p-hacking (§4.1/M11)."""
         os_ = self._os(tenant_id, os_id)
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         holdout = float(holdout_pct if holdout_pct is not None else politica["holdout_min"])
         if holdout < float(politica["holdout_min"]):
             raise HoldoutAbaixoDaPolitica(
@@ -492,7 +507,7 @@ class ServicoPortoes(_Base):
             raise PreRequisitoAusente(
                 "Sem custo previsto — rode o Ensaio Geral (§6) antes de enviar à alçada."
             )
-        faixa = faixa_alcada(custo, POLITICA_PUBLICADA["conteudo"])
+        faixa = faixa_alcada(custo, self._politica(os_))
         if faixa is None:
             raise ForaDeAlcada(
                 f"Custo previsto R$ {custo:.2f} acima da maior faixa de alçada da política."
@@ -516,10 +531,48 @@ class ServicoPortoes(_Base):
 # ================================================================ Aprovação (T10)
 class ServicoAprovacao(_Base):
     def __init__(
-        self, repositorio: RepositorioAprovacao, relogio: ClockPort, web_base_url: str
+        self,
+        repositorio: RepositorioAprovacao,
+        relogio: ClockPort,
+        web_base_url: str,
+        publicacoes: PublicacoesPort,
     ) -> None:
-        super().__init__(repositorio, relogio)
+        super().__init__(repositorio, relogio, publicacoes)
         self._web_base_url = web_base_url.rstrip("/")
+
+    def _politica_do_pacote(self, os_: OS) -> dict[str, Any]:
+        """Política que o pacote assina — a versão CONGELADA no GO (§8-M4-A2), não a
+        publicada de hoje.
+
+        Achado 8 do UAT #5: `validacao_service` congelava `frozen.policy_version` do
+        BANCO e o snapshot gravava `politica.versao` da CONSTANTE — o mesmo artefato
+        assinado com duas versões diferentes, e o hash composto (§4.1) carimbando a
+        errada. Fonte única agora: `os.frozen`, escrito pelo GO. Se a política do tenant
+        avançou desde o GO, a OS em voo segue na versão congelada (§8-M12-A2) e quem
+        denuncia o desencontro é o relatório de policy drift — não o silêncio de um
+        snapshot que troca de política sozinho.
+
+        A ORIGEM congelada viaja junto (`frozen.policy_origem`) porque o número é
+        ambíguo: tenant sem `semear_politicas` é governado pelo SEED §11.4 e congela
+        "1"; a primeira política que ele publica pela T16 também nasce v1. Buscar só
+        pelo número traria do banco um conteúdo que NUNCA governou esta OS — o achado
+        8 outra vez, agora por colisão de numeração.
+        """
+        frozen = os_.frozen or {}
+        congelada = frozen.get("policy_version")
+        if congelada is None:  # sem GO não há congelamento: assina a vigente do tenant
+            vigente = self._publicacoes.politica_publicada(os_.tenant_id)
+            return {"versao": vigente["versao"], "conteudo": dict(vigente["conteudo"])}
+        politica = self._publicacoes.politica_versionada(
+            int(congelada), os_.tenant_id, origem=frozen.get("policy_origem")
+        )
+        if politica is None:
+            raise PreRequisitoAusente(
+                f"Política v{int(congelada)} congelada no GO desta OS não existe mais como "
+                "versão publicada do tenant — sem ela o pacote não tem o que assinar "
+                "(§8-M4-A2/§4.1). Refaça o GO para congelar a política vigente."
+            )
+        return {"versao": int(congelada), "conteudo": dict(politica["conteudo"])}
 
     # ---------------------------------------------------------- POST /snapshots
     def criar_snapshot(self, tenant_id: str, os_id: uuid.UUID, *, actor: str) -> Snapshot:
@@ -555,10 +608,7 @@ class ServicoAprovacao(_Base):
             "jgc": {"jornada_id": str(jornada.id), "versao": jornada.versao, "hash": jornada.hash},
             "sql": segmento.sql_publico if segmento else None,
             "criativos": criativos,
-            "politica": {
-                "versao": POLITICA_PUBLICADA["versao"],
-                "conteudo": POLITICA_PUBLICADA["conteudo"],
-            },
+            "politica": self._politica_do_pacote(os_),
             "custo": {"previsto_p50": float(jornada.simulacao["custo"]["p50"]), "moeda": "BRL"},
             "experimento": None
             if experimento is None
@@ -637,7 +687,7 @@ class ServicoAprovacao(_Base):
         """
         snapshot, os_ = self._snapshot_da_os(tenant_id, snapshot_id)
         custo = float(snapshot.conteudo["componentes"]["custo"]["previsto_p50"])
-        faixa = faixa_alcada(custo, POLITICA_PUBLICADA["conteudo"])
+        faixa = faixa_alcada(custo, self._politica(os_))
         if faixa is None:
             raise ForaDeAlcada(
                 f"Custo do snapshot (R$ {custo:.2f}) acima da maior faixa de alçada — "
@@ -674,7 +724,7 @@ class ServicoAprovacao(_Base):
                 "(§10.5). Emita para o aprovador designado."
             )
         papel_exigido = str(faixa["papel"])
-        aptos = _papeis_aptos(faixa, POLITICA_PUBLICADA["conteudo"])
+        aptos = _papeis_aptos(faixa, self._politica(os_))
         if papeis_aprovador is None:  # E03 (§10.5): sem conta, sem link
             raise EstadoInvalido(
                 f"{aprovador} não é usuário do sistema e a decisão exige sessão autenticada "

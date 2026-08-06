@@ -19,6 +19,17 @@
   bloqueia conversa/edição/conversão).
 - `obter_briefing`/`editar_briefing` (GET/PATCH /os/{id}/briefing[/{campo}]): confirmar
   ou editar um campo torna-o `inferido:false` (toque humano = confirmação).
+
+PII (§10.2 — emenda C02 + achado 9 do UAT #5): TODA porta de texto livre deste serviço
+mascara na FRONTEIRA, não na saída. São quatro: `conversar` (mensagem), `criar_pedido`
+(conteudo), `editar_campos` (campos) e `editar_briefing` (campo + valor), mais o `nome`
+opcional do `converter`. O original nunca é persistido — logo prompt, RAG, ledger,
+outbox, nome da OS e página do link mágico só podem ver o texto já sanitizado.
+
+Nas portas do briefing a CHAVE conta tanto quanto o valor: `conteudo`/`campos` são
+`dict[str, Any]` ABERTO, sem enum de campos, então o nome do campo é digitação do
+usuário — e vira chave persistida e item do payload de `pedido.campos_editados`. Por
+isso usam `mascarar_campos` (chave + valor), não `mascarar_estrutura` (só valores).
 """
 
 import uuid
@@ -45,7 +56,7 @@ from domain.intake.erros import (
     PedidoJaConvertido,
 )
 from domain.intake.modelos import Pedido
-from domain.privacidade import mascarar_pii
+from domain.privacidade import mascarar_campos, mascarar_estrutura, mascarar_pii
 
 _AUSENTE: Any = object()  # sentinela: PATCH briefing sem `valor` = apenas confirmar
 
@@ -73,8 +84,20 @@ class ServicoConsultor:
     def criar_pedido(
         self, tenant_id: str, *, solicitante: dict[str, Any], conteudo: dict[str, Any]
     ) -> Pedido:
-        """POST /pedidos — conteúdo plano {campo: valor} vira {campo: {valor, inferido:false}}."""
+        """POST /pedidos — conteúdo plano {campo: valor} vira {campo: {valor, inferido:false}}.
+
+        §10.2 (achado 9 do UAT #5): o BRIEFING é fronteira de entrada de texto livre
+        igual à conversa. O C02 mascarava só `mensagem` e deixava esta porta aberta —
+        e o conteúdo daqui vai para o prompt do consultor (`montar_mensagens` recebe
+        `pedido.conteudo`), para o ledger, para o NOME da OS (`_nome_padrao` usa o
+        `objetivo`) e daí para a página do link mágico. Mascara-se na ENTRADA: o
+        original nunca é persistido, então nenhum caminho a jusante pode vazá-lo.
+        """
         agora = self._relogio.agora()
+        # CHAVE e valor: `conteudo` é `dict[str, Any]` aberto (sem enum de campos), logo
+        # o nome do campo também é digitação — e vira chave persistida, item do payload
+        # de evento e nome exibido. Ver `mascarar_campos`.
+        conteudo = mascarar_campos(conteudo)
         pedido = Pedido(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -213,7 +236,13 @@ class ServicoConsultor:
         tshirt: str = "M",
     ) -> OS:
         """POST /pedidos/{id}/converter — exige completude=100 (A2); briefing herda
-        `inferido:true` dos campos inferidos até confirmação humana."""
+        `inferido:true` dos campos inferidos até confirmação humana.
+
+        §10.2: `nome` é texto livre do usuário e vira o NOME da OS — que aparece na
+        página pública do link mágico de aprovação (§8-M8). Mascarado na fronteira; o
+        nome derivado (`_nome_padrao`) já nasce limpo porque o briefing é mascarado
+        na entrada."""
+        nome = mascarar_pii(nome) if nome else nome
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(f"Pedido {pedido_id} já convertido (os_id={pedido.os_id}).")
@@ -267,7 +296,14 @@ class ServicoConsultor:
         Cada campo editado vira `inferido:false` (toque humano = confirmação, A3);
         evidências de inferência anterior são preservadas para auditoria. Completude e
         faltantes são SEMPRE recalculados por código (§8-M3). Convertido/arquivado → 409
-        (após conversão a edição é no briefing da OS)."""
+        (após conversão a edição é no briefing da OS).
+
+        §10.2 (achado 9 do UAT #5): esta é a MESMA fronteira de `criar_pedido` — quem
+        não digitou PII na criação pode digitá-la aqui. Mascara-se na entrada, CHAVE e
+        valor: a chave vira nome de campo persistido e, pior, entra em claro no payload
+        de `pedido.campos_editados` (`{"campos": sorted(campos)}`), que é o que a
+        integração externa lê no outbox (§2.3)."""
+        campos = mascarar_campos(campos)
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(
@@ -317,7 +353,16 @@ class ServicoConsultor:
         actor: str,
     ) -> dict[str, Any]:
         """PATCH /os/{id}/briefing/{campo} — confirma (sem valor) ou edita (com valor);
-        em ambos os casos o campo vira `inferido:false` (confirmação humana, A3)."""
+        em ambos os casos o campo vira `inferido:false` (confirmação humana, A3).
+
+        §10.2 (achado 9 do UAT #5): terceira porta do briefing — depois da conversão a
+        edição acontece aqui, e o valor segue para o prompt de todo agente que lê o
+        briefing (engineer, flow, criativo). Mascarado na entrada, como as outras duas.
+        `campo` também passa pelo sanitizador: ele vem do PATH da URL (texto livre) e
+        é ecoado na mensagem de erro 404 e no payload do evento."""
+        campo = mascarar_pii(campo)
+        if valor is not _AUSENTE:
+            valor = mascarar_estrutura(valor)
         os_ = self._servico_os.obter_os(tenant_id, os_id)
         entrada = os_.briefing.get(campo)
         if valor is _AUSENTE and entrada is None:
@@ -381,8 +426,12 @@ class ServicoConsultor:
         fim: Any,
         burla: Sequence[str] = (),
     ) -> Invocacao:
-        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). SEM PII:
-        input não carrega o bloco `solicitante` (§1.3.5).
+        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3).
+
+        PII (§10.2): `input` não carrega o bloco `solicitante` (§1.3.5) E a `mensagem`
+        chega aqui JÁ mascarada (`conversar` sanitiza na fronteira). A garantia é dos
+        dois lados — o achado 9 do UAT #5 mostrou que a primeira metade sozinha não
+        bastava: o conteúdo do briefing entrava em claro por outra porta.
 
         C01: tentativa de burlar compliance vira `compliance_bypass_tentado` no output
         do agente (e no payload do evento) — é o que a auditoria precisa enxergar em

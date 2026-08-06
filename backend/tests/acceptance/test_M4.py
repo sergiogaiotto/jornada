@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from adapters.publicacoes import TARIFARIO_VIGENTE_ID, PublicacoesLocais
 from app.errors import PROBLEM_CONTENT_TYPE
 from domain.esteira.modelos import ETAPAS
-from domain.governanca.politicas import POLITICA_PUBLICADA
+from domain.governanca.politicas import POLITICA_SEED
 from tests.conftest import TENANT_ALHEIO
 
 TENANT = "torre-movel"
@@ -159,7 +159,7 @@ def test_M4_A2(client: TestClient, app: FastAPI) -> None:
     assert set(frozen["agent_versions"]) >= {"consultor", "engineer", "visual", "copy", "content"}
     assert all(versao for versao in frozen["agent_versions"].values())
     # política publicada + tarifário vigente congelados junto (§4.1)
-    assert frozen["policy_version"] == POLITICA_PUBLICADA["versao"]
+    assert frozen["policy_version"] == POLITICA_SEED["versao"]
     assert frozen["tarifario_id"] == TARIFARIO_VIGENTE_ID
 
     # SLAs congelados: uma entrada por etapa canônica da esteira, prazos cumulativos

@@ -39,12 +39,12 @@ from typing import Any
 from application.ports.clock import ClockPort
 from application.ports.extracts import ExtractsPort
 from application.ports.lista_supressao import ListaSupressaoPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.repositorio_lancamento import RepositorioLancamento
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.governanca.modelos import Snapshot
-from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.lancamento.breakers import avaliar_breakers
 from domain.lancamento.erros import (
     ApplyNecessario,
@@ -80,14 +80,24 @@ class ServicoLancamento:
         repositorio: RepositorioLancamento,
         relogio: ClockPort,
         supressao: ListaSupressaoPort,
+        publicacoes: PublicacoesPort,
         tarifas: dict[str, Decimal] | None = None,
         extracts: ExtractsPort | None = None,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
         self._supressao = supressao
+        self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
         self._tarifas = tarifas if tarifas is not None else TARIFAS_VIGENTES
         self._extracts = extracts
+
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
+
+        Os breakers CONGELADOS no armar (§4.1 `launch.breakers`) saem daqui: com a
+        constante, apertar o breaker de optout em T16 não chegava a launch nenhum.
+        """
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     # ---------------------------------------------- POST /launch/{snapshot}/armar
     def armar(self, tenant_id: str, snapshot_id: uuid.UUID, *, actor: str) -> Launch:
@@ -113,7 +123,7 @@ class ServicoLancamento:
         launch = Launch(
             id=uuid.uuid4(),
             snapshot_id=snapshot.id,
-            breakers=dict(POLITICA_PUBLICADA["conteudo"]["breakers"]),  # congelados (§4.1)
+            breakers=dict(self._politica(os_).get("breakers") or {}),  # congelados (§4.1)
         )
         launch.eventos.append(
             self._entrada("armado", actor, marco_telemetria=self._repo.maior_id_telemetria())

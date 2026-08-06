@@ -38,6 +38,7 @@ from application.ports.clock import ClockPort
 from application.ports.embedding import EmbeddingPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.repositorio_otimizacao import RepositorioOtimizacao
 from application.services.simulador_service import ServicoSimulador
 from domain.agentes.modelos import AgenteEvidence, Invocacao, agente_uuid
@@ -47,7 +48,6 @@ from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento import apuracao
 from domain.experimento.modelos import Experimento, experimento_travado
 from domain.governanca.modelos import Snapshot
-from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.jornada import taximetro
 from domain.jornada.canonico import hash_jgc
 from domain.jornada.diff import diff_grafos
@@ -101,9 +101,23 @@ def priors_vigentes(
 
 
 class _Base:
-    def __init__(self, repositorio: RepositorioOtimizacao, relogio: ClockPort) -> None:
+    def __init__(
+        self,
+        repositorio: RepositorioOtimizacao,
+        relogio: ClockPort,
+        publicacoes: PublicacoesPort,
+    ) -> None:
         self._repo = repositorio
         self._relogio = relogio
+        self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
+
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
+
+        O M11 propõe E re-valida a proposta contra a política; com a constante, a
+        proposta era julgada por uma política que ninguém podia mudar (achado 8).
+        """
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     def _os(self, tenant_id: str, os_id: uuid.UUID) -> OS:
         os_ = self._repo.obter_os(tenant_id, os_id)
@@ -142,10 +156,11 @@ class ServicoOtimizacao(_Base):
         relogio: ClockPort,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes: PublicacoesPort,
         simulador: ServicoSimulador,
         embedding: EmbeddingPort | None = None,
     ) -> None:
-        super().__init__(repositorio, relogio)
+        super().__init__(repositorio, relogio, publicacoes)
         self._llm = llm
         self._tracer = tracer
         self._simulador = simulador
@@ -170,7 +185,7 @@ class ServicoOtimizacao(_Base):
         base = self._jornada_base_simulada(os_.id)
         sinais = [a.texto for a in self._repo.listar_aprendizados(os_id=os_.id, status="sinal")]
         skill = agente_optimize.carregar()
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         mensagens = agente_optimize.montar_mensagens(
             skill,
             grafo_atual=base.grafo,
@@ -257,7 +272,7 @@ class ServicoOtimizacao(_Base):
                 f"Proposta já {proposta.estado} — decisão é de uso único (§1.1.3)."
             )
         experimento = self._repo.experimento_da_os(os_.id)
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         erros = validar_grafo(  # re-valida: o estado da OS pode ter mudado desde a proposta
             proposta.grafo_proposto,
             experimento_travado=experimento_travado(experimento),

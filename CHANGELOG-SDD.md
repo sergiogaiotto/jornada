@@ -3,6 +3,73 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — Onda 3 · A política passa a governar, purge de verdade, e o domínio da IA Responsável
+
+### Achado 8 fechado · a tela de Políticas (M12) governa (§4.1, §8-M12)
+Havia uma tela que publicava versão no banco e **não mudava o comportamento de nada**: os serviços
+importavam a constante `POLITICA_PUBLICADA`. A política vigente passa a ser injetada por dependência
+em todos os consumidores; a constante vira `POLITICA_SEED` (fallback/semente). Medido nos eixos que
+o UAT #5 provou quebrados: `holdout_min=40` publicado faz o `PUT` de holdout 15 responder **422**
+(era 200); `alcadas` novas mudam a faixa devolvida; `frequency_cap` novo muda `cap_janela` e
+`colisao_critica` na simulação; `quiet_hours` muda o `horas_ate_concluir` (14,9h → 5,9h). Isolamento
+por tenant medido: o mesmo `PUT` é 422 num tenant e 200 no outro.
+
+**Achado crítico encontrado pelo auditor e corrigido — colisão de numeração seed × banco.** Só o
+tenant default recebe `semear_politicas`; qualquer outro entra com `policy_versao` vazia, é governado
+pela semente, e o GO congela `policy_version=1` vindo dela. Quando esse tenant publica a **primeira**
+política pela tela, a versão nasce `max+1` = **1** — mesmo número, outro conteúdo. Reproduzido por
+rotas reais: uma OS congelada sob `holdout_min=10` teve o snapshot assinado com `holdout_min=40`. É a
+doença do achado 8 por outro caminho: duas fontes para o mesmo carimbo. O `frozen` passa a gravar
+`policy_origem` (`seed` | `policy_versao`), e a busca honra a origem — sem fallback silencioso.
+Detalhe que vale registrar: o aceite que deveria pegar isso **passava por coincidência**, porque no
+tenant semeado o conteúdo da semente é igual ao da v1 do banco.
+
+**Dois guarda-corpos no CI**, porque o achado volta se ninguém vigiar: um falha se
+`POLITICA_*` for importada em `application/services/`; o outro falha se uma rota construir
+`PublicacoesLocais(`/`PublicacoesAtelie(` na mão — que foi exatamente como o achado 8 entrou
+(`api/v1/audiencia.py`), com serviço correto e injeção correta.
+
+**Inertes declarados, não maquiados:** `blackout` e `precedencia` estão no conjunto fechado do §4.1,
+são validados, versionados e exibidos na tela — e não têm **um único consumidor**. Publicar uma
+janela de blackout não impede envio nenhum. Ou entram numa onda própria com aceite, ou saem do
+conjunto fechado; numa base que vai processar PII real, "blackout configurável que não bloqueia
+nada" é o primeiro achado que uma auditoria encontra.
+
+### LGPD · purge do §10.4 existe, e a PII para de entrar pelo briefing
+O `retencao_dias` era validado, exibido na tela e **não tinha consumidor** (achado 20). Agora há
+`POST /admin/purge` aplicando a retenção da política vigente, **dry-run por padrão**
+(`?aplicar=true` para valer), idempotente, com evento no outbox. Sem scheduler novo na aplicação, de
+propósito: um worker traria lease, retry e fuso — mais um modo de falha silenciosa, que é como o
+§10.4 ficou sem consumidor até aqui. O agendamento é cron do host, documentado no compose.
+
+A PII que entrava pelo **briefing** (achado 9) foi fechada na fronteira: `criar_pedido`,
+`editar_campos` e o `PATCH` de briefing passam a mascarar. O aceite antigo criava a OS com briefing
+**vazio** e punha PII só em `instrucoes` — ficava verde com o vazamento aberto.
+
+### IA Responsável · domínio pronto, **fiação pendente** (declarado, não escondido)
+Os parâmetros que entraram têm enforcement provado por inversão: dados que podem ir ao LLM, retenção
+de prompt/trace, decisão automatizada (Art. 20) e modelos permitidos por agente. Teto de tokens e
+rótulo de IA ficaram **de fora por decisão explícita** — `invocacao.tokens` é sempre `null` porque o
+`LLMPort.chat` devolve `str` e descarta o `usage`, então o teto seria ficção. O conjunto de
+parâmetros é **fechado**: publicar um campo fora dele é rejeitado, em vez de aceito e ignorado.
+
+Três defeitos que o auditor achou e corrigiu, os dois primeiros graves:
+1. **A redação de retenção tinha a polaridade invertida** — listava as chaves de texto a suprimir e
+   retinha todo o resto, sem recursão. Contra os payloads reais, o CPF sobrevivia em `output`, em
+   dict aninhado e em lista, **com o carimbo `[SUPRIMIDO POR POLITICA]` ao lado** — a auditoria
+   acreditaria na supressão. Invertido para deny-by-default recursivo.
+2. **`dias_ledger` era um segundo relógio de retenção que ninguém lia** — quem apaga é o purge, e ele
+   lê `retencao_dias` do M12. O DPO publicaria 30, a tela confirmaria, o purge seguiria em 180: o
+   achado 8 reencenado **dentro do módulo criado para acabar com ele**. Removido.
+3. Typo no nome do agente (`enginer`) era aceito e virava letra morta — restrição publicada,
+   assinada e sem efeito. Agora rejeita.
+
+**Ressalva registrada com todas as letras:** hoje **nada fora do próprio teste importa o módulo**.
+Os quatro parâmetros governam funções puras que ninguém chama — é camada de domínio aguardando
+fiação, e enquanto os call sites não trocarem `mascarar_pii` por `sanear_para_llm` nem chamarem a
+autorização antes de cada `LLMPort.chat`, **o módulo não governa a plataforma**. Não é o pecado do
+achado 8 (não há tela prometendo o que não cumpre), mas está a um commit de virar exatamente isso.
+
 ## 2026-08-06 — G01 · Autenticação local real (§8-M0) — onda 2 do corte para produção
 A aplicação deixa de ser demo autenticada por token estático. O RBAC do §8-M0 já existia
 (`require_role` com 6 papéis, usado por todas as rotas); o que faltava era **identidade real** por

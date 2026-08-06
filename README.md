@@ -105,6 +105,22 @@ Botão primário no Cockpit (e na busca ⌘K): cria o pedido e abre a **Sala de 
 | Avaliação | `POST /jornadas/{id}/simular` · `/congelar-previsto` · `POST /snapshots` → link mágico `GET/POST /aprovacao/{token}` |
 | Operação | `POST /snapshots/{id}/plan|apply` · `GET /drift` · `POST /launch/...` · `GET /os/{id}/monitor` · `POST /os/{id}/perguntar` |
 | Governança | `POST /os/{id}/validacoes/{campo}` · `/pendencias` · `POST /os/{id}/go` · `POST /segmentos/{id}/certificar` (Guard) |
+| LGPD | `POST /admin/purge` (retenção §10.4 — **dry-run por default**; `?aplicar=true` destrói) · `GET /auditoria` · `POST /auditoria/reconstruir/{invocacao_id}` (Art. 20) |
+
+### Retenção de dados (§10.4) — agendamento é cron do HOST
+
+`POST /admin/purge` aplica o `retencao_dias` da política **publicada** (tela de Políticas → banco; publicar 30 dias muda o que a rota apaga) sobre `telemetry_event` e `dc_segment_cache`, e registra a destruição no outbox (`dados.purgados`). Papel `dpo` (admin passa). **Sem `?aplicar=true` nada é apagado** — a resposta é o relatório do que expirou, com os mesmos números que a execução usaria.
+
+Deliberadamente **não** há scheduler na aplicação (nem apscheduler, nem celery): um segundo modelo de execução traria worker, lease, retry e fuso — e um novo modo de falha silenciosa, que é exatamente como o §10.4 passou meses sem consumidor. O agendamento é uma linha no cron do host, observável pelo log do cron, pelo código HTTP e pelo evento no outbox:
+
+```cron
+# /etc/cron.d/jornada-purge — purge de retenção diário, 03:15 (§10.4)
+15 3 * * * root curl -fsS -X POST -H "Authorization: Bearer $JORNADA_DPO_TOKEN" \
+  -H "X-Tenant: torre-movel" "http://127.0.0.1:8000/api/v1/admin/purge?aplicar=true" \
+  >> /var/log/jornada-purge.log 2>&1
+```
+
+Rodar de novo é seguro: na segunda passagem nada mais é elegível, o total é `0` e nenhum evento novo é emitido (idempotência do dado, não flag de controle).
 
 ## Estrutura do repositório
 

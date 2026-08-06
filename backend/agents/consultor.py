@@ -7,8 +7,13 @@ interpreta a saída do LLM com guarda-corpos de CÓDIGO:
 - `exige_evidencia: true` → inferência sem evidência é DESCARTADA (§8-M3-A3: toda
   inferência carrega evidências);
 - completude/faltantes NUNCA vêm do LLM (domain/intake/completude.py).
-PII: o prompt recebe apenas conteúdo do briefing/faltantes/mensagem — jamais o bloco
-`solicitante` do pedido (§1.3.5/§10.2).
+PII (§1.3.5/§10.2): o prompt recebe conteúdo do briefing, faltantes e mensagem — jamais
+o bloco `solicitante` do pedido. Atenção ao que esta linha NÃO diz: briefing e mensagem
+são texto livre do usuário e PODEM conter PII digitada; quem garante que aqui chegam
+limpos é o serviço, que mascara na fronteira de entrada (`consultor_service`, §10.2 —
+achado 9 do UAT #5: até então este docstring prometia "sem PII" uma garantia que o
+código não dava, porque só a `mensagem` era mascarada). Este módulo é puro: não mascara
+nada e não deve — mascarar aqui seria o segundo ponto de verdade que o C02 proibiu.
 """
 
 import json

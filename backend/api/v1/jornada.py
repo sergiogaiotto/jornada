@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_llm, get_tracer
 from api.v1.os_governanca import (
@@ -118,6 +119,7 @@ def get_servico_jornada(request: Request) -> ServicoJornada:
         get_relogio(request),
         get_llm(request),
         get_tracer(request),
+        publicacoes_vigentes(repositorio),  # política vigente do banco (achado 8 UAT #5)
     )
 
 

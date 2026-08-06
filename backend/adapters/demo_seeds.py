@@ -32,7 +32,7 @@ from domain.campanha.modelos import OS
 from domain.esteira.modelos import EtapaWorkflow
 from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Snapshot
-from domain.governanca.politicas import POLITICA_PUBLICADA
+from domain.governanca.politicas import POLITICA_SEED
 from domain.governanca.snapshot import hash_composto
 from domain.jornada.canonico import hash_jgc
 from domain.jornada.diff import diff_grafos
@@ -479,7 +479,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
                     "optimize",
                 )
             },
-            "policy_version": POLITICA_PUBLICADA["versao"],
+            "policy_version": POLITICA_SEED["versao"],
             "tarifario_id": "tarifas-2026-01",
             "slas": {"tshirt": "G", "congelado_em": (agora - timedelta(days=45)).isoformat()},
         },
@@ -637,8 +637,8 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
         "sql": segmento.sql_publico,
         "criativos": [],
         "politica": {
-            "versao": POLITICA_PUBLICADA["versao"],
-            "conteudo": POLITICA_PUBLICADA["conteudo"],
+            "versao": POLITICA_SEED["versao"],
+            "conteudo": POLITICA_SEED["conteudo"],
         },
         "custo": {"previsto_p50": 4_246.3, "moeda": "BRL"},
         "experimento": {
@@ -697,7 +697,7 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             snapshot_id=snapshot.id,
             onda_atual=2,
             estado="em_rampa",
-            breakers=dict(POLITICA_PUBLICADA["conteudo"]["breakers"]),
+            breakers=dict(POLITICA_SEED["conteudo"]["breakers"]),
             eventos=[
                 {
                     "tipo": "armado",

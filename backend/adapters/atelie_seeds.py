@@ -37,7 +37,7 @@ from domain.atelie.modelos import (
 )
 from domain.atelie.skill_parser import parse_skill_md
 from domain.governanca.modelos import PolicyVersao
-from domain.governanca.politicas import POLITICA_PUBLICADA
+from domain.governanca.politicas import POLITICA_SEED
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "agents" / "skills"
 CASOS_PADRAO = Path(__file__).resolve().parents[2] / "mocks" / "seeds" / "harness_cases.json"
@@ -186,10 +186,10 @@ def semear_politicas(
         return
     repositorio.adicionar_policy(
         PolicyVersao(
-            id=_uuid_seed(f"policy/v{POLITICA_PUBLICADA['versao']}"),
+            id=_uuid_seed(f"policy/v{POLITICA_SEED['versao']}"),
             tenant_id=tenant_id,
-            versao=int(POLITICA_PUBLICADA["versao"]),
-            conteudo=dict(POLITICA_PUBLICADA["conteudo"]),
+            versao=int(POLITICA_SEED["versao"]),
+            conteudo=dict(POLITICA_SEED["conteudo"]),
             estado="publicada",
             publicada_em=agora,
         )

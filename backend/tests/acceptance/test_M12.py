@@ -24,7 +24,7 @@ from application.services.atelie_service import ServicoAtelie
 from domain.atelie.modelos import DIMENSOES_PADRAO
 from domain.audiencia.modelos import Segmento
 from domain.governanca.modelos import Snapshot
-from domain.governanca.politicas import POLITICA_PUBLICADA
+from domain.governanca.politicas import POLITICA_SEED
 from domain.lancamento.modelos import Launch
 
 TENANT = "torre-movel"
@@ -479,7 +479,7 @@ def test_M12_policies_e_drift(client: TestClient, app: FastAPI) -> None:
     inicial = client.get("/api/v1/policies", headers=_h())
     assert inicial.status_code == 200, inicial.text
     assert inicial.json()["publicada"]["versao"] == 1
-    assert inicial.json()["publicada"]["conteudo"] == POLITICA_PUBLICADA["conteudo"]
+    assert inicial.json()["publicada"]["conteudo"] == POLITICA_SEED["conteudo"]
 
     # OS em VOO congela policy_version=1 no GO (§8-M4-A2)
     os_em_voo = _os_com_go(client)
@@ -517,9 +517,9 @@ def test_M12_policies_e_drift(client: TestClient, app: FastAPI) -> None:
 
     # draft válido: v2 aperta holdout_min (10→15) e o breaker de optout (0,6→0,4)
     conteudo_v2: dict[str, Any] = {
-        **POLITICA_PUBLICADA["conteudo"],
+        **POLITICA_SEED["conteudo"],
         "holdout_min": 15.0,
-        "breakers": {**POLITICA_PUBLICADA["conteudo"]["breakers"], "optout_pct_max": 0.4},
+        "breakers": {**POLITICA_SEED["conteudo"]["breakers"], "optout_pct_max": 0.4},
     }
     draft = client.post("/api/v1/policies", json={"conteudo": conteudo_v2}, headers=_h())
     assert draft.status_code == 201, draft.text

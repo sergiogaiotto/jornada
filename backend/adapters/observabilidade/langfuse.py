@@ -3,12 +3,22 @@
 `LANGFUSE_ENABLED=false` → no-op absoluto (nenhum import do SDK, nenhuma rede) — modo
 usado em TODO teste. Habilitado, o envio ocorre em thread daemon com exceções engolidas:
 queda do Langfuse NUNCA bloqueia nem quebra a aplicação (§10.8). Import do SDK é lazy.
+
+PII (§10.2 — frente 3 do UAT #5): o Langfuse é um sistema EXTERNO à aplicação; o que sai
+por aqui sai do perímetro. Hoje os chamadores mandam só identificadores e métricas
+(tenant, os_id, nome do agente, versão da skill, latência), mas isso é CONVENÇÃO, e
+convenção não é controle: bastava um `spans=[{"pergunta": pergunta}]` num serviço novo
+para o dado mascarado no prompt sair em claro no trace. O sanitizador roda AQUI, na
+saída do processo — último ponto antes da rede, e o único que nenhum chamador futuro
+consegue esquecer. Custo: `mascarar_estrutura` é puro e não faz I/O; roda sobre
+metadados/spans, que são pequenos por contrato.
 """
 
 import threading
 from typing import Any
 
 from app.config import Settings
+from domain.privacidade import mascarar_estrutura
 
 
 class TracerLangfuse:
@@ -27,9 +37,18 @@ class TracerLangfuse:
     ) -> None:
         if not self._settings.langfuse_enabled:
             return  # no-op (§10.8): app nunca depende do Langfuse
+        # §10.2: sanitiza ANTES de entregar à thread — o payload que atravessa a
+        # fronteira do processo é o mascarado, e só ele. `trace_id` fica de fora de
+        # propósito: é um UUID de invocação (chave de correlação com o ledger §4.1),
+        # nunca texto do usuário.
         threading.Thread(
             target=self._enviar_seguro,
-            kwargs={"trace_id": trace_id, "nome": nome, "metadados": metadados, "spans": spans},
+            kwargs={
+                "trace_id": trace_id,
+                "nome": mascarar_estrutura(nome),
+                "metadados": mascarar_estrutura(metadados),
+                "spans": mascarar_estrutura(spans),
+            },
             daemon=True,  # fire-and-forget: nunca segura o processo
         ).start()
 

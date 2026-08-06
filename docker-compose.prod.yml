@@ -6,6 +6,14 @@
 # responde de dentro da rede Claro — fora dela a IA degrada para 503 + modo manual
 # (§10.6), o restante da plataforma funciona normalmente com a OS demo semeada
 # (seeds idempotentes: restart não duplica — upsert por uuid5, §11.4/A15).
+#
+# RETENÇÃO (§10.4): o purge NÃO tem scheduler na aplicação — de propósito. Um worker a
+# mais traria lease/retry/fuso e um novo modo de falha silenciosa, que é justamente
+# como o §10.4 ficou sem consumidor até o UAT #5. O agendamento é cron do HOST, e a
+# rota é idempotente e dry-run por default (`?aplicar=true` para valer). Ver README:
+#   15 3 * * * root curl -fsS -X POST -H "Authorization: Bearer $JORNADA_DPO_TOKEN" \
+#     -H "X-Tenant: torre-movel" \
+#     "http://127.0.0.1:8000/api/v1/admin/purge?aplicar=true" >> /var/log/jornada-purge.log 2>&1
 name: jornada
 
 services:

@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.os_governanca import (
     Autenticado,
@@ -85,12 +86,16 @@ def get_servico_portoes(request: Request) -> ServicoPortoes:
     """Mesma instância de repositório da OS (app.state) — RepositorioOsMemoria implementa
     todas as portas (tipagem estrutural §2.1); o cast só informa o mypy."""
     repositorio = cast(RepositorioAprovacao, get_repositorio_os(request))
-    return ServicoPortoes(repositorio, _relogio)
+    # política VIGENTE do banco, injetada: publicar `alcadas` novas em T16 muda a
+    # faixa que o portão de custo devolve (achado 8 UAT #5).
+    return ServicoPortoes(repositorio, _relogio, publicacoes_vigentes(repositorio))
 
 
 def get_servico_aprovacao(request: Request) -> ServicoAprovacao:
     repositorio = cast(RepositorioAprovacao, get_repositorio_os(request))
-    return ServicoAprovacao(repositorio, _relogio, get_settings().web_base_url)
+    return ServicoAprovacao(
+        repositorio, _relogio, get_settings().web_base_url, publicacoes_vigentes(repositorio)
+    )
 
 
 def get_tenant_do_aprovador(usuario: Autenticado) -> str:

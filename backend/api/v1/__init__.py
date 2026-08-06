@@ -6,6 +6,7 @@ M0 não define endpoints de negócio; os routers dos módulos M1+ são incluído
 from fastapi import APIRouter
 
 from api.v1 import (
+    admin,
     ajuda,
     atelie,
     audiencia,
@@ -50,3 +51,4 @@ api_router.include_router(atelie.router)  # M12 (parte 1) · Ateliê T16 (§7.1,
 api_router.include_router(plataforma.router_policies)  # M12 (parte 2) · Políticas (§8-M12)
 api_router.include_router(plataforma.router_auditoria)  # M12 (parte 2) · Auditoria Art. 20 (§8-M12)
 api_router.include_router(ajuda.router)  # M-Guia · chat "IA, me ajude com esta página" (§8-M-Guia)
+api_router.include_router(admin.router)  # §10.4 · Purge de retenção (dpo/admin; achado 20 UAT #5)

@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_embedding, get_llm, get_tracer
 from api.v1.os_governanca import (
@@ -115,6 +116,7 @@ def get_servico_otimizacao(request: Request) -> ServicoOtimizacao:
         get_relogio(request),
         get_llm(request),
         get_tracer(request),
+        publicacoes_vigentes(repositorio),  # política vigente do banco (achado 8 UAT #5)
         get_servico_simulador(request),  # impacto pré-simulado (§8-M11)
         embedding=get_embedding(request),  # A11: embed melhor-esforço na promoção (A3)
     )
@@ -122,7 +124,7 @@ def get_servico_otimizacao(request: Request) -> ServicoOtimizacao:
 
 def get_servico_calibracao(request: Request) -> ServicoCalibracao:
     repositorio = cast(RepositorioOtimizacao, get_repositorio_os(request))
-    return ServicoCalibracao(repositorio, get_relogio(request))
+    return ServicoCalibracao(repositorio, get_relogio(request), publicacoes_vigentes(repositorio))
 
 
 Servico = Annotated[ServicoOtimizacao, Depends(get_servico_otimizacao)]

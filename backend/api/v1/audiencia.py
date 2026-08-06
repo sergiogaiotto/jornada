@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.datacloud.fixtures import DataCloudFixtures
 from adapters.fontes.read_model import ReadModelFixtures
-from adapters.publicacoes import PublicacoesLocais
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_llm, get_retriever, get_tracer
 from api.v1.os_governanca import (
@@ -86,7 +86,6 @@ class RotaAudiencia(APIRoute):
 
 # ------------------------------------------------------------------ Dependências
 _relogio = RelogioSistema()
-_publicacoes = PublicacoesLocais()
 
 
 def get_datacloud(request: Request) -> DataCloudPort:
@@ -123,7 +122,9 @@ def get_servico_audiencia(
         get_tracer(request),
         get_datacloud(request),
         get_read_model(request),
-        _publicacoes,
+        # achado 8 (UAT #5): era `PublicacoesLocais` — a política publicada no banco
+        # existia e o holdout_min continuava vindo da CONSTANTE do domínio.
+        publicacoes_vigentes(repositorio),
         retriever=get_retriever(request),  # A11: preparar_contexto RAG (§7.3/§7.4)
     )
 

@@ -20,6 +20,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.aleatorio import rng_disponivel
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.os_governanca import Escritor, Tenant, _problema_de_dominio, get_repositorio_os
 from app.errors import problem_response
@@ -85,6 +86,7 @@ def get_servico_simulador(request: Request) -> ServicoSimulador:
         _relogio,
         get_rng(request),
         _personas,
+        publicacoes_vigentes(repositorio),  # política vigente do banco (achado 8 UAT #5)
     )
 
 

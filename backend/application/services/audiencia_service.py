@@ -28,7 +28,7 @@ from application.ports.clock import ClockPort
 from application.ports.datacloud import DataCloudPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
-from application.ports.publicacoes import PublicacoesPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.read_model_audiencia import ReadModelAudienciaPort
 from application.ports.repositorio_audiencia import RepositorioAudiencia
 from application.services.os_service import ServicoOs
@@ -116,7 +116,7 @@ class ServicoAudiencia:
             origem="estudio_sql",
             sql_publico=saida.sql,
             criterios_resumo=instrucoes.strip() or None,
-            holdout_pct=float(self._politica().get("holdout_min", HOLDOUT_PCT_DEFAULT)),
+            holdout_pct=float(self._politica(os_).get("holdout_min", HOLDOUT_PCT_DEFAULT)),
         )
         self._repo.adicionar_segmento(segmento)
 
@@ -174,7 +174,7 @@ class ServicoAudiencia:
     ) -> Segmento:
         """PUT /segmentos/{id}/holdout — valida contra holdout_min da política (§4.1)."""
         segmento, os_ = self._exigir_segmento(tenant_id, segmento_id)
-        holdout_min = float(self._politica().get("holdout_min", HOLDOUT_PCT_DEFAULT))
+        holdout_min = float(self._politica(os_).get("holdout_min", HOLDOUT_PCT_DEFAULT))
         regras.validar_holdout(holdout_pct, holdout_min)  # HoldoutForaDaPolitica → 422
         segmento.holdout_pct = holdout_pct
         self._repo.salvar_segmento(segmento)
@@ -310,7 +310,7 @@ class ServicoAudiencia:
             contagem_liquida=relatorio["funil"]["liquido"],
             waterfall=relatorio["waterfall"],
             volume_abordagem=relatorio["volume_abordagem"],
-            holdout_pct=float(self._politica().get("holdout_min", HOLDOUT_PCT_DEFAULT)),
+            holdout_pct=float(self._politica(os_).get("holdout_min", HOLDOUT_PCT_DEFAULT)),
             frescor=relatorio["frescor"],
         )
         self._repo.adicionar_segmento(segmento)
@@ -346,8 +346,13 @@ class ServicoAudiencia:
             )
         return {**relatorio, "bruto": int(detalhe.get("membros", 0))}
 
-    def _politica(self) -> dict[str, Any]:
-        return dict(self._publicacoes.politica_publicada().get("conteudo", {}))
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada DO TENANT da OS (§4.1 `policy_versao`).
+
+        O tenant é parte da pergunta (§3): sem ele, a política publicada por um tenant
+        governaria o holdout do outro. O adapter cai no seed §11.4 quando o tenant
+        ainda não publicou nenhuma."""
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     def _entrada_cache(
         self, tenant_id: str, bruto: dict[str, Any], agora: datetime

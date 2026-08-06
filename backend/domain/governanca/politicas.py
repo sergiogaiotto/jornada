@@ -1,6 +1,21 @@
-"""Política publicada v1 (seed §11.4 "políticas v1") — conteúdo no formato de
+"""Política v1 de SEED (§11.4 "políticas v1") — conteúdo no formato de
 `policy_versao.conteudo` (§4.1): {frequency_cap, quiet_hours, blackout, holdout_min,
 alcadas, retencao_dias, breakers, precedencia}.
+
+`POLITICA_SEED` é SEMENTE e FALLBACK, **nunca fonte da verdade em runtime** (achado 8
+do UAT #5): quem governa é a linha PUBLICADA de `policy_versao` (§4.1), lida pelo
+`PublicacoesPort` e INJETADA nos serviços. Enquanto o constante era importado direto,
+publicar política pela tela T16 não mudava comportamento nenhum — parametrização que
+não muda comportamento é teatro auditável. Um guarda-corpo de CI
+(`tests/unit/test_achado8_guarda_corpo_politica.py`) falha se `application/services/`
+voltar a importar daqui — e também se uma ROTA montar `PublicacoesLocais()` na mão, que
+foi o furo literal do achado. Os únicos consumidores legítimos são as SEEDS
+(`adapters/*_seeds.py`, que materializam a v1 em `policy_versao`) e o FALLBACK do
+adapter de publicações, para o banco vazio devolver exatamente os mesmos valores da seed.
+
+`blackout` e `precedencia` seguem no conjunto fechado do §4.1 (validados, exibidos na
+T16, versionados) sem NENHUM consumidor em runtime — auditado e registrado como escopo
+aberto, não como esquecimento; ver a emenda do achado 8.
 
 Valores coerentes com o SDD: quiet hours 20:00–08:00 (§5.1), holdout default 10% (§4.1
 `segmento.holdout_pct`), breaker de optout 0,6% (§8-M10-A1), 7 listas de supressão na
@@ -128,7 +143,7 @@ def faixa_alcada(custo: float, politica: dict[str, Any]) -> dict[str, Any] | Non
     return None
 
 
-POLITICA_PUBLICADA: dict[str, Any] = {
+POLITICA_SEED: dict[str, Any] = {
     "versao": 1,
     "estado": "publicada",
     "conteudo": {

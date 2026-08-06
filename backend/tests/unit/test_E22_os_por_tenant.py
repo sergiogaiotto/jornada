@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from adapters.persistence.memoria import RepositorioOsMemoria
+from adapters.publicacoes import PublicacoesLocais
 from application.services.lancamento_service import ServicoLancamento
 from domain.campanha.modelos import OS
 
@@ -112,7 +113,9 @@ def test_loader_de_extracts_acha_a_os_do_proprio_tenant() -> None:
     minha = _os("outra-torre", "OS-2026-0457")
     repo.adicionar_os(minha)
 
-    servico = ServicoLancamento(repo, _RelogioFixo(), _SemSupressao(), extracts=_ExtractsUmaLinha())
+    servico = ServicoLancamento(
+        repo, _RelogioFixo(), _SemSupressao(), PublicacoesLocais(), extracts=_ExtractsUmaLinha()
+    )
     carga = servico.carregar_extracts("outra-torre")
 
     assert (carga["carregados"], carga["ignorados"]) == (1, 0), carga
@@ -125,7 +128,9 @@ def test_loader_de_extracts_ignora_codigo_de_outro_tenant() -> None:
     repo = RepositorioOsMemoria()
     repo.adicionar_os(_os("torre-movel", "OS-2026-0457"))
 
-    servico = ServicoLancamento(repo, _RelogioFixo(), _SemSupressao(), extracts=_ExtractsUmaLinha())
+    servico = ServicoLancamento(
+        repo, _RelogioFixo(), _SemSupressao(), PublicacoesLocais(), extracts=_ExtractsUmaLinha()
+    )
     carga = servico.carregar_extracts("outra-torre")
 
     assert (carga["carregados"], carga["ignorados"]) == (0, 1), carga

@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from adapters.fontes.extracts import ExtractsFixtures
 from adapters.fontes.lista_supressao import SupressaoFixtures
+from adapters.publicacoes import publicacoes_vigentes
 from api.v1.compilador import _relogio
 from api.v1.os_governanca import (
     Autenticado,
@@ -108,10 +109,13 @@ def get_extracts(request: Request) -> ExtractsPort:
 def get_servico_lancamento(request: Request) -> ServicoLancamento:
     """Mesma instância de repositório (app.state) — RepositorioOsMemoria implementa
     todas as portas (tipagem estrutural §2.1)."""
+    repositorio = get_repositorio_os(request)
     return ServicoLancamento(
-        cast(RepositorioLancamento, get_repositorio_os(request)),
+        cast(RepositorioLancamento, repositorio),
         _relogio,
         get_supressao(request),
+        # breakers congelados no armar saem da política VIGENTE (achado 8 UAT #5)
+        publicacoes_vigentes(repositorio),
         extracts=get_extracts(request),
     )
 

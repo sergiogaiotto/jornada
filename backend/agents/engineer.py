@@ -8,7 +8,12 @@ mensagens de chat e interpreta a saída do LLM com guarda-corpos de CÓDIGO (§1
 - cercas de código (```sql) são removidas do SQL de forma determinística.
 O veredito de compliance NÃO é deste agente: o Guard determinístico
 (agents/guard/elegibilidade.py) revalida as 7 listas na certificação.
-PII: o prompt recebe briefing/instruções — jamais contatos ou o bloco `solicitante`.
+PII (§10.2): o prompt recebe briefing e instruções — jamais contatos ou o bloco
+`solicitante`. O que esta linha NÃO garante: briefing e instruções são texto livre do
+usuário; quem os sanitiza é o serviço na fronteira de entrada (`audiencia_service` para
+as instruções, `consultor_service` para o briefing — achado 9 do UAT #5, em que o
+briefing entrava em claro e este docstring já prometia o contrário). Módulo puro: não
+mascara (ponto de verdade único é `domain/privacidade`).
 """
 
 import json

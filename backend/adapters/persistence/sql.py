@@ -1558,6 +1558,40 @@ class RepositorioSql(RepositorioOsMemoria):
         maior = linha[0] if linha is not None else None
         return int(maior or 0)
 
+    # --- Purge de retenção (§10.4 — RepositorioPurge) ---
+    def purgar_telemetria(self, tenant_id: str, corte: datetime, *, aplicar: bool) -> int:
+        """`telemetry_event` do tenant com `ts` < corte. Conta e apaga na MESMA
+        transação e com o MESMO predicado: o número relatado no dry-run é o número que
+        a execução destrói (divergência aqui é o pior bug possível — o operador aprova
+        um total e o banco perde outro)."""
+        return self._purgar(
+            tabela_telemetry_event,
+            tabela_telemetry_event.c.tenant_id == tenant_id,
+            tabela_telemetry_event.c.ts < corte,
+            aplicar=aplicar,
+        )
+
+    def purgar_dc_cache(self, tenant_id: str, corte: datetime, *, aplicar: bool) -> int:
+        """`dc_segment_cache` do tenant com `atualizado_em` < corte. `IS NULL` não casa
+        com `<` em SQL — logo linha sem data nunca é elegível, que é exatamente a
+        política: sem data não se prova expiração e apagar é irreversível."""
+        return self._purgar(
+            tabela_dc_segment_cache,
+            tabela_dc_segment_cache.c.tenant_id == tenant_id,
+            tabela_dc_segment_cache.c.atualizado_em < corte,
+            aplicar=aplicar,
+        )
+
+    def _purgar(self, tabela: Table, *criterios: Any, aplicar: bool) -> int:
+        """SELECT count + DELETE com os MESMOS critérios, numa transação só."""
+        with self._engine.begin() as conexao:
+            total = conexao.execute(
+                select(func.count()).select_from(tabela).where(*criterios)
+            ).scalar_one()
+            if aplicar and total:
+                conexao.execute(tabela.delete().where(*criterios))
+            return int(total)
+
     # --- incidente (tabela auxiliar §4.1 nota final — migração 0008, M10) ---
     def adicionar_incidente(self, incidente: Incidente) -> None:
         valores: dict[str, Any] = {

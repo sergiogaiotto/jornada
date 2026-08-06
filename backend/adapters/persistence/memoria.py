@@ -45,6 +45,18 @@ from domain.otimizacao.modelos import Aprendizado, CalibracaoPrior, PropostaOtim
 from domain.validacao.modelos import DocumentoPortao, ThreadWarRoom, ValidacaoCampo
 
 
+def _antes_de(momento: datetime, corte: datetime) -> bool:
+    """Comparação de datas robusta a naive × aware (§10.4 — purge).
+
+    `ts` de `telemetry_event` pode chegar do lote ENS (§8-M10) sem timezone, enquanto o
+    corte nasce do relógio em UTC. Comparar direto levantaria TypeError DENTRO do purge
+    — e um purge que estoura no meio já apagou parte. Naive é lido como UTC (é o que o
+    DDL `timestamptz` §4.1 faz ao gravar)."""
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=UTC)
+    return momento < corte
+
+
 def _cosseno(a: list[float], b: list[float]) -> float:
     """Similaridade de cosseno em Python puro (busca ingênua §7.4 — A11). Dimensões
     divergentes (EMBED_DIM trocado sem reindex — §10.4) rankeiam por último."""
@@ -479,6 +491,35 @@ class RepositorioOsMemoria:
 
     def maior_id_telemetria(self) -> int:
         return self._telemetria[-1].id or 0 if self._telemetria else 0
+
+    # --- Purge de retenção (§10.4 — RepositorioPurge) ---
+    def purgar_telemetria(self, tenant_id: str, corte: datetime, *, aplicar: bool) -> int:
+        """`telemetry_event` do tenant anterior ao corte. MESMO predicado no dry-run e
+        na execução (o relatório não pode divergir do que se apaga)."""
+        elegivel = [
+            e for e in self._telemetria if e.tenant_id == tenant_id and _antes_de(e.ts, corte)
+        ]
+        if aplicar and elegivel:
+            # identidade, não igualdade: `TelemetryEvent` sem `id` atribuído pode ter
+            # dois registros de mesmo valor, e apagar por `==` levaria os dois embora.
+            condenados = {id(e) for e in elegivel}
+            self._telemetria = [e for e in self._telemetria if id(e) not in condenados]
+        return len(elegivel)
+
+    def purgar_dc_cache(self, tenant_id: str, corte: datetime, *, aplicar: bool) -> int:
+        """`dc_segment_cache` do tenant anterior ao corte; `atualizado_em` nulo NUNCA é
+        elegível (sem data não se prova expiração — apagar é irreversível)."""
+        chaves = [
+            chave
+            for chave, entrada in self._dc_cache.items()
+            if chave[0] == tenant_id
+            and entrada.atualizado_em is not None
+            and _antes_de(entrada.atualizado_em, corte)
+        ]
+        if aplicar:
+            for chave in chaves:
+                del self._dc_cache[chave]
+        return len(chaves)
 
     # --- incidente (tabela auxiliar §4.1 nota final — migração 0008, M10) ---
     def adicionar_incidente(self, incidente: Incidente) -> None:

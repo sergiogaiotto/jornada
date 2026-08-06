@@ -14,6 +14,7 @@ import uuid
 from typing import Any
 
 from application.ports.clock import ClockPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.repositorio_jornada import RepositorioJornada
 from application.ports.repositorio_os import RepositorioOs
 from application.ports.rng import RngPort
@@ -23,7 +24,6 @@ from domain.campanha.erros import EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import Experimento, experimento_travado
-from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.intake.completude import valor_do_campo
 from domain.jornada.erros import GrafoInvalido
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
@@ -45,12 +45,22 @@ class ServicoSimulador:
         relogio: ClockPort,
         rng: RngPort,
         personas: ServicoPersona,
+        publicacoes: PublicacoesPort,
     ) -> None:
         self._repo = repositorio
         self._repo_os = repositorio_os
         self._relogio = relogio
         self._rng = rng
         self._personas = personas
+        self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
+
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
+
+        Era a constante compilada: publicar `frequency_cap` novo não mudava nada no
+        Ensaio Geral — nem a validação §5.3, nem o governor do motor §6 (achado 8).
+        """
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     # ------------------------------------------------- POST /jornadas/{id}/simular
     def simular(
@@ -196,7 +206,7 @@ class ServicoSimulador:
     ) -> dict[str, Any]:
         """Pipeline puro do Ensaio (§6): valida §5.3, monta entradas e roda o motor —
         compartilhado por `simular` (persiste) e `ensaiar_grafo` (M11, não persiste)."""
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         erros = validar_grafo(
             grafo,
             experimento_travado=experimento_travado(experimento),

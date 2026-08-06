@@ -33,6 +33,7 @@ from agents import flow
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.repositorio_jornada import RepositorioJornada
 from application.ports.repositorio_os import RepositorioOs
 from domain.agentes.modelos import Invocacao, agente_uuid
@@ -40,7 +41,6 @@ from domain.campanha.erros import EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import experimento_travado
-from domain.governanca.politicas import POLITICA_PUBLICADA
 from domain.jornada import exportacao, taximetro
 from domain.jornada.canonico import hash_jgc
 from domain.jornada.diff import diff_grafos
@@ -59,12 +59,22 @@ class ServicoJornada:
         relogio: ClockPort,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes: PublicacoesPort,
     ) -> None:
         self._repo = repositorio
         self._repo_os = repositorio_os
         self._relogio = relogio
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
+
+    def _politica(self, os_: OS) -> dict[str, Any]:
+        """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
+
+        Era a constante compilada do domínio: publicar quiet hours/frequency cap novos
+        em T16 não mudava nem o prompt do flow nem o veredito do validador §5.3.
+        """
+        return politica_vigente(self._publicacoes, os_.tenant_id)
 
     # --------------------------------------------------- POST /os/{id}/jornada/gerar
     def gerar(
@@ -78,7 +88,7 @@ class ServicoJornada:
         instrucoes = mascarar_pii(instrucoes)
         os_ = self._exigir_os(tenant_id, os_id)
         skill = flow.carregar()
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         mensagens = flow.montar_mensagens(
             skill, os_.briefing or {}, instrucoes, quiet_hours=politica.get("quiet_hours")
         )
@@ -181,7 +191,7 @@ class ServicoJornada:
         )
         candidato = grafo if grafo is not None else self._grafo_minimo(os_, holdout_pct)
         candidato = self._normalizar_meta(candidato, os_)
-        self._validar(candidato, os_.id, POLITICA_PUBLICADA["conteudo"])  # A1/A3 → 422
+        self._validar(candidato, os_.id, self._politica(os_))  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(candidato, os_.id)
         jornada = JornadaVersao(
             id=uuid.uuid4(),
@@ -284,7 +294,7 @@ class ServicoJornada:
                 "nova versão (§1.2 non-goals: sem edição ao vivo)."
             )
         grafo = self._normalizar_meta(grafo, os_)
-        self._validar(grafo, os_.id, POLITICA_PUBLICADA["conteudo"])  # A1/A3 → 422
+        self._validar(grafo, os_.id, self._politica(os_))  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(grafo, os_.id)
         jornada.grafo = grafo
         jornada.hash = hash_jgc(grafo)
@@ -317,7 +327,7 @@ class ServicoJornada:
         instrucoes = mascarar_pii(instrucoes)
         jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
         skill = flow.carregar()
-        politica = POLITICA_PUBLICADA["conteudo"]
+        politica = self._politica(os_)
         mensagens = flow.montar_mensagens(
             skill,
             os_.briefing or {},
