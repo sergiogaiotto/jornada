@@ -150,4 +150,7 @@ def create_app(*, demo: bool | None = None, embedding: EmbeddingPort | None = No
     return app
 
 
-app = create_app()
+# Sem app de nível de módulo: importar `app.main` NÃO pode ter efeito colateral
+# (com DATABASE_URL setado, o boot semeia roster/políticas — e no CI de integração as
+# migrações ainda nem rodaram, quebrando a COLETA dos testes). Os processos usam a
+# factory: `uvicorn app.main:create_app --factory` (Dockerfile e composes).
