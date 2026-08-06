@@ -54,7 +54,15 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://jornada:jornada@localhost:5432/jornada
         run: python -m pytest -m integration
 
+  # `needs: backend` NÃO é dependência lógica — é SERIALIZAÇÃO deliberada. Rodando os
+  # três em paralelo, `frontend` e `compose-validate` vinham `cancelled` com ZERO steps
+  # (jamais alocados a um runner) em três execuções seguidas, enquanto o `backend` — o
+  # job pesado, com Postgres de serviço — passava inteiro. Job cancelado antes do "Set
+  # up job" é falta de runner/cota, não falha de código, e derrubava o `deploy` (que
+  # depende dos três) com a suíte verde. Em série o CI fica ~1 min mais lento e para de
+  # depender da disponibilidade de três runners simultâneos.
   compose-validate:
+    needs: backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +70,7 @@ jobs:
         run: docker compose config -q
 
   frontend:
+    needs: backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
