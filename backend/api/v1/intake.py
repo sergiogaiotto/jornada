@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adapters.embedding.hubgpu import EmbeddingHubGPU
 from adapters.llm.hubgpu import LLMHubGPU
 from adapters.observabilidade.langfuse import TracerLangfuse
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.os_governanca import (
     Autenticado,
@@ -44,6 +45,7 @@ from app.errors import problem_response
 from application.ports.embedding import EmbeddingPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_evidencia import RepositorioEvidencia
 from application.ports.repositorio_intake import RepositorioIntake
 from application.ports.repositorio_os import RepositorioOs
@@ -127,6 +129,7 @@ def get_servico_consultor(
         servico_os,
         get_llm(request),
         get_tracer(request),
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),  # política de IA (§10.2)
         retriever=get_retriever(request),  # A11: precedentes citáveis (§7.4)
     )
 

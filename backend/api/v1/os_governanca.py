@@ -38,6 +38,11 @@ from domain.campanha.erros import (
     NaoEncontrado,
     TransicaoIlegal,
 )
+from domain.ia_responsavel import (
+    DadoBloqueadoParaLlm,
+    DecisaoAutomatizadaNegada,
+    ModeloNaoPermitido,
+)
 
 # ----------------------------------------------------------- Erros → problem+json
 _STATUS_POR_ERRO: tuple[tuple[type[ErroDominio], int], ...] = (
@@ -48,6 +53,17 @@ _STATUS_POR_ERRO: tuple[tuple[type[ErroDominio], int], ...] = (
     (TransicaoIlegal, 409),
     (CodigoDuplicado, 409),
     (EstadoInvalido, 409),
+    # IA Responsável (§10.2) — sem estas linhas o portão INTERROMPE a chamada e depois
+    # mente sobre o motivo: `_problema_de_dominio` cai no `500` de fallback e a resposta
+    # vira "Erro interno inesperado". Medido: publicar `cpf: bloquear` devolvia 500 em
+    # `POST /ajuda/perguntar`. Enforcement que se apresenta como bug é pior que
+    # enforcement ausente — o usuário reporta incidente, o suporte procura stack trace,
+    # e a decisão de privacidade que o DPO publicou fica invisível para todo mundo.
+    (DadoBloqueadoParaLlm, 422),  # o solicitante corrige removendo o dado do texto
+    (DecisaoAutomatizadaNegada, 403),  # Art. 20: a IA propõe, a pessoa aplica
+    # 409 e não 403: quem chamou TEM o papel: é a política do tenant que conflita com o
+    # perfil que a skill pede. 403 mandaria o usuário pedir permissão a si mesmo.
+    (ModeloNaoPermitido, 409),
 )
 
 

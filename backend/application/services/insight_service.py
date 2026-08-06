@@ -25,7 +25,9 @@ from agents import insight as agente_insight
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_insight import RepositorioInsight
+from application.services import portao_ia
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
@@ -33,7 +35,6 @@ from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.governanca.modelos import Snapshot
 from domain.lancamento import semantica
 from domain.lancamento.erros import PrevistoAusente
-from domain.privacidade import mascarar_pii
 
 
 class ServicoInsight:
@@ -43,12 +44,14 @@ class ServicoInsight:
         relogio: ClockPort,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes_ia: PublicacoesIaPort,
         tarifas: dict[str, Decimal] | None = None,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
         self._tarifas = tarifas if tarifas is not None else TARIFAS_VIGENTES
 
     # -------------------------------------------------- POST /os/{id}/perguntar
@@ -60,14 +63,17 @@ class ServicoInsight:
             raise NaoEncontrado(f"OS {os_id} não encontrada no tenant {tenant_id!r}.")
         skill = agente_insight.carregar()
         inicio = self._relogio.agora()
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
 
         spans: list[dict[str, Any]] = []
         consulta_executada: dict[str, Any] | None = None
         # A pré-guarda A4 examina a pergunta ORIGINAL — é ela que precisa VER a PII
-        # para recusar. Só depois o texto é mascarado (§10.2/C02): daqui para baixo
-        # nem prompt nem ledger tocam no original.
+        # para recusar. Só depois o texto é saneado (§10.2/C02): daqui para baixo
+        # nem prompt nem ledger tocam no original. `sanear` mantém o piso do C02 e
+        # passa a BLOQUEAR quando a política do tenant marcar a categoria detectada —
+        # inclusive no caminho de recusa, porque o veto é sobre TRATAR o dado.
         motivo = agente_insight.motivo_fora_do_escopo(pergunta)
-        pergunta = mascarar_pii(pergunta)
+        pergunta = portao.sanear(pergunta)
         if motivo is not None:  # A4: recusa determinística — SEM LLM, SEM consulta
             saida = agente_insight.SaidaInsight(
                 consulta=None,
@@ -79,6 +85,8 @@ class ServicoInsight:
         else:
             contexto = self._contexto_metricas(os_)  # falha RÁPIDO: PrevistoAusente → 409
             mensagens = agente_insight.montar_mensagens(skill, pergunta)
+            # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+            portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # indisponível → 503
             spans.append({"nome": "generate", "modelo_perfil": skill.modelo_perfil})
             saida = agente_insight.interpretar_saida(texto)
@@ -104,7 +112,7 @@ class ServicoInsight:
 
         fim = self._relogio.agora()
         invocacao = self._registrar_invocacao(
-            os_, skill, pergunta, saida, consulta_executada, portador_id, inicio, fim
+            os_, skill, pergunta, saida, consulta_executada, portador_id, inicio, fim, portao
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -185,9 +193,11 @@ class ServicoInsight:
         portador_id: uuid.UUID,
         inicio: datetime,
         fim: datetime,
+        portao: portao_ia.PortaoIa,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). Pergunta
-        entra MASCARADA (runs de dígitos ≥11 — §10.2: PII nunca em log/ledger)."""
+        entra MASCARADA (runs de dígitos ≥11 — §10.2: PII nunca em log/ledger) e a
+        RETENÇÃO da política (§10.4) decide se o texto chega a ser gravado."""
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=os_.tenant_id,
@@ -195,13 +205,15 @@ class ServicoInsight:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"pergunta": pergunta},  # §10.2: já mascarada na fronteira (C02)
-            output={
-                "consulta": saida.consulta,
-                "parametros": saida.parametros,
-                "resposta": saida.resposta,
-                "recusa": saida.recusa,
-            },
+            input=portao.reter_input({"pergunta": pergunta}),  # §10.2 mascarada + §10.4
+            output=portao.reter_output(
+                {
+                    "consulta": saida.consulta,
+                    "parametros": saida.parametros,
+                    "resposta": saida.resposta,
+                    "recusa": saida.recusa,
+                }
+            ),
             evidencias=(
                 []  # a evidência é a própria consulta versionada executada (§7.2)
                 if consulta_executada is None

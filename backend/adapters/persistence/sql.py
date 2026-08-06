@@ -64,6 +64,7 @@ from adapters.persistence.tabelas import (
     tabela_pedido,
     tabela_pendencia,
     tabela_policy_versao,
+    tabela_politica_ia,
     tabela_preflight_run,
     tabela_proposta_otimizacao,
     tabela_resource_registry,
@@ -85,6 +86,7 @@ from domain.criativo.modelos import CelulaCriativo, Criativo
 from domain.esteira.modelos import EtapaWorkflow, HikeImportLog
 from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Aprovacao, PolicyVersao, Snapshot
+from domain.ia_responsavel.modelos import PoliticaIa
 from domain.identidade.modelos import ContaUsuario, Sessao
 from domain.intake.modelos import Pedido
 from domain.jornada.modelos import (
@@ -662,6 +664,23 @@ def _linha_para_policy(linha: Row[Any]) -> PolicyVersao:
         conteudo=dict(linha.conteudo or {}),
         estado=linha.estado,
         publicada_em=linha.publicada_em,
+    )
+
+
+def _linha_para_politica_ia(linha: Row[Any]) -> PoliticaIa:
+    return PoliticaIa(
+        id=linha.id,
+        tenant_id=linha.tenant_id,
+        versao=linha.versao,
+        conteudo=dict(linha.conteudo or {}),
+        estado=linha.estado,
+        autor_id=linha.autor_id,
+        autor_nome=linha.autor_nome,
+        criada_em=linha.criada_em,
+        publicada_em=linha.publicada_em,
+        publicado_por_id=linha.publicado_por_id,
+        publicado_por_nome=linha.publicado_por_nome,
+        motivo=linha.motivo,
     )
 
 
@@ -1916,6 +1935,55 @@ class RepositorioSql(RepositorioOsMemoria):
         consulta = consulta.order_by(tabela_policy_versao.c.versao.desc())
         linha = self._primeira(consulta)
         return _linha_para_policy(linha) if linha is not None else None
+
+    # --- IA Responsável (`politica_ia` §4.1 — F03, migração 0016) ---
+    def adicionar_politica_ia(self, politica: PoliticaIa) -> None:
+        self._upsert(
+            tabela_politica_ia,
+            {
+                "id": politica.id,
+                "tenant_id": politica.tenant_id,
+                "versao": politica.versao,
+                "conteudo": politica.conteudo,
+                "estado": politica.estado,
+                "autor_id": politica.autor_id,
+                "autor_nome": politica.autor_nome,
+                "criada_em": politica.criada_em,
+                "publicada_em": politica.publicada_em,
+                "publicado_por_id": politica.publicado_por_id,
+                "publicado_por_nome": politica.publicado_por_nome,
+                "motivo": politica.motivo,
+            },
+        )
+
+    def obter_politica_ia(self, tenant_id: str, politica_id: uuid.UUID) -> PoliticaIa | None:
+        linha = self._primeira(
+            select(tabela_politica_ia).where(
+                tabela_politica_ia.c.id == politica_id,
+                tabela_politica_ia.c.tenant_id == tenant_id,
+            )
+        )
+        return _linha_para_politica_ia(linha) if linha is not None else None
+
+    def listar_politicas_ia(self, tenant_id: str) -> list[PoliticaIa]:
+        consulta = (
+            select(tabela_politica_ia)
+            .where(tabela_politica_ia.c.tenant_id == tenant_id)
+            .order_by(tabela_politica_ia.c.versao, tabela_politica_ia.c.id)
+        )
+        return [_linha_para_politica_ia(linha) for linha in self._todas(consulta)]
+
+    def politica_ia_publicada_atual(self, tenant_id: str | None = None) -> PoliticaIa | None:
+        """Maior `versao` publicada do tenant. `tenant_id=None` só existe para espelhar
+        a assinatura do M12 (dev single-tenant §3) — as rotas SEMPRE passam o tenant do
+        portador, porque política de privacidade de um cliente não pode vazar governo
+        para outro."""
+        consulta = select(tabela_politica_ia).where(tabela_politica_ia.c.estado == "publicada")
+        if tenant_id is not None:
+            consulta = consulta.where(tabela_politica_ia.c.tenant_id == tenant_id)
+        consulta = consulta.order_by(tabela_politica_ia.c.versao.desc())
+        linha = self._primeira(consulta)
+        return _linha_para_politica_ia(linha) if linha is not None else None
 
     # --- RAG (`agente_evidence` §4.1/§7.4 — A11: pgvector cosine + HNSW) ---
     def adicionar_evidencia(self, evidencia: AgenteEvidence) -> None:

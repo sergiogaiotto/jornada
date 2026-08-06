@@ -15,6 +15,7 @@ from api.v1 import (
     criativo,
     datacloud,
     esteira,
+    ia_responsavel,
     insight,
     intake,
     jornada,
@@ -52,3 +53,4 @@ api_router.include_router(plataforma.router_policies)  # M12 (parte 2) · Polít
 api_router.include_router(plataforma.router_auditoria)  # M12 (parte 2) · Auditoria Art. 20 (§8-M12)
 api_router.include_router(ajuda.router)  # M-Guia · chat "IA, me ajude com esta página" (§8-M-Guia)
 api_router.include_router(admin.router)  # §10.4 · Purge de retenção (dpo/admin; achado 20 UAT #5)
+api_router.include_router(ia_responsavel.router)  # §10.2 · IA Responsável F03 (dpo/admin)

@@ -51,6 +51,7 @@ export function CmdK() {
       { rotulo: "+ Nova Campanha — criar pedido e abrir a Sala de Ideação", acao: novaCampanha },
       { rotulo: "Cockpit — portfólio", href: "/" },
       { rotulo: "Ateliê de Agentes", href: "/atelie" },
+      { rotulo: "IA Responsável — o que a IA pode ver, guardar e decidir", href: "/ia-responsavel" },
     ];
     const deOs = (oss ?? []).flatMap((os) => [
       { rotulo: `${os.codigo} · ${os.nome} — Briefing`, href: `/os/${os.id}/briefing` },

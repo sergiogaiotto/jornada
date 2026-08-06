@@ -26,7 +26,9 @@ from agents import criativo as agentes_t6
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_criativo import RepositorioCriativo
+from application.services import portao_ia
 from application.services.os_service import ServicoOs
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import NaoEncontrado
@@ -40,7 +42,6 @@ from domain.criativo.modelos import (
     CelulaCriativo,
     Criativo,
 )
-from domain.privacidade import mascarar_pii
 
 
 class ServicoCriativo:
@@ -51,12 +52,14 @@ class ServicoCriativo:
         servico_os: ServicoOs,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes_ia: PublicacoesIaPort,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
         self._servico_os = servico_os
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
 
     # ------------------------------------------------------------------ Gerar
     def gerar(
@@ -73,9 +76,12 @@ class ServicoCriativo:
         """POST /os/{id}/criativos/gerar — matriz canal×variante a partir do KV master.
 
         §10.2 (C02): `instrucoes` é texto livre do usuário e alimenta os TRÊS agentes
-        do pipeline (visual→copy→content) e as três linhas do ledger — mascarada aqui,
-        na fronteira, daqui para baixo só existe a versão sanitizada."""
-        instrucoes = mascarar_pii(instrucoes) if instrucoes else instrucoes
+        do pipeline (visual→copy→content) e as três linhas do ledger — saneada aqui,
+        na fronteira, daqui para baixo só existe a versão sanitizada. `sanear` mantém o
+        piso do C02 e passa a BLOQUEAR a chamada quando a política do tenant marcar a
+        categoria detectada (§10.2)."""
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        instrucoes = portao.sanear(instrucoes) if instrucoes else instrucoes
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         canais = list(canais or CANAIS_CRIATIVO)
         variantes = list(variantes or VARIANTES_DEFAULT)
@@ -97,6 +103,8 @@ class ServicoCriativo:
                 contexto_anterior=dict(contexto_anterior) or None,
             )
             inicio = self._relogio.agora()
+            # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+            portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
             fim = self._relogio.agora()
             contexto_anterior[nome] = texto
@@ -112,6 +120,7 @@ class ServicoCriativo:
                     inicio=inicio,
                     fim=fim,
                     span="generate",
+                    portao=portao,
                 )
             )
 
@@ -129,7 +138,7 @@ class ServicoCriativo:
             for c in saida.celulas  # estado default `gerado` — agente nunca aprova (A3)
         ]
         validadores.validar_celulas(celulas)  # A1: SMS>160 etc. → CriativoInvalido (422)
-        avisos = self._avisos_compliance(os_, celulas, kv_master, portador_id)
+        avisos = self._avisos_compliance(os_, celulas, kv_master, portador_id, portao)
 
         criativo = Criativo(
             id=uuid.uuid4(),
@@ -216,7 +225,13 @@ class ServicoCriativo:
         agora = self._relogio.agora()
         marcadas = regras.editar_kv_master(criativo, kv_master, agora=agora)
         self._repo.salvar_criativo(criativo)
-        avisos = self._avisos_compliance(os_, criativo.celulas, kv_master, portador_id)
+        avisos = self._avisos_compliance(
+            os_,
+            criativo.celulas,
+            kv_master,
+            portador_id,
+            portao_ia.de(self._publicacoes_ia, tenant_id),  # política PUBLICADA (§10.2)
+        )
         self._evento(
             os_,
             "criativo.kv_master_editado",
@@ -260,9 +275,21 @@ class ServicoCriativo:
         celulas: list[CelulaCriativo],
         kv_master: dict[str, Any],
         portador_id: uuid.UUID,
+        portao: portao_ia.PortaoIa,
     ) -> list[str]:
         """Warn de linguagem (LLM 20b — "regras + warn LLM"): NUNCA bloqueia; hub fora
-        → sem avisos (§10.6 — o caminho determinístico já deu o veredito)."""
+        → sem avisos (§10.6 — o caminho determinístico já deu o veredito).
+
+        DIVERGÊNCIA CONHECIDA, deliberadamente NÃO enforçada aqui (§7.2 · parâmetro (f)):
+        este é o único `chat` da plataforma que usa um perfil LITERAL (`"20b"`) em vez do
+        `skill.modelo_perfil`, e atribui o span ao `content` — cujo roster declara 120b.
+        Chamar `autorizar_modelo("content", "20b")` recusaria a geração de criativo com a
+        política DEFAULT (roster pinado), quebrando comportamento que hoje funciona; e o
+        default não pode mudar nesta fiação. O caso é análogo ao `guard` (veredito
+        determinístico, LLM só EXPLICA), que o roster resolveu com entrada própria de
+        20b. A correção é do roster, não daqui — registrada como EMENDA SUGERIDA no
+        relatório desta onda. Enquanto ela não vem, este call site fica FORA do
+        parâmetro (f), declarado em vez de escondido."""
         textos = [str(v) for v in kv_master.values() if isinstance(v, str)]
         for celula in celulas:
             textos.extend(v for v in celula.conteudo.values() if isinstance(v, str))
@@ -285,6 +312,7 @@ class ServicoCriativo:
             inicio=inicio,
             fim=fim,
             span="compliance_warn",
+            portao=portao,
         )
         return avisos
 
@@ -300,8 +328,13 @@ class ServicoCriativo:
         inicio: datetime,
         fim: datetime,
         span: str,
+        portao: portao_ia.PortaoIa,
     ) -> Invocacao:
-        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8)."""
+        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8).
+
+        Ponto ÚNICO de gravação do M6: a retenção da política (§10.4) é aplicada aqui,
+        então nem o pipeline nem o warn de compliance podem escapar dela por esquecimento.
+        """
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=os_.tenant_id,
@@ -309,8 +342,8 @@ class ServicoCriativo:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"os_id": str(os_.id), **input},
-            output=output,
+            input=portao.reter_input({"os_id": str(os_.id), **input}),
+            output=portao.reter_output(output),
             evidencias=list(evidencias),
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,

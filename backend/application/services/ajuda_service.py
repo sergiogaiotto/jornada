@@ -20,9 +20,10 @@ from agents import ajuda as agente_ajuda
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_ajuda import RepositorioAjuda
+from application.services import portao_ia
 from domain.agentes.modelos import Invocacao, agente_uuid
-from domain.privacidade import mascarar_pii
 
 
 class ServicoAjuda:
@@ -32,11 +33,13 @@ class ServicoAjuda:
         relogio: ClockPort,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes_ia: PublicacoesIaPort,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
 
     # ------------------------------------------------------ POST /ajuda/perguntar
     def perguntar(
@@ -51,17 +54,23 @@ class ServicoAjuda:
     ) -> dict[str, Any]:
         skill = agente_ajuda.carregar()
         inicio = self._relogio.agora()
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
 
-        # §10.2 (C02): mascara ANTES do prompt — o histórico da sessão também é texto
+        # §10.2 (C02): sanea ANTES do prompt — o histórico da sessão também é texto
         # do usuário e entra nas mensagens; mascarar só no ledger deixava o prompt
         # vazando (achado do UAT #3). `contexto` é o guia público, não é do usuário.
-        pergunta = mascarar_pii(pergunta)
+        # `sanear` mantém o piso do C02 (mascarar) e passa a BLOQUEAR a chamada quando
+        # a política do tenant assim disser — antes, a regra era constante no código.
+        pergunta = portao.sanear(pergunta)
         historico = [
-            {**turno, "texto": mascarar_pii(turno.get("texto", ""))} for turno in historico
+            {**turno, "texto": portao.sanear(turno.get("texto", ""))} for turno in historico
         ]
         mensagens = agente_ajuda.montar_mensagens(
             skill, pagina=pagina, contexto=contexto, historico=historico, pergunta=pergunta
         )
+        # (f) §7.2: o perfil que a skill pede é CONFERIDO contra a política do tenant —
+        # imediatamente antes da chamada, para nenhum caminho dinâmico escapar do portão.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # indisponível → 503
         resposta = texto.strip()
         if not resposta:  # resposta vazia: fallback determinístico — nada inventado (§1.3.5)
@@ -78,13 +87,17 @@ class ServicoAjuda:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={
-                "pagina": pagina,
-                "pergunta": pergunta,  # §10.2: já mascarada na fronteira (C02)
-                "contexto_chars": len(contexto),  # o contexto é o guia público — só o tamanho
-                "historico_len": len(historico),
-            },
-            output={"resposta": resposta},
+            # (b) §10.4: `reter_prompt: false` na política redige o texto ANTES da
+            # gravação — não depende de o purge rodar. `pergunta` já vem saneada (C02).
+            input=portao.reter_input(
+                {
+                    "pagina": pagina,
+                    "pergunta": pergunta,  # §10.2: já mascarada na fronteira (C02)
+                    "contexto_chars": len(contexto),  # o contexto é o guia público — só o tamanho
+                    "historico_len": len(historico),
+                }
+            ),
+            output=portao.reter_output({"resposta": resposta}),
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

@@ -36,6 +36,7 @@ from api.v1.os_governanca import (
 from app.errors import problem_response
 from application.ports.datacloud import DataCloudPort
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.read_model_audiencia import ReadModelAudienciaPort
 from application.ports.repositorio_audiencia import RepositorioAudiencia
 from application.services.audiencia_service import ServicoAudiencia
@@ -125,6 +126,9 @@ def get_servico_audiencia(
         # achado 8 (UAT #5): era `PublicacoesLocais` — a política publicada no banco
         # existia e o holdout_min continuava vindo da CONSTANTE do domínio.
         publicacoes_vigentes(repositorio),
+        # política de IA Responsável PUBLICADA (§10.2) — a MESMA fábrica, para não
+        # existir uma segunda fonte de política (achado 8 UAT #5).
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),
         retriever=get_retriever(request),  # A11: preparar_contexto RAG (§7.3/§7.4)
     )
 

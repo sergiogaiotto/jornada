@@ -3,6 +3,57 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — Onda 3b · A IA Responsável sai do domínio e GOVERNA a plataforma (§10.2 · F03)
+A onda 3 entregou o domínio com enforcement provado por inversão e **zero call sites** — os
+parâmetros governavam funções puras que ninguém chamava. Esta onda fez a fiação: persistência
+versionada (`policy_ia_versao`, migração 0016), rotas, tela, e o `portao_ia` consumido por **sete**
+serviços em call sites de execução (`ajuda`, `audiencia`, `consultor`, `criativo`, `insight`,
+`jornada`, `otimizacao`).
+
+**Verificado por rota HTTP, não por relato:**
+```
+ANTES : versao=0  origem=seed           engineer=['120b']
+POST /ia-responsavel/politicas -> 201
+DEPOIS: versao=1  origem=policy_versao  engineer=['20b']
+```
+A `origem` sai de `seed` (default de fábrica) para `policy_versao` (assinada por um humano) — a
+mesma distinção que o achado crítico da onda 3 obrigou a existir, para não haver fallback
+silencioso. Campo fora do conjunto FECHADO → 422 nomeando o campo. Publicar exige `motivo`
+(≥5 caracteres): não se troca a política de IA sem registrar por quê. Papel errado → 403; tenant
+forjado → 403 (a emenda E04 valendo aqui também). Sem publicação nenhuma, o **default conservador
+governa** e o prompt sai byte a byte idêntico ao de antes — ninguém perdeu proteção na troca de
+`mascarar_pii` por `sanear_para_llm` (15 aceites de C02/D01/achado 8 verdes).
+
+### O achado desta onda: o parâmetro (c) governa 1 das 7 ações do vocabulário
+`decisao_automatizada` **não** é inerte — `jornada.ajustar` muda o grafo persistido, provado por
+inversão. Mas para as outras **seis** ações do vocabulário fechado o DPO publica, recebe 201, a tela
+mostra versão/autor/data — **e nada muda**. É o achado 8 na granularidade do vocabulário, dentro do
+módulo que nasceu para matá-lo. `otimizacao.propor` é o caso afiado: o serviço já obedece em (a),
+(b) e (f), o que faz *parecer* que obedece em tudo.
+
+Tratado como dívida **medida e travada**, não escondida: `portao_ia.ACOES_FIADAS` mais dois aceites
+bidirecionais — acrescentar ação ao vocabulário obriga a declarar por escrito que ela nasce inerte,
+e um teste exercita a rota mostrando o "nada" que acontece. Remover as seis do conjunto fechado
+seria pior: diferente de `teto_tokens` (ficção técnica — `invocacao.tokens` é sempre null porque o
+`LLMPort.chat` descarta o `usage`), elas têm significado real e caminho viável, e removê-las
+quebraria a política publicada de quem já as usa.
+
+**Recomendação registrada:** enquanto um 201 limpo for a resposta para autorização inerte, a tela
+ensina o DPO a confiar no que não acontece. `ACOES_VIA_AI` deveria declarar enforcement (qual serviço
+consulta cada ação) e a publicação recusar — ou ao menos avisar no corpo do 201 — ação sem consumidor.
+
+### Nota de método
+O relato da frente estava **desatualizado quando chegou**: os "478 passed" não reproduziam porque
+outro agente fiou `otimizacao_service.py` no meio do caminho, e a dívida que a frente declarava
+virou ficção. Quem pegou foi o assert bidirecional que a própria frente havia escrito — a melhor
+evidência de que esse tipo de guarda-corpo paga por si. A dívida foi quitada pela regra que o
+arquivo impõe (só sai da lista com teste por rota), cobrindo o caminho mais perigoso da plataforma:
+o `motivo` de rejeição digitado por gente vira `sinal`, dorme no banco e volta ao prompt dias depois.
+
+A auditoria da frente de persistência/rotas **não completou** (erro de conexão do agente). As
+verificações que ela faria foram executadas manualmente e estão acima — publicação, conjunto
+fechado, RBAC, isolamento por tenant, default de fábrica e o mascaramento pelo briefing.
+
 ## 2026-08-06 — Onda 3 · A política passa a governar, purge de verdade, e o domínio da IA Responsável
 
 ### Achado 8 fechado · a tela de Políticas (M12) governa (§4.1, §8-M12)

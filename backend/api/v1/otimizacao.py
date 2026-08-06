@@ -45,6 +45,7 @@ from app.auth import Usuario, require_role
 from app.errors import problem_response
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_otimizacao import RepositorioOtimizacao
 from application.services.otimizacao_service import ServicoCalibracao, ServicoOtimizacao
 from domain.campanha.erros import ErroDominio, JustificativaObrigatoria
@@ -117,6 +118,7 @@ def get_servico_otimizacao(request: Request) -> ServicoOtimizacao:
         get_llm(request),
         get_tracer(request),
         publicacoes_vigentes(repositorio),  # política vigente do banco (achado 8 UAT #5)
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),  # política de IA (§10.2)
         get_servico_simulador(request),  # impacto pré-simulado (§8-M11)
         embedding=get_embedding(request),  # A11: embed melhor-esforço na promoção (A3)
     )

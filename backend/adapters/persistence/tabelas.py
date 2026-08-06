@@ -526,6 +526,28 @@ tabela_policy_versao = Table(
     Column("publicada_em", DateTime(timezone=True)),
 )
 
+# --- IA Responsável (F03): `politica_ia` — migração 0016 ---
+# Mesmo desenho de `policy_versao` (versão sequencial por tenant + conteúdo jsonb), com
+# a AUTORIA que falta lá: quem escreveu e quem publicou, gravados na própria linha. Para
+# a pergunta "quem autorizou a IA a decidir sozinha, e quando?" correlacionar outbox não
+# basta — a resposta tem de estar na linha que governa.
+tabela_politica_ia = Table(
+    "politica_ia",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("tenant_id", Text, nullable=False),
+    Column("versao", Integer, nullable=False),
+    Column("conteudo", JSONB, nullable=False),
+    Column("estado", Text),
+    Column("autor_id", UUID(as_uuid=True)),
+    Column("autor_nome", Text),
+    Column("criada_em", DateTime(timezone=True)),
+    Column("publicada_em", DateTime(timezone=True)),
+    Column("publicado_por_id", UUID(as_uuid=True)),
+    Column("publicado_por_nome", Text),
+    Column("motivo", Text),
+)
+
 # --- Identidade (emenda G01): `usuario` do §4.1 com corpo + `sessao` — migração 0015 ---
 tabela_usuario = Table(
     "usuario",

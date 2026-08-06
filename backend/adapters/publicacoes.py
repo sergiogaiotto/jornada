@@ -22,13 +22,25 @@ from typing import Any, cast
 
 from agents.consultor import carregar_skill
 from application.ports.publicacoes import ORIGEM_PUBLICADA, ORIGEM_SEED
+from application.ports.publicacoes_ia import RepositorioPoliticaIa
 from application.ports.repositorio_atelie import RepositorioAtelie
 from application.ports.repositorio_plataforma import RepositorioPlataforma
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.governanca.politicas import POLITICA_SEED
+from domain.ia_responsavel.politica import politica_ia_seed
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "agents" / "skills"
 TARIFARIO_VIGENTE_ID = "tarifario-2026-v1"  # seed §11.4 (email/push/sms/whatsapp)
+
+# Versão RESERVADA do default conservador de IA Responsável (§10.2). Publicação começa
+# em 1 (`max(existentes)+1`), então 0 nunca colide com uma versão que alguém assinou.
+#
+# Isto conserta, no módulo novo, o defeito que `ports/publicacoes.py` documenta e não
+# pode mais corrigir no M12: lá o seed também é "v1", igual à primeira publicação de um
+# tenant, e só a `origem` distingue as duas. Aqui o NÚMERO sozinho já é honesto — v0 é,
+# por construção, "ninguém publicou nada; isto é o de fábrica". A `origem` continua
+# viajando junto porque é ela que a tela e o ledger citam.
+VERSAO_DEFAULT_IA = 0
 
 
 class PublicacoesLocais:
@@ -54,6 +66,35 @@ class PublicacoesLocais:
             return None
         return {**POLITICA_SEED, "origem": ORIGEM_SEED}
 
+    def politica_ia_publicada(self, tenant_id: str | None = None) -> dict[str, Any]:
+        """DEFAULT conservador de IA Responsável (§10.2) — o governo do primeiro boot.
+
+        **É aqui que o default mora em runtime**, e não em `politica_ia` semeada: a
+        semente é do domínio (`politica_ia_seed`, função pura), este adapter é o único
+        que a materializa, e nenhum serviço a conhece (guarda-corpo de CI do F03).
+
+        Deliberadamente NÃO existe `semear_politicas_ia` espelhando `semear_politicas`
+        do M12. Semear criaria uma linha `estado='publicada'` sem autor humano — a tela
+        do DPO mostraria "v1, publicada", a auditoria perguntaria "quem autorizou?" e a
+        resposta seria "o boot da aplicação". Para uma política que responde pelo
+        Art. 20 da LGPD isso é pior que não ter linha: é assinatura falsa. Sem linha, a
+        tela diz a verdade — *vigora o default de fábrica, ninguém publicou ainda*.
+        """
+        return self.politica_ia_default()
+
+    def politica_ia_default(self) -> dict[str, Any]:
+        """O conservador de fábrica, materializado da semente do domínio (§10.2)."""
+        return {
+            "versao": VERSAO_DEFAULT_IA,
+            "estado": "publicada",  # governa de fato; não é rascunho de ninguém
+            "conteudo": politica_ia_seed(),  # estrutura NOVA a cada chamada (nunca mutável global)
+            "origem": ORIGEM_SEED,
+            "autor_nome": None,
+            "publicado_por_nome": None,
+            "publicada_em": None,
+            "motivo": None,
+        }
+
     def tarifario_id(self) -> str:
         return TARIFARIO_VIGENTE_ID
 
@@ -73,10 +114,12 @@ class PublicacoesAtelie:
         repositorio: RepositorioAtelie,
         fallback: PublicacoesLocais | None = None,
         politicas: RepositorioPlataforma | None = None,
+        politicas_ia: RepositorioPoliticaIa | None = None,
     ) -> None:
         self._repo = repositorio
         self._fallback = fallback or PublicacoesLocais()
         self._politicas = politicas
+        self._politicas_ia = politicas_ia
 
     def versoes_agentes(self) -> dict[str, str]:
         versoes = self._repo.versoes_skills_publicadas()
@@ -127,6 +170,35 @@ class PublicacoesAtelie:
             return None  # o GO viu uma linha publicada e ela sumiu: erro, não fallback
         return self._fallback.politica_versionada(versao, tenant_id, origem=origem)
 
+    def politica_ia_publicada(self, tenant_id: str | None = None) -> dict[str, Any]:
+        """Política de IA Responsável PUBLICADA do tenant; sem linha → default de fábrica.
+
+        O fallback é explícito na resposta (`origem`), nunca silencioso — é a lição do
+        achado crítico da onda 3. E o corte é por TENANT: `politica_ia_publicada_atual`
+        filtra pelo tenant recebido, então tenant B nunca é governado pelo aperto que o
+        tenant A publicou; ele cai no default, com `origem=seed` dizendo isso.
+        """
+        atual = (
+            self._politicas_ia.politica_ia_publicada_atual(tenant_id)
+            if self._politicas_ia is not None
+            else None
+        )
+        if atual is None:
+            return self._fallback.politica_ia_publicada(tenant_id)
+        return {
+            "versao": atual.versao,
+            "estado": atual.estado,
+            "conteudo": dict(atual.conteudo),
+            "origem": ORIGEM_PUBLICADA,
+            "autor_nome": atual.autor_nome,
+            "publicado_por_nome": atual.publicado_por_nome,
+            "publicada_em": atual.publicada_em,
+            "motivo": atual.motivo,
+        }
+
+    def politica_ia_default(self) -> dict[str, Any]:
+        return self._fallback.politica_ia_default()
+
     def tarifario_id(self) -> str:
         return self._fallback.tarifario_id()
 
@@ -150,4 +222,5 @@ def publicacoes_vigentes(repositorio: object) -> PublicacoesAtelie:
         cast(RepositorioAtelie, repositorio),
         fallback=_FALLBACK_DISCO,
         politicas=cast(RepositorioPlataforma, repositorio),
+        politicas_ia=cast(RepositorioPoliticaIa, repositorio),
     )

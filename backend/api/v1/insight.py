@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
+from adapters.publicacoes import publicacoes_vigentes
 from api.v1.compilador import _relogio
 from api.v1.intake import get_llm, get_tracer
 from api.v1.os_governanca import (
@@ -33,6 +34,7 @@ from api.v1.os_governanca import (
 )
 from app.errors import problem_response
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_insight import RepositorioInsight
 from application.services.insight_service import ServicoInsight
 from domain.campanha.erros import ErroDominio
@@ -67,11 +69,13 @@ class RotaInsight(APIRoute):
 def get_servico_insight(request: Request) -> ServicoInsight:
     """Mesma instância de repositório (app.state) — RepositorioOsMemoria implementa
     todas as portas (tipagem estrutural §2.1); o cast só informa o mypy (padrão M5)."""
+    repositorio = get_repositorio_os(request)
     return ServicoInsight(
-        cast(RepositorioInsight, get_repositorio_os(request)),
+        cast(RepositorioInsight, repositorio),
         _relogio,
         get_llm(request),
         get_tracer(request),
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),  # política de IA (§10.2)
     )
 
 

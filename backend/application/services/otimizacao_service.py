@@ -39,7 +39,9 @@ from application.ports.embedding import EmbeddingPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes import PublicacoesPort, politica_vigente
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_otimizacao import RepositorioOtimizacao
+from application.services import portao_ia
 from application.services.simulador_service import ServicoSimulador
 from domain.agentes.modelos import AgenteEvidence, Invocacao, agente_uuid
 from domain.campanha.erros import EstadoInvalido, NaoEncontrado
@@ -157,12 +159,19 @@ class ServicoOtimizacao(_Base):
         llm: LLMPort,
         tracer: TracerPort,
         publicacoes: PublicacoesPort,
+        publicacoes_ia: PublicacoesIaPort,
         simulador: ServicoSimulador,
         embedding: EmbeddingPort | None = None,
     ) -> None:
         super().__init__(repositorio, relogio, publicacoes)
         self._llm = llm
         self._tracer = tracer
+        # Política de IA PUBLICADA (§10.2). OBRIGATÓRIO, sem default: o optimize é o
+        # único agente que chama o LLM por conta própria, e foi justamente por aqui que
+        # os quatro parâmetros continuaram inertes depois da fiação dos outros seis
+        # serviços — um default `None` deixaria o portão voltar a ser opcional em
+        # silêncio, que é a forma do achado 8 do UAT #5.
+        self._publicacoes_ia = publicacoes_ia
         self._simulador = simulador
         self._embedding = embedding  # A11: melhor esforço na promoção (§8-M11-A3)
 
@@ -183,7 +192,16 @@ class ServicoOtimizacao(_Base):
                 "avisos": [],
             }
         base = self._jornada_base_simulada(os_.id)
-        sinais = [a.texto for a in self._repo.listar_aprendizados(os_id=os_.id, status="sinal")]
+        # §10.2 (C02) · o SINAL é texto livre digitado por gente: `motivo` de rejeição
+        # (`POST /propostas/{id}/rejeitar`) vira `Aprendizado(status='sinal')` e volta
+        # aqui, direto para o prompt e para o ledger. Sem `sanear`, um CPF digitado na
+        # justificativa saía da plataforma em claro — e a política do DPO que mandava
+        # BLOQUEAR cartão/CPF não governava esta rota.
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        sinais = [
+            portao.sanear(a.texto)
+            for a in self._repo.listar_aprendizados(os_id=os_.id, status="sinal")
+        ]
         skill = agente_optimize.carregar()
         politica = self._politica(os_)
         mensagens = agente_optimize.montar_mensagens(
@@ -194,6 +212,8 @@ class ServicoOtimizacao(_Base):
             quiet_hours=politica.get("quiet_hours"),
         )
         inicio = self._relogio.agora()
+        # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         try:
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
         except LLMIndisponivel as exc:  # leitura degrada — nunca 503 num GET (§10.6)
@@ -239,6 +259,7 @@ class ServicoOtimizacao(_Base):
             portador_id=portador_id,
             inicio=inicio,
             fim=fim,
+            portao=portao,
         )
         self._evento(
             os_.tenant_id,
@@ -772,8 +793,14 @@ class ServicoOtimizacao(_Base):
         portador_id: uuid.UUID,
         inicio: datetime,
         fim: datetime,
+        portao: portao_ia.PortaoIa,
     ) -> Invocacao:
-        """Ledger via_ai (§4.1) + evento `agent.invoked` + trace Langfuse (§10.8)."""
+        """Ledger via_ai (§4.1) + evento `agent.invoked` + trace Langfuse (§10.8).
+
+        `portao` é obrigatório e sem default (§10.4): a retenção é decidida na
+        GRAVAÇÃO, não na leitura. Um default aqui gravaria prompt e resposta em claro
+        para quem publicou `reter_prompt=false`, e nenhuma tela mostraria a diferença.
+        """
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=os_.tenant_id,
@@ -781,8 +808,8 @@ class ServicoOtimizacao(_Base):
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"os_id": str(os_.id), **input},
-            output=output,
+            input=portao.reter_input({"os_id": str(os_.id), **input}),
+            output=portao.reter_output(output),
             evidencias=[],
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,

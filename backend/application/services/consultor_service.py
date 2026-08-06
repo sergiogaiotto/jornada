@@ -40,8 +40,10 @@ from agents import consultor as agente_consultor
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_intake import RepositorioIntake
 from application.ports.repositorio_os import RepositorioOs
+from application.services import portao_ia
 from application.services.os_service import ServicoOs
 from application.services.retriever_service import RetrieverService, evidencias_para_contexto
 from domain.agentes import compliance
@@ -56,7 +58,7 @@ from domain.intake.erros import (
     PedidoJaConvertido,
 )
 from domain.intake.modelos import Pedido
-from domain.privacidade import mascarar_campos, mascarar_estrutura, mascarar_pii
+from domain.privacidade import mascarar_campos, mascarar_estrutura
 
 _AUSENTE: Any = object()  # sentinela: PATCH briefing sem `valor` = apenas confirmar
 
@@ -70,6 +72,7 @@ class ServicoConsultor:
         servico_os: ServicoOs,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes_ia: PublicacoesIaPort,
         retriever: RetrieverService | None = None,
     ) -> None:
         self._repo = repositorio
@@ -78,6 +81,7 @@ class ServicoConsultor:
         self._servico_os = servico_os
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
         self._retriever = retriever  # A11: precedentes (§7.4); None → sem RAG
 
     # ---------------------------------------------------------------- Pedido
@@ -118,10 +122,13 @@ class ServicoConsultor:
     ) -> tuple[Pedido, str]:
         """POST /pedidos/{id}/mensagem — devolve (pedido atualizado, resposta do consultor).
 
-        §10.2 (C02): a fala do solicitante é MASCARADA na fronteira; daqui para baixo
+        §10.2 (C02): a fala do solicitante é SANEADA na fronteira; daqui para baixo
         só existe `mensagem` sanitizada — prompt, RAG e ledger recebem a mesma coisa.
+        `sanear` mantém o piso do C02 (mascarar) e passa a BLOQUEAR a chamada quando a
+        política do tenant marcar a categoria detectada.
         """
-        mensagem = mascarar_pii(mensagem)
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        mensagem = portao.sanear(mensagem)
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(
@@ -150,6 +157,8 @@ class ServicoConsultor:
             burla_compliance=burla,
         )
         inicio = self._relogio.agora()
+        # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
         saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         # §7.3: modelo que conversa sem preencher `inferencias` recebe reforço de
@@ -178,6 +187,7 @@ class ServicoConsultor:
                     ),
                 },
             ]
+            portao.autorizar_modelo(skill.nome, skill.modelo_perfil)  # (f) idem no retry
             texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
             saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         if tentativa and not saida.inferencias:
@@ -206,7 +216,7 @@ class ServicoConsultor:
         self._repo.salvar_pedido(pedido)
 
         invocacao = self._registrar_invocacao(
-            pedido, skill, mensagem, saida, portador_id, inicio, fim, burla=burla
+            pedido, skill, mensagem, saida, portador_id, inicio, fim, portao, burla=burla
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -242,7 +252,7 @@ class ServicoConsultor:
         página pública do link mágico de aprovação (§8-M8). Mascarado na fronteira; o
         nome derivado (`_nome_padrao`) já nasce limpo porque o briefing é mascarado
         na entrada."""
-        nome = mascarar_pii(nome) if nome else nome
+        nome = portao_ia.de(self._publicacoes_ia, tenant_id).sanear(nome) if nome else nome
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(f"Pedido {pedido_id} já convertido (os_id={pedido.os_id}).")
@@ -360,7 +370,7 @@ class ServicoConsultor:
         briefing (engineer, flow, criativo). Mascarado na entrada, como as outras duas.
         `campo` também passa pelo sanitizador: ele vem do PATH da URL (texto livre) e
         é ecoado na mensagem de erro 404 e no payload do evento."""
-        campo = mascarar_pii(campo)
+        campo = portao_ia.de(self._publicacoes_ia, tenant_id).sanear(campo)
         if valor is not _AUSENTE:
             valor = mascarar_estrutura(valor)
         os_ = self._servico_os.obter_os(tenant_id, os_id)
@@ -424,6 +434,7 @@ class ServicoConsultor:
         portador_id: uuid.UUID,
         inicio: Any,
         fim: Any,
+        portao: portao_ia.PortaoIa,
         burla: Sequence[str] = (),
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3).
@@ -435,7 +446,13 @@ class ServicoConsultor:
 
         C01: tentativa de burlar compliance vira `compliance_bypass_tentado` no output
         do agente (e no payload do evento) — é o que a auditoria precisa enxergar em
-        `GET /auditoria`: quem pediu, quando e com quais marcadores."""
+        `GET /auditoria`: quem pediu, quando e com quais marcadores.
+
+        (b) §10.4: a RETENÇÃO da política decide se o texto chega a ser gravado. A marca
+        `compliance_bypass_tentado` é lista de MARCADORES (não texto do titular), mas
+        atravessa a redação como qualquer outro campo não declarado técnico — a política
+        que suprime o prompt suprime também o eco dele, que é o comportamento correto:
+        o que a auditoria precisa saber (houve tentativa) está no EVENTO, não só aqui."""
         evidencias = [e for inf in saida.inferencias for e in inf.evidencias]
         marca_burla: dict[str, Any] = {"compliance_bypass_tentado": list(burla)} if burla else {}
         invocacao = Invocacao(
@@ -445,15 +462,17 @@ class ServicoConsultor:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"pedido_id": str(pedido.id), "mensagem": mensagem},
-            output={
-                "resposta": saida.resposta,
-                "inferencias": [
-                    {"campo": i.campo, "valor": i.valor, "evidencias": list(i.evidencias)}
-                    for i in saida.inferencias
-                ],
-                **marca_burla,
-            },
+            input=portao.reter_input({"pedido_id": str(pedido.id), "mensagem": mensagem}),
+            output=portao.reter_output(
+                {
+                    "resposta": saida.resposta,
+                    "inferencias": [
+                        {"campo": i.campo, "valor": i.valor, "evidencias": list(i.evidencias)}
+                        for i in saida.inferencias
+                    ],
+                    **marca_burla,
+                }
+            ),
             evidencias=evidencias,
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,

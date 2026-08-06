@@ -29,8 +29,10 @@ from application.ports.datacloud import DataCloudPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes import PublicacoesPort, politica_vigente
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.read_model_audiencia import ReadModelAudienciaPort
 from application.ports.repositorio_audiencia import RepositorioAudiencia
+from application.services import portao_ia
 from application.services.os_service import ServicoOs
 from application.services.retriever_service import RetrieverService, evidencias_para_contexto
 from domain.agentes.modelos import Invocacao, agente_uuid
@@ -48,7 +50,6 @@ from domain.audiencia.modelos import (
 )
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
-from domain.privacidade import mascarar_pii
 
 
 class ServicoAudiencia:
@@ -62,6 +63,7 @@ class ServicoAudiencia:
         datacloud: DataCloudPort,
         read_model: ReadModelAudienciaPort,
         publicacoes: PublicacoesPort,
+        publicacoes_ia: PublicacoesIaPort,
         retriever: RetrieverService | None = None,
     ) -> None:
         self._repo = repositorio
@@ -72,6 +74,7 @@ class ServicoAudiencia:
         self._datacloud = datacloud
         self._read_model = read_model
         self._publicacoes = publicacoes
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
         self._retriever = retriever  # A11: preparar_contexto RAG (§7.3); None → sem RAG
 
     # ------------------------------------------------------------ Estúdio SQL
@@ -80,9 +83,12 @@ class ServicoAudiencia:
     ) -> tuple[Segmento, agente_engineer.SaidaEngineer, list[str], Invocacao]:
         """POST /os/{id}/segmento/gerar-sql — engineer via LLMPort (§8-M5).
 
-        §10.2 (C02): instruções mascaradas na fronteira — prompt, embedding do RAG,
-        `criterios_resumo` do segmento e ledger recebem só o texto sanitizado."""
-        instrucoes = mascarar_pii(instrucoes)
+        §10.2 (C02): instruções saneadas na fronteira — prompt, embedding do RAG,
+        `criterios_resumo` do segmento e ledger recebem só o texto sanitizado. `sanear`
+        mantém o piso do C02 e passa a BLOQUEAR quando a política do tenant marcar a
+        categoria detectada."""
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        instrucoes = portao.sanear(instrucoes)
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         skill = agente_engineer.carregar()
         # A11 (§7.3): preparar_contexto — top-k=8 nas bases autorizadas da skill;
@@ -97,6 +103,8 @@ class ServicoAudiencia:
             skill, os_.briefing, instrucoes, evidencias_rag=evidencias_para_contexto(evidencias_rag)
         )
         inicio = self._relogio.agora()
+        # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
         fim = self._relogio.agora()
         saida = agente_engineer.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
@@ -121,7 +129,7 @@ class ServicoAudiencia:
         self._repo.adicionar_segmento(segmento)
 
         invocacao = self._registrar_invocacao(
-            os_, skill, instrucoes, saida, portador_id, inicio, fim
+            os_, skill, instrucoes, saida, portador_id, inicio, fim, portao
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -380,8 +388,10 @@ class ServicoAudiencia:
         portador_id: uuid.UUID,
         inicio: datetime,
         fim: datetime,
+        portao: portao_ia.PortaoIa,
     ) -> Invocacao:
-        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). SEM PII."""
+        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). SEM PII,
+        e com a RETENÇÃO da política (§10.4) decidindo se o texto chega a ser gravado."""
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=os_.tenant_id,
@@ -389,12 +399,14 @@ class ServicoAudiencia:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"os_id": str(os_.id), "instrucoes": instrucoes},
-            output={
-                "sql": saida.sql,
-                "explicacao": list(saida.explicacao),
-                "evidencias": list(saida.evidencias),
-            },
+            input=portao.reter_input({"os_id": str(os_.id), "instrucoes": instrucoes}),
+            output=portao.reter_output(
+                {
+                    "sql": saida.sql,
+                    "explicacao": list(saida.explicacao),
+                    "evidencias": list(saida.evidencias),
+                }
+            ),
             evidencias=list(saida.evidencias),
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,

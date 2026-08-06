@@ -56,7 +56,10 @@ const SECOES: Secao[] = [
   },
   {
     titulo: "Plataforma",
-    itens: [{ rotulo: "Ateliê de Agentes", destino: "/atelie" }],
+    itens: [
+      { rotulo: "Ateliê de Agentes", destino: "/atelie" },
+      { rotulo: "IA Responsável", destino: "/ia-responsavel" },
+    ],
   },
 ];
 

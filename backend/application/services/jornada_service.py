@@ -34,8 +34,10 @@ from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes import PublicacoesPort, politica_vigente
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_jornada import RepositorioJornada
 from application.ports.repositorio_os import RepositorioOs
+from application.services import portao_ia
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
@@ -48,7 +50,6 @@ from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.sfmc_preview import preview_do_no
 from domain.jornada.validacao import normalizar_arestas, validar_grafo
-from domain.privacidade import mascarar_pii
 
 
 class ServicoJornada:
@@ -60,6 +61,7 @@ class ServicoJornada:
         llm: LLMPort,
         tracer: TracerPort,
         publicacoes: PublicacoesPort,
+        publicacoes_ia: PublicacoesIaPort,
     ) -> None:
         self._repo = repositorio
         self._repo_os = repositorio_os
@@ -67,6 +69,7 @@ class ServicoJornada:
         self._llm = llm
         self._tracer = tracer
         self._publicacoes = publicacoes  # política VIGENTE do banco (achado 8 UAT #5)
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
 
     def _politica(self, os_: OS) -> dict[str, Any]:
         """`conteudo` da política publicada do tenant da OS (§4.1 `policy_versao`).
@@ -83,9 +86,11 @@ class ServicoJornada:
         """Flow → JGC (§8-M7) como NOVA versão do twin; validado (§5.3) e taxado (A2)
         antes de persistir — o LLM propõe, o código dá o veredito (§1.3.5).
 
-        §10.2 (C02): instruções livres mascaradas na fronteira — prompt e ledger só
-        veem o texto sanitizado."""
-        instrucoes = mascarar_pii(instrucoes)
+        §10.2 (C02): instruções livres saneadas na fronteira — prompt e ledger só
+        veem o texto sanitizado. `sanear` mantém o piso do C02 e passa a BLOQUEAR
+        quando a política do tenant marcar a categoria detectada."""
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        instrucoes = portao.sanear(instrucoes)
         os_ = self._exigir_os(tenant_id, os_id)
         skill = flow.carregar()
         politica = self._politica(os_)
@@ -93,6 +98,8 @@ class ServicoJornada:
             skill, os_.briefing or {}, instrucoes, quiet_hours=politica.get("quiet_hours")
         )
         inicio = self._relogio.agora()
+        # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se hub fora
         saida = flow.interpretar_saida(texto)
         # §7.3: gerar → validar → retry≤max_retries com o veredito DETERMINÍSTICO do
@@ -115,6 +122,7 @@ class ServicoJornada:
                         ),
                     },
                 ]
+                portao.autorizar_modelo(skill.nome, skill.modelo_perfil)  # (f) idem no retry
                 texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
                 saida = flow.interpretar_saida(texto)
             if saida.grafo is None:  # guarda-corpo §1.3.5: nada é inventado
@@ -155,6 +163,7 @@ class ServicoJornada:
             inicio=inicio,
             fim=fim,
             span="generate",
+            portao=portao,
         )
         self._evento(
             os_,
@@ -320,11 +329,18 @@ class ServicoJornada:
     def ajustar(
         self, tenant_id: str, jornada_id: uuid.UUID, *, instrucoes: str, portador_id: uuid.UUID
     ) -> tuple[dict[str, Any], Invocacao]:
-        """Texto livre → diff proposto (§8-M7) — NUNCA aplica direto: aplicar é um PUT
-        humano do `grafo_proposto` (§1.1.3 Aplicar/Rejeitar).
+        """Texto livre → diff proposto (§8-M7); quem decide se a IA pode APLICAR
+        sozinha é a POLÍTICA, não mais um literal no código.
 
-        §10.2 (C02): instruções livres mascaradas na fronteira (prompt + ledger)."""
-        instrucoes = mascarar_pii(instrucoes)
+        Até esta onda, `aplicado: False` era convenção: alguém escreveu o literal na
+        mão, e o próximo commit podia trocá-lo por `True` sem que tela, log ou DPO
+        ficassem sabendo (LGPD Art. 20). Agora a allowlist versionada
+        `decisao_automatizada.pode_aplicar_sozinho` decide, e o default dela é VAZIA —
+        publicar a v1 preserva exatamente o comportamento de hoje.
+
+        §10.2 (C02): instruções livres saneadas na fronteira (prompt + ledger)."""
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        instrucoes = portao.sanear(instrucoes)
         jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
         skill = flow.carregar()
         politica = self._politica(os_)
@@ -336,6 +352,8 @@ class ServicoJornada:
             grafo_atual=jornada.grafo,
         )
         inicio = self._relogio.agora()
+        # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
+        portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
         fim = self._relogio.agora()
         saida = flow.interpretar_saida(texto)
@@ -360,10 +378,34 @@ class ServicoJornada:
             inicio=inicio,
             fim=fim,
             span="ajustar",
+            portao=portao,
         )
+        # (c) LGPD Art. 20 — a POLÍTICA decide o modo, não um literal.
+        #
+        # `aplicar` só acontece com proposta VÁLIDA (`not erros`): automatizar a decisão
+        # nunca dispensa o veredito determinístico do §5.3, como `decisao.py` registra.
+        # Proposta inválida com a ação autorizada continua sendo proposta — o caminho
+        # automático não é uma porta dos fundos para gravar grafo reprovado.
+        #
+        # A aplicação reusa `atualizar_grafo`, que é o MESMO caminho do PUT humano
+        # (§1.1.3): valida §5.3 de novo, recalcula o taxímetro e emite
+        # `jornada.grafo_atualizado`. Um atalho que gravasse direto teria menos gates
+        # que o clique — o oposto do que o Art. 20 pede.
+        aplicado = False
+        if not erros and portao.pode_aplicar_sozinho(portao_ia.ACAO_JORNADA_AJUSTAR):
+            # `actor` diz a verdade: NINGUÉM clicou. A trilha registra a automação e o
+            # portador em cujo nome ela rodou — sem isso, a linha do outbox seria
+            # indistinguível de um humano tendo aplicado.
+            self.atualizar_grafo(
+                tenant_id,
+                jornada_id,
+                grafo=proposto,
+                actor=f"ia:{skill.nome}:politica(portador={portador_id})",
+            )
+            aplicado = True
         proposta = {
             "jornada_id": str(jornada.id),
-            "aplicado": False,  # prévia — aplicar é PUT /jornadas/{id}/grafo (humano)
+            "aplicado": aplicado,  # default: prévia — aplicar é PUT humano (§1.1.3)
             "grafo_proposto": proposto,
             "diff": self._diff_grafos(jornada.grafo, proposto),
             "premissas": list(saida.premissas),
@@ -557,8 +599,12 @@ class ServicoJornada:
         inicio: datetime,
         fim: datetime,
         span: str,
+        portao: portao_ia.PortaoIa,
     ) -> Invocacao:
-        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8)."""
+        """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8).
+
+        Ponto ÚNICO de gravação do M7: a retenção da política (§10.4) é aplicada aqui,
+        então `gerar` e `ajustar` não podem divergir por esquecimento de um dos dois."""
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=os_.tenant_id,
@@ -566,8 +612,8 @@ class ServicoJornada:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"os_id": str(os_.id), **input},
-            output=output,
+            input=portao.reter_input({"os_id": str(os_.id), **input}),
+            output=portao.reter_output(output),
             evidencias=[],
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,

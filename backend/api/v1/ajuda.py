@@ -16,20 +16,34 @@ from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
+from adapters.publicacoes import publicacoes_vigentes
 from api.v1.compilador import _relogio
 from api.v1.intake import get_llm, get_tracer
-from api.v1.os_governanca import Autenticado, Tenant, get_repositorio_os
+from api.v1.os_governanca import (
+    Autenticado,
+    RotaComErrosDeDominio,
+    Tenant,
+    get_repositorio_os,
+)
 from app.errors import problem_response
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_ajuda import RepositorioAjuda
 from application.services.ajuda_service import ServicoAjuda
 
 
-class RotaAjuda(APIRoute):
-    """LLMIndisponivel→503 degraded (§10.6) ANTES do mapa genérico do M1."""
+class RotaAjuda(RotaComErrosDeDominio):
+    """LLMIndisponivel→503 degraded (§10.6) ANTES do mapa genérico do M1.
+
+    Herda `RotaComErrosDeDominio` (§8-M1) porque esta rota passa pelo portão de IA
+    Responsável (§10.2) e o portão INTERROMPE com `ErroDominio`. Estendendo `APIRoute`
+    direto, como estava, o `DadoBloqueadoParaLlm` de `cpf: bloquear` escapava até o
+    handler global e virava 500 "Erro interno inesperado" — medido nesta onda. O
+    bloqueio funcionava (a chamada ao modelo não acontecia) e a resposta mentia sobre o
+    porquê: o DPO publicava a decisão e o usuário via um incidente.
+    """
 
     def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         handler_original = super().get_route_handler()
@@ -55,11 +69,15 @@ class RotaAjuda(APIRoute):
 def get_servico_ajuda(request: Request) -> ServicoAjuda:
     """Mesma instância de repositório (app.state) — RepositorioOsMemoria implementa
     todas as portas (tipagem estrutural §2.1); o cast só informa o mypy (padrão M5)."""
+    repositorio = get_repositorio_os(request)
     return ServicoAjuda(
-        cast(RepositorioAjuda, get_repositorio_os(request)),
+        cast(RepositorioAjuda, repositorio),
         _relogio,
         get_llm(request),
         get_tracer(request),
+        # política de IA Responsável PUBLICADA (§10.2) — MESMA fábrica dos outros
+        # portões, para não existir uma segunda fonte de política (achado 8 UAT #5).
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),
     )
 
 

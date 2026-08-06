@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_llm, get_tracer
 from api.v1.os_governanca import (
@@ -36,6 +37,7 @@ from api.v1.os_governanca import (
 )
 from app.errors import problem_response
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_criativo import RepositorioCriativo
 from application.services.criativo_service import ServicoCriativo
 from application.services.os_service import ServicoOs
@@ -95,6 +97,7 @@ def get_servico_criativo(
         servico_os,
         get_llm(request),
         get_tracer(request),
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),  # política de IA (§10.2)
     )
 
 

@@ -23,6 +23,7 @@ import { Criativo } from "./pages/Criativo";
 import { DataCloud } from "./pages/DataCloud";
 import { Ensaio } from "./pages/Ensaio";
 import { Esteira } from "./pages/Esteira";
+import { IaResponsavel } from "./pages/IaResponsavel";
 import { Ideacao } from "./pages/Ideacao";
 import { Lancamento } from "./pages/Lancamento";
 import { Login } from "./pages/Login";
@@ -87,6 +88,10 @@ export default function App() {
           </Route>
 
           <Route path="/atelie/*" element={<Atelie />} />
+
+          {/* IA Responsável (§10.2 · F03) — a própria tela esconde o formulário
+              de quem não é dpo/admin; a leitura é de qualquer autenticado. */}
+          <Route path="/ia-responsavel" element={<IaResponsavel />} />
 
           {/* Administração de acesso — a própria tela barra quem não é admin (E04) */}
           <Route path="/usuarios" element={<Usuarios />} />

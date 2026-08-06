@@ -31,6 +31,7 @@ from domain.criativo.modelos import Criativo
 from domain.esteira.modelos import EtapaWorkflow, HikeImportLog
 from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Aprovacao, PolicyVersao, Snapshot
+from domain.ia_responsavel.modelos import PoliticaIa
 from domain.identidade.modelos import ContaUsuario, Sessao
 from domain.intake.modelos import Pedido
 from domain.jornada.modelos import (
@@ -111,6 +112,8 @@ class RepositorioOsMemoria:
         self._harness_runs: list[HarnessRun] = []
         self._policies: dict[uuid.UUID, PolicyVersao] = {}
         self._ordem_policy: list[uuid.UUID] = []
+        self._politicas_ia: dict[uuid.UUID, PoliticaIa] = {}
+        self._ordem_politica_ia: list[uuid.UUID] = []
         self._usuarios: dict[uuid.UUID, ContaUsuario] = {}  # G01
         self._ordem_usuario: list[uuid.UUID] = []  # G01 — ordem de criação na listagem
         self._sessoes: dict[str, Sessao] = {}  # G01 — chave = sha256 do token do cookie
@@ -680,6 +683,31 @@ class RepositorioOsMemoria:
             for i in self._ordem_policy
             if self._policies[i].estado == "publicada"
             and (tenant_id is None or self._policies[i].tenant_id == tenant_id)
+        ]
+        return max(publicadas, key=lambda p: p.versao) if publicadas else None
+
+    # --- IA Responsável (`politica_ia` §4.1 — F03, migração 0016) ---
+    def adicionar_politica_ia(self, politica: PoliticaIa) -> None:
+        self._politicas_ia[politica.id] = politica
+        self._ordem_politica_ia.append(politica.id)
+
+    def obter_politica_ia(self, tenant_id: str, politica_id: uuid.UUID) -> PoliticaIa | None:
+        politica = self._politicas_ia.get(politica_id)
+        return politica if politica is not None and politica.tenant_id == tenant_id else None
+
+    def listar_politicas_ia(self, tenant_id: str) -> list[PoliticaIa]:
+        return sorted(
+            (p for p in self._politicas_ia.values() if p.tenant_id == tenant_id),
+            key=lambda p: p.versao,
+        )
+
+    def politica_ia_publicada_atual(self, tenant_id: str | None = None) -> PoliticaIa | None:
+        """Maior `versao` publicada do tenant; `None` = tenant nunca publicou (o adapter
+        de publicações traduz isso no default conservador com `origem=seed`)."""
+        publicadas = [
+            p
+            for p in self._politicas_ia.values()
+            if p.estado == "publicada" and (tenant_id is None or p.tenant_id == tenant_id)
         ]
         return max(publicadas, key=lambda p: p.versao) if publicadas else None
 

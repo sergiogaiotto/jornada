@@ -152,6 +152,8 @@ export function Topbar() {
     ? `${os?.codigo ?? "OS"}${secao ? ` · ${secao}` : ""}`
     : pathname.startsWith("/atelie")
       ? "Ateliê de Agentes"
+      : pathname.startsWith("/ia-responsavel")
+        ? "IA Responsável"
       : `Portfólio · ${tenantDaSessao === "torre-movel" ? "Torre Móvel" : tenantDaSessao}`;
 
   return (

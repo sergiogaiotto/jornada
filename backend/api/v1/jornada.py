@@ -47,6 +47,7 @@ from api.v1.os_governanca import (
 from app.errors import problem_response
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_jornada import RepositorioJornada
 from application.ports.repositorio_os import RepositorioOs
 from application.services.jornada_service import ServicoJornada
@@ -120,6 +121,7 @@ def get_servico_jornada(request: Request) -> ServicoJornada:
         get_llm(request),
         get_tracer(request),
         publicacoes_vigentes(repositorio),  # política vigente do banco (achado 8 UAT #5)
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),  # política de IA (§10.2)
     )
 
 
