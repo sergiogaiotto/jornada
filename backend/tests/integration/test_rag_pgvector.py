@@ -49,8 +49,14 @@ def test_ingest_e_retrieve_pgvector(banco_limpo: str) -> None:
     resultado = retriever.buscar(
         TENANT, "consumo_pct franquia de dados no ciclo", bases=["dicionario_dados"]
     )
-    assert len(resultado) == 8
-    assert "consumo_pct" in resultado[0].chunk  # cosine_distance ordena de verdade
+    # top-k=8 + as evidências pinadas de compliance da seed (A24) — dedup por id
+    assert len(resultado) >= 8
+    assert len({e.id for e in resultado}) == len(resultado)
+    pinadas = [e for e in resultado if (e.meta or {}).get("sempre_incluir")]
+    assert pinadas and resultado[: len(pinadas)] == pinadas, "compliance vem à frente"
+    assert "lista_supressao" in {e.ref for e in pinadas}
+    semanticas = [e for e in resultado if not (e.meta or {}).get("sempre_incluir")]
+    assert "consumo_pct" in semanticas[0].chunk  # cosine_distance ordena de verdade
     assert isinstance(resultado[0].embedding, list) and len(resultado[0].embedding) == 1024
 
     # filtros: tenant errado e base não autorizada → nada
