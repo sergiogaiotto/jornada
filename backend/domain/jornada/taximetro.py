@@ -20,31 +20,12 @@ do ciclo ficam fora da conta.
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from domain.jornada.adjacencia import saidas_do_grafo as _saidas
+
 TIPOS_DIVISAO_IGUAL: tuple[str, ...] = ("decisionSplit", "engagementSplit", "frequencySplit")
 
 _CEM = Decimal("100")
 _CENTAVO = Decimal("0.01")
-
-
-def _saidas(grafo: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Mesma adjacência da validação: edges + regras de decisionSplit (to direto).
-
-    Aresta/regra malformada (sem `from`/`to` — A13) é IGNORADA aqui: quem aponta o
-    erro é o `jgc_validate` (§5.3); o taxímetro jamais estoura KeyError bruto."""
-    saidas: dict[str, list[dict[str, Any]]] = {}
-    for aresta in grafo.get("edges") or []:
-        if not isinstance(aresta, dict) or not aresta.get("from") or not aresta.get("to"):
-            continue
-        saidas.setdefault(str(aresta["from"]), []).append(aresta)
-    for no in grafo.get("nodes") or []:
-        if isinstance(no, dict) and no.get("id") and no.get("type") == "decisionSplit":
-            for regra in no.get("data", {}).get("regras") or []:
-                if not isinstance(regra, dict) or not regra.get("to"):
-                    continue
-                saidas.setdefault(str(no["id"]), []).append(
-                    {"from": str(no["id"]), "to": str(regra["to"]), "cond": regra.get("expr")}
-                )
-    return saidas
 
 
 def _volumes_por_no(grafo: dict[str, Any], volume_entrada: int) -> tuple[dict[str, Decimal], bool]:

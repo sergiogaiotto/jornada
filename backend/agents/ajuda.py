@@ -5,14 +5,14 @@ Carrega o SKILL.md canônico (parser §7.1 compartilhado) e monta as mensagens d
 chat: o CONTEXTO é o conteúdo do guia da página enviado pelo FRONT (fonte única em
 `frontend/src/guia/conteudo.ts` — duplicar no back seria drift; a API valida o
 tamanho ≤ 8k chars). O histórico é o da sessão do navegador (nada persistido além
-do ledger `invocacao`). Guarda-corpo de PII (§10.2): `mascarar_pii` garante que
-runs longas de dígitos (CPF/telefone colados na pergunta) nunca persistem em claro
-no ledger — a recusa de assunto fora da plataforma é instrução da skill (o chat é
-informativo: nenhuma ação executa a partir dele).
+do ledger `invocacao`). Guarda-corpo de PII (§10.2): o serviço mascara pergunta E
+histórico com o sanitizador único (`domain.privacidade`, C02) ANTES de montar estas
+mensagens — nem o prompt nem o ledger veem CPF/telefone/e-mail em claro. A recusa de
+assunto fora da plataforma é instrução da skill (o chat é informativo: nenhuma ação
+executa a partir dele).
 """
 
 import json
-import re
 from pathlib import Path
 
 from agents.consultor import Skill, carregar_skill
@@ -22,9 +22,6 @@ SKILL_PATH = Path(__file__).resolve().parent / "skills" / "ajuda.skill.md"
 # Contexto (conteúdo do guia da página) — limite do contrato §8-M-Guia
 LIMITE_CONTEXTO = 8000
 
-_SEPARADOR_DIGITOS = re.compile(r"(?<=\d)[.\-\s/](?=\d)")
-_DIGITOS_LONGOS = re.compile(r"\d{11,}")  # CPF (11) / telefone — nunca em ledger
-
 # papel do histórico do front → role OpenAI-style
 _ROLES = {"usuario": "user", "ia": "assistant"}
 
@@ -32,11 +29,6 @@ _ROLES = {"usuario": "user", "ia": "assistant"}
 def carregar() -> Skill:
     """SKILL.md do ajuda (§7.1) — cacheado pelo parser compartilhado."""
     return carregar_skill(SKILL_PATH)
-
-
-def mascarar_pii(texto: str) -> str:
-    """Guarda-corpo do ledger (§10.2): runs de ≥11 dígitos nunca persistem em claro."""
-    return _DIGITOS_LONGOS.sub("[PII-mascarada]", _SEPARADOR_DIGITOS.sub("", texto))
 
 
 def montar_mensagens(

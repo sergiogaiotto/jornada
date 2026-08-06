@@ -25,6 +25,7 @@ import math
 from decimal import Decimal
 from typing import Any
 
+from domain.jornada.adjacencia import saidas_do_grafo as _saidas
 from domain.jornada.validacao import duracao_em_dias
 from domain.simulacao.tipos import GeradorAleatorio
 
@@ -65,20 +66,6 @@ def _phi(x: float) -> float:
 
 def _clip(valor: float, minimo: float, maximo: float) -> float:
     return max(minimo, min(maximo, valor))
-
-
-def _saidas(grafo: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Adjacência (mesma da validação/taxímetro M7): edges + regras de decisionSplit."""
-    saidas: dict[str, list[dict[str, Any]]] = {}
-    for aresta in grafo.get("edges") or []:
-        saidas.setdefault(str(aresta["from"]), []).append(aresta)
-    for no in grafo.get("nodes") or []:
-        if no.get("type") == "decisionSplit":
-            for regra in no.get("data", {}).get("regras") or []:
-                saidas.setdefault(str(no["id"]), []).append(
-                    {"from": str(no["id"]), "to": str(regra["to"]), "cond": regra.get("expr")}
-                )
-    return saidas
 
 
 def _quiet_hours(grafo: dict[str, Any], politica: dict[str, Any]) -> tuple[float, float] | None:

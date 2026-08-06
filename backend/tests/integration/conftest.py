@@ -7,7 +7,7 @@ Fonte do banco, em ordem:
 3. sem docker e sem DATABASE_URL → skip explícito (os testes unit/aceite continuam
    cobrindo tudo em memória — §1.3.5).
 
-O schema é SEMPRE o real: `alembic upgrade head` (migrações 0001..0011, DDL §4.1)
+O schema é SEMPRE o real: `alembic upgrade head` (migrações 0001..head, DDL §4.1)
 no setup da sessão; cada teste começa com as tabelas core truncadas (isolamento).
 """
 

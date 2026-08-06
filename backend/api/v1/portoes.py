@@ -5,9 +5,10 @@ Portões: `GET /os/{id}/portoes` (certificado, experimento, custo/alçada, gover
 stub) · `POST /experimentos` (pré-registro + poder/n mínimo) ·
 `POST /os/{id}/custo/enviar-alcada` (faixas `alcadas` da política §11.4).
 Aprovação: `POST /snapshots` (hash composto §4.1) · `POST /snapshots/{id}/link-magico`
-· `GET /aprovacao/{token}` (página standalone — o TOKEN é a credencial, sem Bearer;
-X-Tenant segue obrigatório §8) · `POST /aprovacao/{token}/decidir` (A3: uso único,
-expira, ip/device; ressalvas → pendências. A4: custo >10% pós-aprovação invalida).
+· `GET /aprovacao/{token}` (página standalone — o TOKEN é a credencial, sem Bearer e
+sem X-Tenant: o tenant é derivado do token no servidor, emenda C03 §8-M8-A5) ·
+`POST /aprovacao/{token}/decidir` (A3: uso único, expira, ip/device; ressalvas →
+pendências. A4: custo >10% pós-aprovação invalida).
 
 ZERO LLM em todo o caminho (§10.6). Erros: mapa RFC-7807 do M1 + tradução própria:
 LinkExpirado→410 Gone · HoldoutAbaixoDaPolitica/RessalvasObrigatorias→422.
@@ -77,8 +78,18 @@ def get_servico_aprovacao(request: Request) -> ServicoAprovacao:
     return ServicoAprovacao(repositorio, _relogio, get_settings().web_base_url)
 
 
+def get_tenant_opcional(request: Request) -> str | None:
+    """Tenant ANUNCIADO pelo cliente nas rotas públicas do link mágico (C03).
+
+    O middleware (`app/main.py` ROTAS_PUBLICAS) isenta `/aprovacao/*` do X-Tenant: o
+    aprovador externo não tem como mandar header. Vindo (a SPA manda), o serviço o
+    confere contra o tenant real do pacote — anúncio, nunca fonte da verdade."""
+    return getattr(request.state, "tenant_id", None)
+
+
 Portoes = Annotated[ServicoPortoes, Depends(get_servico_portoes)]
 Aprovacoes = Annotated[ServicoAprovacao, Depends(get_servico_aprovacao)]
+TenantOpcional = Annotated[str | None, Depends(get_tenant_opcional)]
 
 # ------------------------------------------------- Contratos Pydantic (§1.3.2, §4.1)
 
@@ -211,21 +222,25 @@ async def criar_link_magico(
 
 
 @router_aprovacao.get("/aprovacao/{token}")
-async def pagina_aprovacao(token: str, tenant: Tenant, servico: Aprovacoes) -> dict[str, Any]:
+async def pagina_aprovacao(
+    token: str, tenant: TenantOpcional, servico: Aprovacoes
+) -> dict[str, Any]:
     """Página standalone (§8-M8): resumo, waterfall, criativos, replay do previsto e
-    hash. SEM Bearer — o token É a credencial (expirado e não decidido → 410)."""
-    return servico.payload_aprovacao(tenant, token)
+    hash. SEM Bearer e SEM X-Tenant (C03) — o token É a credencial e carrega o escopo
+    (expirado e não decidido → 410)."""
+    return servico.payload_aprovacao(token, tenant_id=tenant)
 
 
 @router_aprovacao.post("/aprovacao/{token}/decidir")
 async def decidir_aprovacao(
-    token: str, payload: Decisao, tenant: Tenant, servico: Aprovacoes, request: Request
+    token: str, payload: Decisao, tenant: TenantOpcional, servico: Aprovacoes, request: Request
 ) -> dict[str, Any]:
     """A3: decisão de uso ÚNICO com registro de ip/device; ressalvas viram pendências
-    automáticas bloqueantes. A4: aprovação invalidada por custo → 409 (snapshot novo)."""
+    automáticas bloqueantes. A4: aprovação invalidada por custo → 409 (snapshot novo).
+    C03: sem X-Tenant — o tenant vem do token."""
     return servico.decidir(
-        tenant,
         token,
+        tenant_id=tenant,
         decisao=payload.decisao,
         ressalvas=payload.ressalvas,
         decidido_por=payload.decidido_por,

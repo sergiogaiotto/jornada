@@ -48,6 +48,7 @@ from domain.audiencia.modelos import (
 )
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
+from domain.privacidade import mascarar_pii
 
 
 class ServicoAudiencia:
@@ -77,7 +78,11 @@ class ServicoAudiencia:
     def gerar_sql(
         self, tenant_id: str, os_id: uuid.UUID, *, instrucoes: str, portador_id: uuid.UUID
     ) -> tuple[Segmento, agente_engineer.SaidaEngineer, list[str], Invocacao]:
-        """POST /os/{id}/segmento/gerar-sql — engineer via LLMPort (§8-M5)."""
+        """POST /os/{id}/segmento/gerar-sql — engineer via LLMPort (§8-M5).
+
+        §10.2 (C02): instruções mascaradas na fronteira — prompt, embedding do RAG,
+        `criterios_resumo` do segmento e ledger recebem só o texto sanitizado."""
+        instrucoes = mascarar_pii(instrucoes)
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         skill = agente_engineer.carregar()
         # A11 (§7.3): preparar_contexto — top-k=8 nas bases autorizadas da skill;

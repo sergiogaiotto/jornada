@@ -40,6 +40,7 @@ from domain.criativo.modelos import (
     CelulaCriativo,
     Criativo,
 )
+from domain.privacidade import mascarar_pii
 
 
 class ServicoCriativo:
@@ -69,7 +70,12 @@ class ServicoCriativo:
         instrucoes: str | None,
         portador_id: uuid.UUID,
     ) -> tuple[Criativo, list[str], list[Invocacao]]:
-        """POST /os/{id}/criativos/gerar — matriz canal×variante a partir do KV master."""
+        """POST /os/{id}/criativos/gerar — matriz canal×variante a partir do KV master.
+
+        §10.2 (C02): `instrucoes` é texto livre do usuário e alimenta os TRÊS agentes
+        do pipeline (visual→copy→content) e as três linhas do ledger — mascarada aqui,
+        na fronteira, daqui para baixo só existe a versão sanitizada."""
+        instrucoes = mascarar_pii(instrucoes) if instrucoes else instrucoes
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         canais = list(canais or CANAIS_CRIATIVO)
         variantes = list(variantes or VARIANTES_DEFAULT)

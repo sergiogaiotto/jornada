@@ -1,7 +1,8 @@
 """Rotas do M1 · Núcleo OS/governança (SDD §8-M1) — tag OpenAPI `os`.
 
 `POST/GET /os` · `GET /os/{id}` · `POST /os/{id}/fase` (só transições legais; portões
-checados) · `POST /os/{id}/pendencias` · `POST /pendencias/{id}/resolver|aceitar` ·
+checados) · `POST /os/{id}/pendencias` · `GET /os/{id}/pendencias` (emenda B01 — a UI
+recupera o que está aberto após reload) · `POST /pendencias/{id}/resolver|aceitar` ·
 `GET /os/{id}/saude` — saúde é DERIVADA (view §4.1): nenhuma rota de escrita (A3).
 
 Erros de domínio → RFC-7807 problem+json, mapa documentado em domain/campanha/erros.py:
@@ -231,6 +232,17 @@ async def mudar_fase(
 ) -> OsOut:
     """Só transições legais; portão de pendências checado (A1: bloqueante aberta → 409)."""
     return OsOut.model_validate(servico.mudar_fase(tenant, os_id, payload.fase, actor=user.email))
+
+
+@router.get("/os/{os_id}/pendencias", response_model=list[PendenciaOut])
+async def listar_pendencias(
+    os_id: uuid.UUID, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> list[PendenciaOut]:
+    """Emenda B01 (UAT #2): pendências da OS em ordem de `numero` — numero, titulo,
+    severidade, status, bloqueante, accountable e a `origem` que ancora no campo
+    (`validacao:{campo}`). Leitura pura: a rota só aceitava POST (405), e por isso o
+    que estava aberto sumia da tela a cada reload."""
+    return [PendenciaOut.model_validate(p) for p in servico.listar_pendencias(tenant, os_id)]
 
 
 @router.post("/os/{os_id}/pendencias", status_code=201, response_model=PendenciaOut)

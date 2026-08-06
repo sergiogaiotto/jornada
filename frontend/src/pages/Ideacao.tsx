@@ -42,6 +42,50 @@ function presente(valor: unknown): boolean {
   return true;
 }
 
+/**
+ * As DUAS réguas dos 5 campos obrigatórios (§8-M3), sobre o MESMO denominador do
+ * medidor de completude — achado B03 do UAT #2: o cabeçalho dizia "0 de 5 campos
+ * confirmados" ao lado do medidor em 100% e parecia contradição, porque cada número
+ * media uma coisa (preenchido × confirmado por humano) sem dizer qual.
+ * - preenchido = tem valor (é o que o medidor mede);
+ * - confirmado = preenchido E não-inferido (toque humano sobre a inferência da IA).
+ * Todo confirmado é preenchido, logo confirmados <= preenchidos <= total.
+ */
+function reguasDeCampos(obter: (campo: string) => unknown): {
+  preenchidos: number;
+  confirmados: number;
+  total: number;
+} {
+  let preenchidos = 0;
+  let confirmados = 0;
+  for (const { campo } of CAMPOS_PEDIDO) {
+    const entrada = obter(campo);
+    if (entrada === undefined) continue;
+    const e = campoBriefing(entrada);
+    if (!presente(e.valor)) continue;
+    preenchidos += 1;
+    if (!e.inferido) confirmados += 1;
+  }
+  return { preenchidos, confirmados, total: CAMPOS_PEDIDO.length };
+}
+
+/** Subtítulo das duas réguas, explícitas (B03): "5 de 5 preenchidos · 0 confirmados". */
+function ReguasCampos({
+  preenchidos,
+  confirmados,
+  total,
+}: {
+  preenchidos: number;
+  confirmados: number;
+  total: number;
+}) {
+  return (
+    <span title="Preenchido = tem valor (é o que o medidor mede). Confirmado = preenchido e revisado por um humano (deixa de ser inferido).">
+      <b>{preenchidos}</b> de <b>{total}</b> preenchidos · <b>{confirmados}</b> confirmados
+    </span>
+  );
+}
+
 export function Ideacao({ modo = "os" }: { modo?: "os" | "pedido" }) {
   const { id } = useParams<{ id: string }>();
   if (modo === "pedido") return <SalaPedido id={id ?? ""} />;
@@ -71,12 +115,7 @@ function SalaPedido({ id }: { id: string }) {
   // Convertido/arquivado não editam (§8-M3 CRUD: convertido edita no briefing da OS).
   const editavel = pedido?.estado === "rascunho" || pedido?.estado === "completo";
 
-  const confirmados = CAMPOS_PEDIDO.filter(({ campo }) => {
-    const entrada = pedido?.conteudo?.[campo];
-    if (entrada === undefined) return false;
-    const e = campoBriefing(entrada);
-    return presente(e.valor) && !e.inferido;
-  }).length;
+  const reguas = reguasDeCampos((campo) => pedido?.conteudo?.[campo]);
 
   const enviar = useMutation({
     mutationFn: (mensagem: string) => post<MensagemOut>(`/pedidos/${id}/mensagem`, { mensagem }),
@@ -210,8 +249,7 @@ function SalaPedido({ id }: { id: string }) {
         titulo="Sala de Ideação · Nova Campanha"
         subtitulo={
           <>
-            Converse com o Consultor ou preencha os campos direto. <b>{confirmados}</b> de{" "}
-            <b>{CAMPOS_PEDIDO.length}</b> campos confirmados.
+            Converse com o Consultor ou preencha os campos direto. <ReguasCampos {...reguas} />.
           </>
         }
       />
@@ -460,7 +498,9 @@ function SalaOs({ id }: { id: string }) {
   const pedidoRef = useRef<PedidoOut | null>(null);
 
   const campos = useMemo(() => Object.entries(briefing?.briefing ?? {}), [briefing]);
-  const confirmados = campos.filter(([, entrada]) => !campoBriefing(entrada).inferido).length;
+  // Mesma régua do medidor: os 5 obrigatórios (§8-M3), não o total de chaves do
+  // briefing — senão "14 de 14 confirmados" conviveria com um medidor em 60% (B03).
+  const reguas = reguasDeCampos((campo) => briefing?.briefing?.[campo]);
 
   // Medidor CONECTADO: sem conversa ainda, deriva do próprio briefing da OS
   // (os 5 campos obrigatórios §8-M3); com conversa, prevalece o cálculo do backend.
@@ -581,8 +621,7 @@ function SalaOs({ id }: { id: string }) {
         titulo="Sala de Ideação"
         subtitulo={
           <>
-            Converse — o briefing se estrutura sozinho. <b>{confirmados}</b> de{" "}
-            <b>{campos.length}</b> campos confirmados.
+            Converse — o briefing se estrutura sozinho. <ReguasCampos {...reguas} />.
           </>
         }
       />

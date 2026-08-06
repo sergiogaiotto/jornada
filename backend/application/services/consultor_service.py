@@ -6,6 +6,9 @@
   e infere; inferências entram com `inferido:true` + evidências; grava o ledger
   `invocacao` (via_ai), evento `agent.invoked` (§2.3) e trace Langfuse fire-and-forget
   com trace_id = invocacao.id (§10.8). LLM indisponível → LLMIndisponivel (API: 503).
+  C01 (§10.6): pedido para BURLAR COMPLIANCE é detectado por código antes do LLM
+  (domain/agentes/compliance) — a recusa inegociável é carimbada na resposta e a
+  tentativa fica marcada no ledger (`compliance_bypass_tentado`).
 - `converter` (POST /pedidos/{id}/converter): exige completude=100 (A2 → 409); cria OS
   com briefing pré-preenchido — campos `inferido:true` até confirmação (A3).
 - CRUD (emenda §8-M3 — o Portal do Solicitante foi aposentado; a criação vive na app):
@@ -19,6 +22,7 @@
 """
 
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from agents import consultor as agente_consultor
@@ -29,6 +33,7 @@ from application.ports.repositorio_intake import RepositorioIntake
 from application.ports.repositorio_os import RepositorioOs
 from application.services.os_service import ServicoOs
 from application.services.retriever_service import RetrieverService, evidencias_para_contexto
+from domain.agentes import compliance
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
@@ -40,6 +45,7 @@ from domain.intake.erros import (
     PedidoJaConvertido,
 )
 from domain.intake.modelos import Pedido
+from domain.privacidade import mascarar_pii
 
 _AUSENTE: Any = object()  # sentinela: PATCH briefing sem `valor` = apenas confirmar
 
@@ -87,7 +93,12 @@ class ServicoConsultor:
     def conversar(
         self, tenant_id: str, pedido_id: uuid.UUID, *, mensagem: str, portador_id: uuid.UUID
     ) -> tuple[Pedido, str]:
-        """POST /pedidos/{id}/mensagem — devolve (pedido atualizado, resposta do consultor)."""
+        """POST /pedidos/{id}/mensagem — devolve (pedido atualizado, resposta do consultor).
+
+        §10.2 (C02): a fala do solicitante é MASCARADA na fronteira; daqui para baixo
+        só existe `mensagem` sanitizada — prompt, RAG e ledger recebem a mesma coisa.
+        """
+        mensagem = mascarar_pii(mensagem)
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
             raise PedidoJaConvertido(
@@ -95,6 +106,10 @@ class ServicoConsultor:
             )
         self._exigir_nao_arquivado(pedido)
         skill = agente_consultor.carregar_skill()
+        # C01 (§10.6): tentativa de burlar compliance é detectada por CÓDIGO, antes de
+        # qualquer LLM — a recusa não pode depender do humor do modelo (ver
+        # domain/agentes/compliance.py).
+        burla = compliance.detectar_burla_de_compliance(mensagem)
         # A11 (§7.4): precedentes citáveis das bases da skill (historico_campanhas/
         # ofertas) — evidência ADICIONAL (a fala do solicitante continua bastando);
         # hub de embeddings fora → [] (degrade suave).
@@ -109,6 +124,7 @@ class ServicoConsultor:
             pedido.faltantes,
             mensagem,
             precedentes=evidencias_para_contexto(precedentes),
+            burla_compliance=burla,
         )
         inicio = self._relogio.agora()
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
@@ -145,6 +161,15 @@ class ServicoConsultor:
             # A4 (fix vazamento): reforço esgotado SEM inferências → preserva a resposta
             # original da 1ª chamada; a resposta ao reprompt "SISTEMA:" jamais vaza.
             saida = saida_original
+        if burla:
+            # C01: a recusa é CARIMBADA por código na frente da resposta — o solicitante
+            # lê primeiro que é impossível por construção e só depois a consultoria do
+            # modelo com o que É possível. Assim a plataforma nunca "normaliza" a ordem
+            # ilegal como risco a monitorar, aconteça o que acontecer com o LLM.
+            saida = agente_consultor.SaidaConsultor(
+                resposta=f"{compliance.RECUSA_INEGOCIAVEL}\n\n{saida.resposta}".strip(),
+                inferencias=saida.inferencias,  # o que ele contou de briefing continua valendo
+            )
         fim = self._relogio.agora()
 
         for inf in saida.inferencias:  # A3: inferido:true + evidências (precedentes)
@@ -158,7 +183,7 @@ class ServicoConsultor:
         self._repo.salvar_pedido(pedido)
 
         invocacao = self._registrar_invocacao(
-            pedido, skill, mensagem, saida, portador_id, inicio, fim
+            pedido, skill, mensagem, saida, portador_id, inicio, fim, burla=burla
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -354,10 +379,16 @@ class ServicoConsultor:
         portador_id: uuid.UUID,
         inicio: Any,
         fim: Any,
+        burla: Sequence[str] = (),
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). SEM PII:
-        input não carrega o bloco `solicitante` (§1.3.5)."""
+        input não carrega o bloco `solicitante` (§1.3.5).
+
+        C01: tentativa de burlar compliance vira `compliance_bypass_tentado` no output
+        do agente (e no payload do evento) — é o que a auditoria precisa enxergar em
+        `GET /auditoria`: quem pediu, quando e com quais marcadores."""
         evidencias = [e for inf in saida.inferencias for e in inf.evidencias]
+        marca_burla: dict[str, Any] = {"compliance_bypass_tentado": list(burla)} if burla else {}
         invocacao = Invocacao(
             id=uuid.uuid4(),
             tenant_id=pedido.tenant_id,
@@ -372,6 +403,7 @@ class ServicoConsultor:
                     {"campo": i.campo, "valor": i.valor, "evidencias": list(i.evidencias)}
                     for i in saida.inferencias
                 ],
+                **marca_burla,
             },
             evidencias=evidencias,
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
@@ -388,6 +420,7 @@ class ServicoConsultor:
                     "agente": skill.nome,
                     "pedido_id": str(pedido.id),
                     "campos_inferidos": [i.campo for i in saida.inferencias],
+                    **marca_burla,
                 },
                 actor=f"agente:{skill.nome}",
                 via_ai=True,

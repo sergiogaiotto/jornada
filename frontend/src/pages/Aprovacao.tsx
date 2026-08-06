@@ -1,6 +1,7 @@
 /**
  * T10 · Portal de Aprovação — página STANDALONE do link mágico (/aprovacao/:token,
- * SEM shell — SDD §12): o token É a credencial (sem Bearer). Snapshot imutável:
+ * SEM shell — SDD §12): o token É a credencial (sem Bearer e, desde a emenda C03,
+ * sem X-Tenant — o servidor deriva o tenant do próprio token). Snapshot imutável:
  * resumo executivo, waterfall, criativos, replay do Previsto e hash visível; decisão
  * única (Aprovar / Aprovar com ressalvas / Reprovar) — ressalvas viram pendências
  * automáticas. Sem painel direito e sem ações de IA: foco total na decisão.

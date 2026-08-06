@@ -24,6 +24,14 @@ from application.ports.embedding import EmbeddingPort
 TENANT_HEADER = "X-Tenant"
 API_PREFIX = "/api/v1"
 
+# Rotas PÚBLICAS de /api/v1 — isentas do header X-Tenant (emenda C03, §8-M8/§8-M0-A2),
+# como /healthz já é isento por viver fora do prefixo. Aqui a credencial é o TOKEN do
+# link mágico e o tenant é DERIVADO dele no servidor (aprovacao_service._por_token): o
+# aprovador é externo, abre a URL do e-mail e não tem como mandar header nenhum. O
+# header continua ACEITO (a SPA manda) e, quando vem, é conferido contra o tenant real
+# do pacote. Prefixo fechado: só `/aprovacao/...` entra — nada mais do M8 é público.
+ROTAS_PUBLICAS: tuple[str, ...] = (f"{API_PREFIX}/aprovacao/",)
+
 
 async def ping_db() -> str:
     """Ping do Postgres com timeout curto (contrato /healthz: 'ok' | 'fail', <2s)."""
@@ -79,17 +87,21 @@ def create_app(*, demo: bool | None = None, embedding: EmbeddingPort | None = No
     async def exigir_x_tenant(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        """Header X-Tenant obrigatório em /api/v1/* (§8) — 400 problem+json sem ele."""
+        """Header X-Tenant obrigatório em /api/v1/* (§8) — 400 problem+json sem ele.
+
+        Exceção: ROTAS_PUBLICAS (link mágico — C03) seguem sem header; o tenant vem do
+        token. Se o header vier, é repassado e o serviço o confere contra o pacote."""
         if request.url.path.startswith(API_PREFIX):
             tenant = request.headers.get(TENANT_HEADER)
-            if not tenant:
+            publica = request.url.path.startswith(ROTAS_PUBLICAS)
+            if not tenant and not publica:
                 return problem_response(
                     400,
                     "Bad Request",
                     detail=f"Header {TENANT_HEADER} é obrigatório (SDD §8).",
                     instance=request.url.path,
                 )
-            request.state.tenant_id = tenant
+            request.state.tenant_id = tenant or None
         return await call_next(request)
 
     register_error_handlers(app)

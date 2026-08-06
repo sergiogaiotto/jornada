@@ -33,6 +33,7 @@ from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.governanca.modelos import Snapshot
 from domain.lancamento import semantica
 from domain.lancamento.erros import PrevistoAusente
+from domain.privacidade import mascarar_pii
 
 
 class ServicoInsight:
@@ -62,7 +63,11 @@ class ServicoInsight:
 
         spans: list[dict[str, Any]] = []
         consulta_executada: dict[str, Any] | None = None
+        # A pré-guarda A4 examina a pergunta ORIGINAL — é ela que precisa VER a PII
+        # para recusar. Só depois o texto é mascarado (§10.2/C02): daqui para baixo
+        # nem prompt nem ledger tocam no original.
         motivo = agente_insight.motivo_fora_do_escopo(pergunta)
+        pergunta = mascarar_pii(pergunta)
         if motivo is not None:  # A4: recusa determinística — SEM LLM, SEM consulta
             saida = agente_insight.SaidaInsight(
                 consulta=None,
@@ -190,7 +195,7 @@ class ServicoInsight:
             agente_id=agente_uuid(skill.nome),
             skill_versao=skill.versao,
             usuario_portador=portador_id,
-            input={"pergunta": agente_insight.mascarar_pii(pergunta)},
+            input={"pergunta": pergunta},  # §10.2: já mascarada na fronteira (C02)
             output={
                 "consulta": saida.consulta,
                 "parametros": saida.parametros,

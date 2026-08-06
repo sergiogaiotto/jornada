@@ -10,6 +10,10 @@ domain/governanca/snapshot.py), emite o link mágico (token retornado UMA vez; s
 sha256 persiste), serve a página standalone e registra a decisão (A3: uso único,
 expira, ip/device; ressalvas viram pendências) e a invalidação por variação de custo
 >10% pós-aprovação (A4: snapshot novo obrigatório).
+
+C03 (A5 — emenda 2026-08-06): o fluxo público do link mágico NÃO depende de `X-Tenant`.
+O token é a credencial E o escopo: `_por_token` deriva o tenant do pacote (token →
+aprovação → snapshot → OS). O header segue aceito e, quando presente, é conferido.
 """
 
 import hashlib
@@ -547,10 +551,12 @@ class ServicoAprovacao(_Base):
         }
 
     # ------------------------------------------------- GET /aprovacao/{token}
-    def payload_aprovacao(self, tenant_id: str, token: str) -> dict[str, Any]:
+    def payload_aprovacao(self, token: str, *, tenant_id: str | None = None) -> dict[str, Any]:
         """Página standalone (§8-M8): resumo, waterfall, criativos, replay do previsto,
-        hash. O token é a credencial (sem login) — link expirado e não decidido → 410."""
-        aprovacao, snapshot, os_ = self._por_token(tenant_id, token)
+        hash. O token é a credencial (sem login) — link expirado e não decidido → 410.
+
+        C03: `tenant_id` é OPCIONAL — o tenant sai do próprio token (ver `_por_token`)."""
+        aprovacao, snapshot, os_ = self._por_token(token, tenant_id)
         invalidar_aprovacoes_por_custo(self._repo, os_, self._relogio)  # A4 na página
         if aprovacao.decisao is None and self._relogio.agora() > aprovacao.expira_em:
             raise LinkExpirado("Link mágico expirado — solicite um novo (§8-M8-A3).")
@@ -584,9 +590,9 @@ class ServicoAprovacao(_Base):
     # --------------------------------------- POST /aprovacao/{token}/decidir
     def decidir(
         self,
-        tenant_id: str,
         token: str,
         *,
+        tenant_id: str | None = None,
         decisao: str,
         ressalvas: list[str],
         decidido_por: str | None,
@@ -595,8 +601,10 @@ class ServicoAprovacao(_Base):
     ) -> dict[str, Any]:
         """A3: uso ÚNICO (decisão registrada encerra o link), expira, registra
         ip/device; ressalvas viram pendências automáticas (bloqueantes, origem
-        `aprovacao:{id}`). Aprovado* marca a versão do twin como `aprovado`."""
-        aprovacao, snapshot, os_ = self._por_token(tenant_id, token)
+        `aprovacao:{id}`). Aprovado* marca a versão do twin como `aprovado`.
+
+        C03: `tenant_id` é OPCIONAL — o tenant sai do próprio token (ver `_por_token`)."""
+        aprovacao, snapshot, os_ = self._por_token(token, tenant_id)
         invalidar_aprovacoes_por_custo(self._repo, os_, self._relogio)
         if aprovacao.invalidada_em is not None:
             raise AprovacaoInvalidada(
@@ -697,13 +705,30 @@ class ServicoAprovacao(_Base):
             raise NaoEncontrado(f"Snapshot {snapshot_id} não encontrado no tenant {tenant_id!r}.")
         return snapshot, os_
 
-    def _por_token(self, tenant_id: str, token: str) -> tuple[Aprovacao, Snapshot, OS]:
+    def _por_token(
+        self, token: str, tenant_id: str | None = None
+    ) -> tuple[Aprovacao, Snapshot, OS]:
+        """Resolve o link mágico a partir do TOKEN — que é a credencial (A3).
+
+        C03 (UAT #3): o tenant é DERIVADO do próprio token (token → aprovação →
+        snapshot → OS → `os_.tenant_id`), nunca exigido do cliente. O aprovador é
+        externo: abre a URL do e-mail, sem SPA e sem header `X-Tenant`. Fazer o fluxo
+        standalone depender de um header do app acoplava-o ao app — e quebrava em
+        qualquer cliente que não fosse a SPA (e-mail, integração, curl).
+
+        Quando o chamador ANUNCIA um tenant (a SPA continua mandando `X-Tenant`), ele
+        é tratado como asserção a conferir: divergiu do tenant real do pacote, o token
+        é tratado como inválido — 404 sem vazar a existência do link, mesmo padrão de
+        antes. Ou seja: o header deixou de ser obrigatório sem virar buraco de escopo.
+        """
         aprovacao = self._repo.obter_aprovacao_por_token_hash(_hash_token(token))
         if aprovacao is None:
             raise TokenInvalido("Link de aprovação inválido.")
         snapshot = self._repo.obter_snapshot(aprovacao.snapshot_id)
-        os_ = self._repo.obter_os(tenant_id, snapshot.os_id) if snapshot is not None else None
-        if snapshot is None or os_ is None:  # tenant errado não vaza existência (404)
+        os_ = self._repo.obter_os_por_id(snapshot.os_id) if snapshot is not None else None
+        if snapshot is None or os_ is None:
+            raise TokenInvalido("Link de aprovação inválido.")
+        if tenant_id is not None and os_.tenant_id != tenant_id:
             raise TokenInvalido("Link de aprovação inválido.")
         return aprovacao, snapshot, os_
 

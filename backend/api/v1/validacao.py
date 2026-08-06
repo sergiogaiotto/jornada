@@ -1,7 +1,9 @@
 """Rotas do M4 · Validação campo-a-campo & War Room / T3-T4 (SDD §8-M4) — tag `validacao`.
 
 `POST /os/{id}/validacoes/{campo}` (checagem automática contra fonte: contagem, schema,
-frescor; retorna evidência) · `POST .../validacoes/{campo}/pendencia` ·
+frescor; retorna evidência — idempotente por campo desde a emenda B01) ·
+`GET /os/{id}/validacoes` (emenda B01: decisão vigente de cada campo — a tela T3 hidrata
+daqui, não do estado de sessão) · `POST .../validacoes/{campo}/pendencia` ·
 `POST /os/{id}/threads` (ancoradas em campo) · `POST /os/{id}/go` (congela SLAs+versões
 em `os.frozen`, fase→criada, .docx executivo em `documento_portao`).
 
@@ -133,7 +135,10 @@ class ValidacaoOut(BaseModel):
     veredito: Literal["ok", "falha"]
     checagens: list[ChecagemOut]
     evidencia: dict[str, Any]
-    created_at: datetime
+    created_at: datetime  # primeira checagem do campo
+    # emenda B01: quem/quando da decisão vigente (None em linhas anteriores à emenda)
+    por: str | None = None
+    atualizado_em: datetime | None = None
 
 
 class PendenciaDeCampoCriar(BaseModel):
@@ -191,12 +196,25 @@ class GoOut(BaseModel):
 router = APIRouter(route_class=RotaValidacao, tags=["validacao"])
 
 
+@router.get("/os/{os_id}/validacoes", response_model=list[ValidacaoOut])
+async def listar_validacoes(
+    os_id: uuid.UUID, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> list[ValidacaoOut]:
+    """Emenda B01 (UAT #2): decisão vigente de cada campo já checado — uma por campo,
+    com veredito, checagens, evidência e quem/quando. É daqui que a tela T3 se recupera
+    após reload/restart; sem ela o estado só existia na sessão do navegador."""
+    return [ValidacaoOut.model_validate(v) for v in servico.listar_validacoes(tenant, os_id)]
+
+
 @router.post("/os/{os_id}/validacoes/{campo}", status_code=201, response_model=ValidacaoOut)
 async def validar_campo(
     os_id: uuid.UUID, campo: str, tenant: Tenant, servico: Servico, user: Escritor
 ) -> ValidacaoOut:
     """Checagem automática do campo contra a fonte (contagem, schema, frescor) com
-    evidência — determinística, fixtures de fonte em dev/teste (§11)."""
+    evidência — determinística, fixtures de fonte em dev/teste (§11).
+
+    IDEMPOTENTE por campo (emenda B01): revalidar atualiza a decisão vigente (mesmo `id`),
+    nunca duplica a linha — o 201 devolve a decisão resultante em ambos os casos."""
     return ValidacaoOut.model_validate(
         servico.validar_campo(tenant, os_id, campo, actor=user.email)
     )

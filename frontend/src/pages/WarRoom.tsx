@@ -1,8 +1,12 @@
 /**
  * T4 · War Room de Decisão — o GO formal (mock T4): threads ANCORADAS em campos do
- * briefing (POST /os/{id}/threads), quadro de pendências (POST /os/{id}/pendencias ·
+ * briefing (POST /os/{id}/threads), quadro de pendências (GET/POST /os/{id}/pendencias ·
  * resolver) e o painel do GO (POST /os/{id}/go) — 409 RFC-7807 lista pendências e
  * campos não decididos; sucesso congela SLAs+versões em `os.frozen` e gera o .docx.
+ *
+ * B01 (UAT #2): o quadro de pendências hidrata de `GET /os/{id}/pendencias` — o que
+ * bloqueia o GO não pode depender da sessão do navegador. As threads seguem da sessão
+ * (não há leitura de `os_thread` no contrato) e o texto da tela diz isso sem disfarce.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -11,7 +15,7 @@ import { useParams } from "react-router-dom";
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, EstadoVazio, TituloTela } from "../components/ui/basics";
 import { ApiError, post } from "../lib/api";
-import { useBriefing, useOs, usePainelContextual } from "../lib/hooks";
+import { useBriefing, useOs, usePainelContextual, usePendencias } from "../lib/hooks";
 import type { GoOut, PendenciaOut, ThreadOut } from "../lib/types";
 
 interface BloqueioGo {
@@ -25,9 +29,15 @@ export function WarRoom() {
   const queryClient = useQueryClient();
   const { data: os } = useOs(id);
   const { data: briefing } = useBriefing(id);
+  // B01: pendências vêm do servidor (sobrevivem a reload/restart), não da sessão
+  const { data: pendenciasDaOs, error: erroPendencias } = usePendencias(id);
+  const pendencias = useMemo(() => pendenciasDaOs ?? [], [pendenciasDaOs]);
+  const abertas = useMemo(
+    () => pendencias.filter((p) => p.status === "aberta"),
+    [pendencias],
+  );
 
   const [threads, setThreads] = useState<ThreadOut[]>([]);
-  const [pendencias, setPendencias] = useState<PendenciaOut[]>([]);
   const [bloqueio, setBloqueio] = useState<BloqueioGo | null>(null);
   const [goFeito, setGoFeito] = useState<GoOut | null>(null);
 
@@ -49,6 +59,9 @@ export function WarRoom() {
     },
   });
 
+  /** Re-hidrata as leituras da OS (pendências e saúde derivada) após cada mutação. */
+  const recarregar = () => void queryClient.invalidateQueries({ queryKey: ["os", id] });
+
   const abrirPendencia = useMutation({
     mutationFn: () =>
       post<PendenciaOut>(`/os/${id}/pendencias`, {
@@ -57,18 +70,16 @@ export function WarRoom() {
         severidade: "media",
         bloqueante: true,
       }),
-    onSuccess: (p) => {
-      setPendencias((ps) => [p, ...ps]);
+    onSuccess: () => {
       setTituloPendencia("");
+      recarregar();
     },
   });
 
   const resolverPendencia = useMutation({
     mutationFn: (pendenciaId: string) =>
       post<PendenciaOut>(`/pendencias/${pendenciaId}/resolver`),
-    onSuccess: (p) => {
-      setPendencias((ps) => ps.map((x) => (x.id === p.id ? p : x)));
-    },
+    onSuccess: recarregar,
   });
 
   const executarGo = useMutation({
@@ -98,8 +109,8 @@ export function WarRoom() {
     <>
       <div className="ctx-title">Copiloto — ata dinâmica</div>
       <Copiloto titulo="Resumo da discussão">
-        <b>Threads abertas:</b> {threads.length} · <b>Pendências na sessão:</b>{" "}
-        {pendencias.filter((p) => p.status === "aberta").length} aberta(s).
+        <b>Threads nesta sessão:</b> {threads.length} · <b>Pendências da OS:</b>{" "}
+        {abertas.length} aberta(s) de {pendencias.length}.
         {bloqueio && (
           <>
             {" "}
@@ -141,7 +152,7 @@ export function WarRoom() {
         </>
       )}
     </>,
-    [threads.length, pendencias, bloqueio, goFeito, os],
+    [threads.length, pendencias, abertas, bloqueio, goFeito, os],
   );
 
   return (
@@ -150,12 +161,12 @@ export function WarRoom() {
         titulo="War Room"
         subtitulo={
           <>
-            {threads.length} thread(s) na sessão ·{" "}
-            {pendencias.filter((p) => p.status === "aberta").length} pendência(s) aberta(s)
-            · decisão de GO {goFeito ? "tomada" : "pendente"}
+            {threads.length} thread(s) na sessão · {abertas.length} pendência(s) aberta(s)
+            de {pendencias.length} · decisão de GO {goFeito ? "tomada" : "pendente"}
           </>
         }
       />
+      {erroPendencias != null && <BannerErro erro={erroPendencias} contexto="Pendências" />}
       {criarThread.error != null && <BannerErro erro={criarThread.error} contexto="Thread" />}
       {abrirPendencia.error != null && (
         <BannerErro erro={abrirPendencia.error} contexto="Pendência" />
@@ -249,6 +260,11 @@ export function WarRoom() {
                 Abrir pendência
               </button>
             </div>
+            {pendencias.length === 0 && (
+              <EstadoVazio>
+                Nenhuma pendência nesta OS — o portão do GO só barra por campo não decidido.
+              </EstadoVazio>
+            )}
             {pendencias.map((p) => (
               <div key={p.id} className="mfield">
                 <span>

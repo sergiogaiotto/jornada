@@ -1,8 +1,8 @@
 """Pré-voo (T11) — bateria pass/warn/fail com evidência (SDD §8-M9), parte PURA.
 
 CÓDIGO PURO, zero I/O e **LLM PROIBIDO neste caminho** (§5.4/§10.6): cada checagem
-devolve `{item, status: pass|warn|fail, evidencia}`; o serviço (prevoo_service) fornece
-os insumos atrás de portas (SFMC, read model, repositório) e agrega o semáforo:
+devolve `{item, status: pass|warn|fail|n/a, evidencia}`; o serviço (prevoo_service)
+fornece os insumos atrás de portas (SFMC, read model, repositório) e agrega o semáforo:
 
 - `checar_opt_in(grafo)` — todo `channel.*` com opt-in configurado (§5.3).
 - `checar_frescor_hybris(frescor)` — ciclo D-1 do Hybris (§8-M5-A4): ≤24h pass,
@@ -11,11 +11,22 @@ os insumos atrás de portas (SFMC, read model, repositório) e agrega o semáfor
   determinístico: delimitadores `%%[ ]%%` e `%%= =%%` balanceados.
 - `checar_limites_sfmc(recursos)` — limites do SFMC verificáveis por código
   (LIMITES_SFMC): tamanho de chave/nome, activities por journey, campos por DE.
-- `semaforo(itens)` — fail ⇒ vermelho · warn ⇒ amarelo · senão verde. FAIL bloqueia
-  apply; apply em prod exige pré-voo executado e não-vermelho (§5.4.4).
+- `semaforo(itens)` — fail ⇒ vermelho · warn OU n/a ⇒ amarelo · senão verde. FAIL
+  bloqueia apply; apply em prod exige pré-voo executado e não-vermelho (§5.4.4).
+
+`n/a` (achado C04 do UAT #3 adversarial — emenda §8-M9): item que NÃO PÔDE ser
+verificado por ausência de insumo (ex.: drift sem nenhum recurso publicado no ambiente
+para comparar). Antes esses casos devolviam `pass` com `verificados: 0` — "verde sem
+verificar", falso conforto numa tela de governança. `n/a` NÃO é aprovação: nunca
+bloqueia (não é `fail`), mas também nunca deixa a bateria verde — verde passa a
+significar "tudo foi verificado E está conforme". Todo `n/a` carrega `detalhe`
+explicando o que ficou por verificar.
 """
 
 from typing import Any
+
+# Status possíveis de um item (§8-M9). `n/a` = não verificável agora (emenda C04).
+PASS, WARN, FAIL, NAO_APLICAVEL = "pass", "warn", "fail", "n/a"
 
 # Limites SFMC verificáveis por código (v1 — ver CHANGELOG-SDD.md M9 fatia 2):
 # chave (CustomerKey/eventDefinitionKey) ≤ 36; nome ≤ 128; ≤ 200 activities por
@@ -35,16 +46,22 @@ _CANAIS_JGC = ("channel.email", "channel.sms", "channel.push", "channel.whatsapp
 
 
 def item(nome: str, status: str, evidencia: dict[str, Any]) -> dict[str, Any]:
-    """Forma canônica de um item da bateria (§8-M9): pass/warn/fail com evidência."""
+    """Forma canônica de um item da bateria (§8-M9): pass/warn/fail/n/a com evidência."""
     return {"item": nome, "status": status, "evidencia": evidencia}
 
 
 def semaforo(itens: list[dict[str, Any]]) -> str:
-    """Agrega a bateria: qualquer fail ⇒ vermelho; qualquer warn ⇒ amarelo; senão verde."""
+    """Agrega a bateria: qualquer fail ⇒ vermelho; qualquer warn OU n/a ⇒ amarelo;
+    senão verde.
+
+    `n/a` puxa para amarelo por decisão explícita (C04): item não verificado não é item
+    aprovado, então não pode sozinho pintar a bateria de verde. Amarelo não bloqueia o
+    apply (só `fail`/vermelho bloqueia — §5.4.4); o efeito é sobre o que o operador LÊ.
+    """
     status = {i["status"] for i in itens}
-    if "fail" in status:
+    if FAIL in status:
         return "vermelho"
-    return "amarelo" if "warn" in status else "verde"
+    return "amarelo" if (WARN in status or NAO_APLICAVEL in status) else "verde"
 
 
 def checar_opt_in(grafo: dict[str, Any]) -> dict[str, Any]:

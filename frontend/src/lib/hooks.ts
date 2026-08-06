@@ -14,7 +14,9 @@ import type {
   OsOut,
   PedidoOut,
   PedidoResumo,
+  PendenciaOut,
   SaudeOut,
+  ValidacaoOut,
   WorkflowOut,
 } from "./types";
 import { useUi } from "../stores/ui";
@@ -46,6 +48,27 @@ export function useBriefing(id: string | null | undefined) {
   return useQuery({
     queryKey: ["os", id, "briefing"],
     queryFn: ({ signal }) => get<BriefingOut>(`/os/${id}/briefing`, signal),
+    enabled: Boolean(id),
+  });
+}
+
+/**
+ * Decisão vigente de cada campo já checado (GET /os/{id}/validacoes — emenda B01).
+ * O estado da validação é do SERVIDOR, não da sessão: reload/restart não zera a tela.
+ */
+export function useValidacoes(id: string | null | undefined) {
+  return useQuery({
+    queryKey: ["os", id, "validacoes"],
+    queryFn: ({ signal }) => get<ValidacaoOut[]>(`/os/${id}/validacoes`, signal),
+    enabled: Boolean(id),
+  });
+}
+
+/** Pendências da OS em ordem de `numero` (GET /os/{id}/pendencias — emenda B01). */
+export function usePendencias(id: string | null | undefined) {
+  return useQuery({
+    queryKey: ["os", id, "pendencias"],
+    queryFn: ({ signal }) => get<PendenciaOut[]>(`/os/${id}/pendencias`, signal),
     enabled: Boolean(id),
   });
 }

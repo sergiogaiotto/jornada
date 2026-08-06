@@ -22,6 +22,7 @@ from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
 from application.ports.repositorio_ajuda import RepositorioAjuda
 from domain.agentes.modelos import Invocacao, agente_uuid
+from domain.privacidade import mascarar_pii
 
 
 class ServicoAjuda:
@@ -51,6 +52,13 @@ class ServicoAjuda:
         skill = agente_ajuda.carregar()
         inicio = self._relogio.agora()
 
+        # §10.2 (C02): mascara ANTES do prompt — o histórico da sessão também é texto
+        # do usuário e entra nas mensagens; mascarar só no ledger deixava o prompt
+        # vazando (achado do UAT #3). `contexto` é o guia público, não é do usuário.
+        pergunta = mascarar_pii(pergunta)
+        historico = [
+            {**turno, "texto": mascarar_pii(turno.get("texto", ""))} for turno in historico
+        ]
         mensagens = agente_ajuda.montar_mensagens(
             skill, pagina=pagina, contexto=contexto, historico=historico, pergunta=pergunta
         )
@@ -72,7 +80,7 @@ class ServicoAjuda:
             usuario_portador=portador_id,
             input={
                 "pagina": pagina,
-                "pergunta": agente_ajuda.mascarar_pii(pergunta),  # §10.2
+                "pergunta": pergunta,  # §10.2: já mascarada na fronteira (C02)
                 "contexto_chars": len(contexto),  # o contexto é o guia público — só o tamanho
                 "historico_len": len(historico),
             },

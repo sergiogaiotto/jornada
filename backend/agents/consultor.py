@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from application.ports.llm import PerfilModelo
+from domain.agentes import compliance
 from domain.atelie.skill_parser import parse_skill_md
 from domain.intake.completude import valor_do_campo, valor_presente
 from domain.intake.modelos import CAMPOS_OBRIGATORIOS
@@ -78,6 +79,7 @@ def montar_mensagens(
     faltantes: list[str],
     mensagem: str,
     precedentes: Sequence[dict[str, str]] = (),
+    burla_compliance: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """Mensagens OpenAI-style. SEM PII: nunca inclui o `solicitante` do pedido (§1.3.5).
 
@@ -88,7 +90,13 @@ def montar_mensagens(
     `precedentes` (A11 — §7.4): evidências do retriever (bases_rag da skill: campanhas
     históricas/ofertas) no formato citável que a skill já espera — "Precedentes
     citáveis ... são evidência adicional". Vazio → chave fora do contexto (prompt
-    idêntico ao pré-A11)."""
+    idêntico ao pré-A11).
+
+    `burla_compliance` (C01 — UAT #3): marcadores detectados por CÓDIGO
+    (domain/agentes/compliance) na mensagem. Presentes, o contexto carrega a diretriz
+    inegociável — o modelo recebe o fato pronto em vez da tarefa de decidir se recusa
+    (a recusa em si já é carimbada por código na resposta, no serviço). Vazio → chave
+    fora do contexto (prompt idêntico ao pré-C01)."""
     resumo = {
         campo: valor_do_campo(conteudo, campo)
         for campo in CAMPOS_OBRIGATORIOS
@@ -102,6 +110,11 @@ def montar_mensagens(
     }
     if precedentes:
         contexto["precedentes"] = list(precedentes)
+    if burla_compliance:  # C01: diretriz determinística, não sugestão
+        contexto["guarda_compliance"] = {
+            "marcadores": list(burla_compliance),
+            "instrucao": compliance.DIRETRIZ_PROMPT,
+        }
     if not faltantes:
         contexto["briefing_completo"] = True
         contexto["instrucao"] = (

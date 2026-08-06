@@ -10,8 +10,9 @@ interpreta a saída do LLM com guarda-corpos de CÓDIGO:
 - pré-guarda determinística de escopo: pergunta pedindo dado individual/PII (CPF,
   msisdn, telefone, "quem converteu"...) é recusada SEM sequer chamar o LLM —
   PII jamais entra em prompt (§1.3.5/§10.2) e zero consulta executa (A4);
-- `mascarar_pii` protege o ledger `invocacao` (§10.2): runs longas de dígitos
-  (CPF/telefone eventualmente colados na pergunta) nunca são persistidas em claro;
+- a detecção da pré-guarda usa `domain.privacidade.contem_pii` — a MESMA regra do
+  sanitizador único (C02), para que detectar e mascarar nunca divirjam; o
+  mascaramento em si é do serviço, na fronteira (prompt e ledger §10.2);
 - `consulta_por_sinonimo` (A17 — UAT real): sinônimos de negócio ('conversão por
   real gasto', 'custo-benefício por canal', 'ROI'...) mapeiam para a métrica
   CANÔNICA antes de qualquer recusa — vocabulário livre não derruba pergunta
@@ -27,6 +28,7 @@ from typing import Any
 from agents.consultor import Skill, carregar_skill
 from domain.lancamento.semantica import CAMADA_SEMANTICA, VERSAO_CAMADA
 from domain.lancamento.semantica import normalizar_parametros as semantica_normalizar
+from domain.privacidade import contem_pii
 
 SKILL_PATH = Path(__file__).resolve().parent / "skills" / "insight.skill.md"
 
@@ -54,9 +56,6 @@ _PADROES_PII = tuple(
         r"\bcontato_hash\b",
     )
 )
-_SEPARADOR_DIGITOS = re.compile(r"(?<=\d)[.\-\s/](?=\d)")
-_DIGITOS_LONGOS = re.compile(r"\d{11,}")  # CPF (11) / telefone — nunca em prompt/ledger
-
 # A17 (UAT real): sinônimos de negócio → métrica CANÔNICA da camada semântica.
 # Mapa determinístico consultado ANTES de recusar (o LLM recebe a mesma regra via
 # skill; o código garante que pergunta legítima com vocabulário livre não é recusada).
@@ -124,17 +123,12 @@ def motivo_fora_do_escopo(pergunta: str) -> str | None:
                 f"pergunta pede dado individual/PII ({encontrado.group(0).strip()!r}) — "
                 "a camada semântica só expõe métricas agregadas (§10.2)."
             )
-    if _DIGITOS_LONGOS.search(_SEPARADOR_DIGITOS.sub("", pergunta)):
+    if contem_pii(pergunta):  # C02: MESMA regra do sanitizador único (§10.2)
         return (
-            "pergunta contém identificador numérico longo (possível CPF/telefone) — "
+            "pergunta contém identificador pessoal (CPF/telefone/e-mail/cartão) — "
             "PII jamais entra em prompt ou consulta (§1.3.5/§10.2)."
         )
     return None
-
-
-def mascarar_pii(pergunta: str) -> str:
-    """Guarda-corpo do ledger (§10.2): runs de ≥11 dígitos nunca persistem em claro."""
-    return _DIGITOS_LONGOS.sub("[PII-mascarada]", _SEPARADOR_DIGITOS.sub("", pergunta))
 
 
 def montar_mensagens(skill: Skill, pergunta: str) -> list[dict[str, str]]:

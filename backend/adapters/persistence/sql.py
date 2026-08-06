@@ -237,6 +237,8 @@ def _linha_para_validacao(linha: Row[Any]) -> ValidacaoCampo:
         checagens=linha.checagens or [],
         evidencia=linha.evidencia or {},
         created_at=linha.created_at,
+        por=linha.por,
+        atualizado_em=linha.atualizado_em,
     )
 
 
@@ -727,6 +729,12 @@ class RepositorioSql(RepositorioOsMemoria):
         linha = self._primeira(select(tabela_os).where(tabela_os.c.codigo == codigo))
         return _linha_para_os(linha) if linha is not None else None
 
+    def obter_os_por_id(self, os_id: uuid.UUID) -> OS | None:
+        """Sem escopo de tenant — só o link mágico usa (C03: o token é a credencial e
+        o tenant sai da OS dona do snapshot). Ver RepositorioAprovacao."""
+        linha = self._primeira(select(tabela_os).where(tabela_os.c.id == os_id))
+        return _linha_para_os(linha) if linha is not None else None
+
     def listar_os(self, tenant_id: str, limit: int, offset: int) -> list[OS]:
         consulta = (
             select(tabela_os)
@@ -823,6 +831,8 @@ class RepositorioSql(RepositorioOsMemoria):
 
     # --- Validações campo-a-campo (`validacao_campo` — M4) ---
     def adicionar_validacao(self, validacao: ValidacaoCampo) -> None:
+        """Upsert por id: revalidar o mesmo campo atualiza a linha vigente (emenda B01 —
+        o índice unique (os_id, campo) da migração 0013 sustenta a invariante no banco)."""
         self._upsert(
             tabela_validacao_campo,
             {
@@ -833,6 +843,8 @@ class RepositorioSql(RepositorioOsMemoria):
                 "checagens": validacao.checagens,
                 "evidencia": validacao.evidencia,
                 "created_at": validacao.created_at,
+                "por": validacao.por,
+                "atualizado_em": validacao.atualizado_em,
             },
         )
 

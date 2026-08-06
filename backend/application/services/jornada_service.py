@@ -48,6 +48,7 @@ from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.sfmc_preview import preview_do_no
 from domain.jornada.validacao import normalizar_arestas, validar_grafo
+from domain.privacidade import mascarar_pii
 
 
 class ServicoJornada:
@@ -70,7 +71,11 @@ class ServicoJornada:
         self, tenant_id: str, os_id: uuid.UUID, *, instrucoes: str, portador_id: uuid.UUID
     ) -> tuple[JornadaVersao, flow.SaidaFlow, Invocacao, dict[str, Any]]:
         """Flow → JGC (§8-M7) como NOVA versão do twin; validado (§5.3) e taxado (A2)
-        antes de persistir — o LLM propõe, o código dá o veredito (§1.3.5)."""
+        antes de persistir — o LLM propõe, o código dá o veredito (§1.3.5).
+
+        §10.2 (C02): instruções livres mascaradas na fronteira — prompt e ledger só
+        veem o texto sanitizado."""
+        instrucoes = mascarar_pii(instrucoes)
         os_ = self._exigir_os(tenant_id, os_id)
         skill = flow.carregar()
         politica = POLITICA_PUBLICADA["conteudo"]
@@ -264,7 +269,10 @@ class ServicoJornada:
         self, tenant_id: str, jornada_id: uuid.UUID, *, instrucoes: str, portador_id: uuid.UUID
     ) -> tuple[dict[str, Any], Invocacao]:
         """Texto livre → diff proposto (§8-M7) — NUNCA aplica direto: aplicar é um PUT
-        humano do `grafo_proposto` (§1.1.3 Aplicar/Rejeitar)."""
+        humano do `grafo_proposto` (§1.1.3 Aplicar/Rejeitar).
+
+        §10.2 (C02): instruções livres mascaradas na fronteira (prompt + ledger)."""
+        instrucoes = mascarar_pii(instrucoes)
         jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
         skill = flow.carregar()
         politica = POLITICA_PUBLICADA["conteudo"]

@@ -213,3 +213,99 @@ def test_M4_A3(client: TestClient, app: FastAPI) -> None:
         os_id=uuid.UUID(os_["id"]), tipo="documento_portao.gerado"
     )
     assert eventos and eventos[-1].payload["hash"] == documento["hash"]
+
+
+def test_M4_A4(client: TestClient) -> None:
+    """A4 (emenda B01): o estado da validação é RECUPERÁVEL por leitura —
+    `GET /os/{id}/validacoes` devolve a decisão vigente de cada campo (veredito,
+    checagens, evidência, quem/quando) e `GET /os/{id}/pendencias` o que está aberto.
+    Sem isso a tela T3 zerava a cada reload (UAT #2) embora o dado estivesse no banco."""
+    briefing = dict(BRIEFING_COM_FONTE) | {"canais": {"valor": ["email"], "inferido": True}}
+    os_ = _criar_os_discutida(client, briefing)
+
+    # OS ainda sem checagem alguma: leituras existem e vêm vazias (não 404/405)
+    assert client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=_h()).json() == []
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h()).json() == []
+
+    _validar(client, os_["id"], "publico")
+    _validar(client, os_["id"], "canais")  # sem fonte → falha
+    pendencia = client.post(
+        f"/api/v1/os/{os_['id']}/validacoes/canais/pendencia",
+        json={"titulo": "Confirmar mix de canais", "severidade": "alta"},
+        headers=_h(),
+    )
+    assert pendencia.status_code == 201, pendencia.text
+    aberta = pendencia.json()
+
+    # --- leitura das validações: uma linha por campo checado, com autoria ---
+    lidas = client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=_h())
+    assert lidas.status_code == 200, lidas.text
+    corpo = lidas.json()
+    assert [(v["campo"], v["veredito"]) for v in corpo] == [("publico", "ok"), ("canais", "falha")]
+    validado = corpo[0]
+    assert [c["tipo"] for c in validado["checagens"]] == ["contagem", "schema", "frescor"]
+    assert validado["evidencia"]["fonte"] == "hybris_base_clientes"
+    assert validado["por"] == "analista@dev.jornada.local"  # quem
+    assert validado["atualizado_em"] is not None  # quando
+    # campo NUNCA checado não aparece na leitura (a tela sabe o que falta decidir)
+    assert "verba" not in [v["campo"] for v in corpo]
+
+    # --- leitura das pendências: numero, severidade, status, bloqueante, âncora ---
+    pendencias = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h())
+    assert pendencias.status_code == 200, pendencias.text
+    listadas = pendencias.json()
+    assert [p["numero"] for p in listadas] == [aberta["numero"]]
+    assert listadas[0]["severidade"] == "alta" and listadas[0]["status"] == "aberta"
+    assert listadas[0]["bloqueante"] is True
+    assert listadas[0]["origem"] == "validacao:canais"  # âncora no campo (A1)
+
+    # resolver não some da lista — muda de status (a tela distingue aberta de tratada)
+    assert (
+        client.post(f"/api/v1/pendencias/{aberta['id']}/resolver", headers=_h()).status_code == 200
+    )
+    tratada = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h()).json()
+    assert [p["status"] for p in tratada] == ["resolvida"]
+
+    # leituras são de qualquer autenticado (§8-M0) e escopadas por tenant
+    assert (
+        client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=_h("dev-solicitante")).status_code
+        == 200
+    )
+    outro_tenant = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
+    assert client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=outro_tenant).status_code == 404
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=outro_tenant).status_code == 404
+
+
+def test_M4_A5(client: TestClient, app: FastAPI) -> None:
+    """A5 (emenda B01): revalidar o MESMO campo é idempotente — atualiza a decisão
+    vigente (mesmo `id`, `created_at` preservado) em vez de empilhar duplicata. O
+    histórico de execuções continua no outbox `validacao.executada` (§2.3)."""
+    os_ = _criar_os_discutida(client, dict(BRIEFING_COM_FONTE))
+
+    primeira = _validar(client, os_["id"], "publico")
+    segunda = _validar(client, os_["id"], "publico")
+    terceira = _validar(client, os_["id"], "publico")
+
+    # mesma linha: id estável e created_at da PRIMEIRA checagem
+    assert segunda["id"] == primeira["id"] == terceira["id"]
+    assert terceira["created_at"] == primeira["created_at"]
+    assert terceira["atualizado_em"] >= primeira["atualizado_em"]
+
+    # a leitura (e o repositório) enxergam UMA validação do campo, não três
+    lidas = client.get(f"/api/v1/os/{os_['id']}/validacoes", headers=_h()).json()
+    assert [v["campo"] for v in lidas] == ["publico"]
+    assert lidas[0]["id"] == primeira["id"]
+    persistidas = app.state.repositorio_os.listar_validacoes(uuid.UUID(os_["id"]), "publico")
+    assert len(persistidas) == 1
+
+    # cada execução segue auditável no outbox — 3 eventos, a revalidação marcada
+    eventos = app.state.repositorio_os.listar_eventos(
+        os_id=uuid.UUID(os_["id"]), tipo="validacao.executada"
+    )
+    assert [e.payload["revalidacao"] for e in eventos] == [False, True, True]
+    assert all(e.payload["validacao_id"] == primeira["id"] for e in eventos)
+
+    # e a idempotência não afrouxa o portão: o outro campo continua não decidido (A1)
+    bloqueado = client.post(f"/api/v1/os/{os_['id']}/go", headers=_h())
+    assert bloqueado.status_code == 409
+    assert bloqueado.json()["campos_nao_decididos"] == ["verba"]

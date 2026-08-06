@@ -22,6 +22,14 @@ class RepositorioAprovacao(Protocol):
     # --- OS (escopo de tenant §4.1) ---
     def obter_os(self, tenant_id: str, os_id: uuid.UUID) -> OS | None: ...
 
+    def obter_os_por_id(self, os_id: uuid.UUID) -> OS | None:
+        """Leitura SEM escopo de tenant — uso RESTRITO à resolução do link mágico
+        (emenda C03, §8-M8): naquele fluxo o TOKEN é a credencial e o tenant é
+        DERIVADO da OS dona do snapshot (o aprovador externo não manda `X-Tenant`).
+        Em qualquer rota com tenant no contexto, use `obter_os` — o escopo continua
+        sendo verificado lá, e aqui o segredo do token é que faz o papel do escopo."""
+        ...
+
     # --- Componentes dos portões/snapshot (leitura) ---
     def listar_jornadas(self, os_id: uuid.UUID) -> list[JornadaVersao]: ...
 

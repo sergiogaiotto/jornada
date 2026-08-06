@@ -86,6 +86,10 @@ tabela_validacao_campo = Table(
     Column("checagens", JSONB, nullable=False),
     Column("evidencia", JSONB, nullable=False),
     Column("created_at", DateTime(timezone=True)),
+    # emenda B01 (migração 0013): quem/quando da decisão VIGENTE — a leitura
+    # GET /os/{id}/validacoes mostra autoria, e a linha é única por (os_id, campo)
+    Column("por", Text),
+    Column("atualizado_em", DateTime(timezone=True)),
 )
 
 tabela_os_thread = Table(

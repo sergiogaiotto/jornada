@@ -157,6 +157,15 @@ class ServicoOs:
         )
         return pendencia
 
+    def listar_pendencias(self, tenant_id: str, os_id: uuid.UUID) -> list[Pendencia]:
+        """GET /os/{id}/pendencias (emenda B01) — pendências da OS em ordem de `numero`.
+
+        Leitura pura, sem efeito: a tela T3 e o War Room precisam saber o que já foi
+        aberto (e o que ainda bloqueia o GO) depois de um reload/restart — antes disso
+        só existia o POST, e o estado vivia na sessão do navegador."""
+        os_ = self.obter_os(tenant_id, os_id)  # tenant errado/inexistente → 404
+        return self._repo.listar_pendencias(os_.id)
+
     def resolver_pendencia(self, tenant_id: str, pendencia_id: uuid.UUID, actor: str) -> Pendencia:
         pendencia, os_ = self._exigir_pendencia(tenant_id, pendencia_id)
         regras_pendencia.resolver(pendencia)

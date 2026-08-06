@@ -18,6 +18,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from domain.jornada.adjacencia import saidas_do_grafo as _saidas
+
 SCHEMA_PATH = Path(__file__).resolve().parent / "jgc.schema.json"
 
 HOLDOUT_ID = "holdout"  # braço de randomSplit reservado ao holdout (§5.2/§5.3)
@@ -182,35 +184,30 @@ def _validar_no(no_id: str, no: dict[str, Any]) -> list[dict[str, Any]]:
                     f"Nó {no_id} ({tipo}) sem campo obrigatório `{campo}` (§5.2).",
                 )
             )
-    if tipo == "wait" and "duracao" not in data and "ate" not in data:  # anyOf do schema
-        erros.append(
-            _erro(no_id, "campo_obrigatorio", f"Nó {no_id} (wait) exige `duracao` OU `ate` (§5.2).")
-        )
+    if tipo == "wait":
+        if "duracao" not in data and "ate" not in data:  # anyOf do schema
+            erros.append(
+                _erro(
+                    no_id, "campo_obrigatorio", f"Nó {no_id} (wait) exige `duracao` OU `ate` (§5.2)."
+                )
+            )
+        elif "duracao" in data and duracao_em_dias(str(data["duracao"])) is None:
+            # Emenda D03 (UAT #4): até aqui bastava a PRESENÇA de `duracao` — o formato
+            # nunca era conferido. O gpt-oss-120b real produziu `"imediato_apos_quiet_
+            # hours"`, que passou na validação, furou a regra `wait_alem_da_janela`
+            # (que ignora duração não-parseável) e chegou torta no compilador SFMC.
+            erros.append(
+                _erro(
+                    no_id,
+                    "duracao_invalida",
+                    f"Nó {no_id} (wait) com `duracao`={data['duracao']!r} fora do ISO-8601 "
+                    "(§5.2) — use P1D, P2W, PT12H, PT30M.",
+                )
+            )
     return erros
 
 
 # ------------------------------------------------------- Semântica (§5.3)
-def _saidas(grafo: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Arestas de saída por nó; regras de decisionSplit contam como saída (to direto)."""
-    saidas: dict[str, list[dict[str, Any]]] = {}
-    for aresta in grafo.get("edges") or []:
-        if isinstance(aresta, dict) and aresta.get("from"):
-            saidas.setdefault(str(aresta["from"]), []).append(aresta)
-    for no in grafo.get("nodes") or []:
-        if isinstance(no, dict) and no.get("type") == "decisionSplit":
-            for regra in no.get("data", {}).get("regras") or []:
-                if isinstance(regra, dict) and regra.get("to"):
-                    saidas.setdefault(str(no["id"]), []).append(
-                        {
-                            "id": f"{no['id']}:{regra['to']}",
-                            "from": str(no["id"]),
-                            "to": str(regra["to"]),
-                            "cond": regra.get("expr"),
-                        }
-                    )
-    return saidas
-
-
 def _alcancaveis(entradas: list[str], saidas: dict[str, list[dict[str, Any]]]) -> set[str]:
     alcancados, fila = set(entradas), list(entradas)
     while fila:
@@ -320,12 +317,17 @@ def _validar_semantica(
                     )
         if tipo == "frequencySplit":
             for classe in no.get("data", {}).get("classes") or []:
-                if str(classe) not in conds:
+                # Emenda D05 (UAT #4): comparava `str(classe)` — a repr do dict inteiro
+                # (`"{'id': 'baixa', 'max': 2}"`) — contra as conds. Classe como objeto
+                # (a forma do §5.2, com faixas) NUNCA casava, e o nó era impossível de
+                # salvar. Casa por `id`, igual ao randomSplit; classe string segue valendo.
+                rotulo = classe.get("id") if isinstance(classe, dict) else classe
+                if str(rotulo) not in conds:
                     erros.append(
                         _erro(
                             no_id,
                             "braco_sem_destino",
-                            f"Classe {classe!r} do frequencySplit {no_id} sem aresta de destino.",
+                            f"Classe {rotulo!r} do frequencySplit {no_id} sem aresta de destino.",
                         )
                     )
         if tipo == "engagementSplit" and len(arestas_do_no) < 2:

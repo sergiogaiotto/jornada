@@ -856,10 +856,10 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     fase: "Avaliação",
     destino: "os:prevoo",
     descricao:
-      "Plan/apply determinístico para o SFMC, bateria de pré-voo pass/warn/fail e monitor de drift.",
+      "Plan/apply determinístico para o SFMC, bateria de pré-voo pass/warn/fail/n-a e monitor de drift.",
     oQueE: [
       "Aqui o snapshot aprovado vira realidade no SFMC — no estilo Terraform: primeiro o plan (lista declarativa do que será criado/alterado/mantido/destruído, com avisos destrutivos), depois o apply idempotente, com chaves externas derivadas do hash e rollback compensatório em caso de falha.",
-      "Antes do apply em produção roda a bateria de pré-voo: DEs e schemas, frescor das fontes, opt-in, listas last-mile, lint de AMPscript, limites do SFMC, drift zero e seed dry-run — cada item pass/warn/fail. FAIL bloqueia; WARN documenta.",
+      "Antes do apply em produção roda a bateria de pré-voo: DEs e schemas, frescor das fontes, opt-in, listas last-mile, lint de AMPscript, limites do SFMC, drift zero e seed dry-run — cada item pass/warn/fail. FAIL bloqueia; WARN documenta; n/a é o item que não pôde ser verificado (ex.: nada publicado no ambiente para comparar drift) — não bloqueia, mas tira o verde da bateria: verde significa verificado E conforme.",
       "O compilador é 100% determinístico — LLM proibido neste caminho. O agente Sync apenas traduz o plano técnico para impacto de negócio. O drift (alguém mexeu direto no SFMC) é vigiado a cada 30 min e pode ser resolvido com adopt/enforce/exceção.",
     ],
     fundamentos: [
@@ -892,7 +892,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     campos: [
       { campo: "Plano declarativo", significado: "Recurso a recurso: criar/alterar/manter/destruir + avisos destrutivos." },
       { campo: "Resultado do apply", significado: "sync_run com estado (ok/parcial/revertido/falhou) e nº de chamadas de API." },
-      { campo: "Bateria de pré-voo", significado: "Itens pass/warn/fail com evidência; resultado geral verde/amarelo/vermelho." },
+      { campo: "Bateria de pré-voo", significado: "Itens pass/warn/fail/n/a com evidência; resultado geral verde/amarelo/vermelho (n/a nunca fica verde)." },
       { campo: "Painel de drift", significado: "Recursos em sincronia / drift SFMC / twin à frente, com diff e resolução." },
       { campo: "Narrativa do Sync", significado: "O plano traduzido para impacto de negócio (LLM narra, nunca executa)." },
     ],

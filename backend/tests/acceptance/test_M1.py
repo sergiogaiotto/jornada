@@ -144,3 +144,53 @@ def test_M1_A3(client: TestClient, app: FastAPI) -> None:
     assert caminhos_saude, "rota GET /os/{id}/saude deve existir (§8-M1)"
     for caminho, operacoes in caminhos_saude.items():
         assert set(operacoes) == {"get"}, (caminho, sorted(operacoes))
+
+
+def test_M1_A4(client: TestClient) -> None:
+    """A4 (emenda B01, UAT #2): `GET /os/{id}/pendencias` — a rota só aceitava POST (405),
+    então o que estava aberto sumia da tela a cada reload. A leitura devolve TODAS as
+    pendências da OS em ordem de `numero`, com o que a governança precisa decidir:
+    severidade, status, bloqueante, accountable e a origem que ancora no campo."""
+    os_ = _criar_os(client)
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h("dev-analista")).json() == []
+
+    accountable = DEV_TOKENS["dev-lider"]
+    primeira = _abrir_pendencia(
+        client,
+        os_["id"],
+        titulo="Opt-in do canal SMS não confirmado",
+        severidade="alta",
+        bloqueante=True,
+        accountable=str(accountable.id),
+        origem="validacao:canais",
+    )
+    segunda = _abrir_pendencia(
+        client, os_["id"], titulo="Tarifário de push desatualizado", bloqueante=False
+    )
+
+    listadas = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h("dev-analista"))
+    assert listadas.status_code == 200, listadas.text
+    corpo = listadas.json()
+    assert [p["numero"] for p in corpo] == [primeira["numero"], segunda["numero"]]  # ordem estável
+    assert corpo[0] == primeira  # o corpo da leitura é o MESMO contrato do POST
+    assert corpo[0]["severidade"] == "alta" and corpo[0]["bloqueante"] is True
+    assert corpo[0]["accountable"] == str(accountable.id)
+    assert corpo[0]["origem"] == "validacao:canais"
+    assert corpo[1]["bloqueante"] is False
+
+    # tratada muda de status na leitura (a UI distingue o que ainda trava o avanço)
+    aceite = client.post(
+        f"/api/v1/pendencias/{primeira['id']}/aceitar",
+        json={"justificativa": "Risco aceito pela liderança para a janela desta campanha."},
+        headers=_h("dev-lider"),
+    )
+    assert aceite.status_code == 200, aceite.text
+    depois = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h("dev-analista")).json()
+    assert [p["status"] for p in depois] == ["aceita", "aberta"]
+    assert depois[0]["aceite"]["justificativa"].startswith("Risco aceito")
+
+    # leitura é de qualquer autenticado (§8-M0) e escopada por tenant
+    de_leitor = client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=_h("dev-solicitante"))
+    assert de_leitor.status_code == 200
+    outro = {"X-Tenant": "outro", "Authorization": "Bearer dev-analista"}
+    assert client.get(f"/api/v1/os/{os_['id']}/pendencias", headers=outro).status_code == 404

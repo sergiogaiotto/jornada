@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from adapters.demo_seeds import OS_CODIGO_DEMO, semear_demo
 from adapters.persistence.sql import RepositorioSql, criar_engine, criar_repositorio
@@ -280,3 +281,70 @@ def test_seeds_demo_idempotentes_entre_restarts(banco_limpo: str) -> None:
 def test_criar_repositorio_seleciona_sql_quando_alcancavel(banco_limpo: str) -> None:
     repositorio = criar_repositorio(banco_limpo)
     assert isinstance(repositorio, RepositorioSql)
+
+
+def test_validacao_vigente_e_unica_por_campo_e_revalidar_atualiza(banco_limpo: str) -> None:
+    """B01: `validacao_campo` guarda a decisão VIGENTE — uma por (os_id, campo).
+
+    Prova as duas metades da correção no banco real: (a) o upsert por id do adapter
+    atualiza a linha (veredito/evidência/quem/quando) preservando `created_at` da
+    primeira checagem, mesmo com engine NOVO — o caso do restart do container do UAT #2;
+    (b) o unique da migração 0013 recusa uma segunda linha para o mesmo campo, então a
+    invariante não depende do serviço lembrar de reusar o id.
+    """
+    repo1 = _repositorio_novo(banco_limpo)
+    os_ = _os_exemplo("OS-2026-9003")
+    repo1.adicionar_os(os_)
+    validacao_id = uuid.uuid4()
+    repo1.adicionar_validacao(
+        ValidacaoCampo(
+            id=validacao_id,
+            os_id=os_.id,
+            campo="publico",
+            veredito="falha",
+            checagens=[{"tipo": "fonte", "ok": False, "detalhe": "sem fonte"}],
+            evidencia={"fonte": None},
+            created_at=AGORA,
+            por="analista@dev.jornada.local",
+            atualizado_em=AGORA,
+        )
+    )
+
+    # "restart": engine novo revalida o MESMO campo (mesmo id, created_at original)
+    repo2 = _repositorio_novo(banco_limpo)
+    vigente = repo2.listar_validacoes(os_.id, campo="publico")[0]
+    repo2.adicionar_validacao(
+        ValidacaoCampo(
+            id=vigente.id,
+            os_id=os_.id,
+            campo="publico",
+            veredito="ok",
+            checagens=[{"tipo": "contagem", "ok": True, "detalhe": "847312 registros"}],
+            evidencia={"fonte": "hybris_base_clientes", "contagem": 847312},
+            created_at=vigente.created_at,
+            por="lider@dev.jornada.local",
+            atualizado_em=AGORA + timedelta(hours=3),
+        )
+    )
+
+    repo3 = _repositorio_novo(banco_limpo)
+    linhas = repo3.listar_validacoes(os_.id, campo="publico")
+    assert len(linhas) == 1  # atualizou, não empilhou
+    assert linhas[0].id == validacao_id and linhas[0].veredito == "ok"
+    assert linhas[0].created_at == AGORA  # primeira checagem preservada
+    assert linhas[0].por == "lider@dev.jornada.local"  # quem/quando = a decisão vigente
+    assert linhas[0].atualizado_em == AGORA + timedelta(hours=3)
+
+    # unique (os_id, campo) da migração 0013: uma SEGUNDA linha do mesmo campo é recusada
+    with pytest.raises(IntegrityError):
+        repo3.adicionar_validacao(
+            ValidacaoCampo(
+                id=uuid.uuid4(),
+                os_id=os_.id,
+                campo="publico",
+                veredito="falha",
+                checagens=[],
+                evidencia={},
+                created_at=AGORA + timedelta(hours=4),
+            )
+        )

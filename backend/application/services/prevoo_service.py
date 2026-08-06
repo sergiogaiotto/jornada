@@ -16,7 +16,9 @@ evidência, DETERMINÍSTICA e **SEM LLM em nenhum ponto** (§5.4/§10.6).
 5. `lint_ampscript` — lint simples sobre células de criativos e assets compilados.
 6. `limites_sfmc` — limites verificáveis por código (domain/jornada/prevoo.py).
 7. `drift_zero` — job de drift on-demand (ServicoDrift §5.4.5) restrito à OS: qualquer
-   drift no ambiente ⇒ fail (e, em prod, a pendência automática A4 já é aberta).
+   drift no ambiente ⇒ fail (e, em prod, a pendência automática A4 já é aberta); NADA
+   publicado para comparar ⇒ `n/a` (emenda C04 — antes era `pass` com `verificados: 0`,
+   verde sem verificar).
 8. `seed_dry_run` — seed sintética validada contra o schema da DE de entrada (DRY-RUN:
    nada é gravado no SFMC); DE ainda não materializada ⇒ warn.
 
@@ -192,19 +194,36 @@ class ServicoPrevoo:
     async def _item_drift_zero(
         self, tenant_id: str, os_: OS, ambiente: str, actor: str
     ) -> dict[str, Any]:
-        """Item 7 — drift=0 no ambiente (job on-demand §5.4.5 restrito à OS)."""
+        """Item 7 — drift=0 no ambiente (job on-demand §5.4.5 restrito à OS).
+
+        C04 (UAT #3): SEM recurso publicado no ambiente não há o que comparar — o item
+        devolve `n/a` com detalhe, nunca `pass`. "Zero verificações" não é "zero drift":
+        `pass` aqui dizia ao operador que a paridade twin↔SFMC estava conferida quando
+        nada tinha sido conferido. `n/a` não bloqueia, mas tira o verde da bateria.
+        """
         checks = await self._drift.verificar(
             tenant_id, ambiente=ambiente, os_id=os_.id, actor=actor
         )
         com_drift = [c for c in checks if c.estado != "em_sincronia"]
-        return regras.item(
-            "drift_zero",
-            "fail" if com_drift else "pass",
-            {
-                "verificados": len(checks),
-                "com_drift": [{"recurso": c.recurso, "estado": c.estado} for c in com_drift],
-            },
-        )
+        evidencia: dict[str, Any] = {
+            "ambiente": ambiente,
+            "verificados": len(checks),
+            "com_drift": [{"recurso": c.recurso, "estado": c.estado} for c in com_drift],
+        }
+        if not checks:
+            return regras.item(
+                "drift_zero",
+                regras.NAO_APLICAVEL,
+                evidencia
+                | {
+                    "detalhe": (
+                        f"nenhum recurso desta OS publicado em {ambiente} — não há estado "
+                        "real para comparar: a paridade twin↔SFMC NÃO foi verificada "
+                        "(não confundir com 'sem drift')."
+                    )
+                },
+            )
+        return regras.item("drift_zero", regras.FAIL if com_drift else regras.PASS, evidencia)
 
     async def _item_seed_dry_run(
         self, recursos: list[dict[str, Any]], hash_jgc: str

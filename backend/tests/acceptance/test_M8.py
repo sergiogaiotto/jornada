@@ -266,10 +266,12 @@ def test_M8_grafo_invalido_422(client: TestClient, app: FastAPI) -> None:
 
 # ================================================= M8 parte 2 · Portões T9 + Aprovação T10
 # Fluxo (§8-M8): simular → congelar previsto → snapshot (hash composto) → link mágico
-# → decisão. Rotas de /aprovacao/* são standalone: o TOKEN é a credencial (sem Bearer;
-# X-Tenant segue obrigatório §8).
+# → decisão. Rotas de /aprovacao/* são standalone: o TOKEN é a credencial (sem Bearer
+# e, desde C03/A5, sem X-Tenant — o tenant é derivado do token).
 
 _H_PUBLICO = {"X-Tenant": TENANT, "User-Agent": "pytest-aprovador"}
+# A5 (C03): o aprovador externo abre a URL do e-mail — nenhum header do app.
+_H_EXTERNO = {"User-Agent": "pytest-aprovador-externo"}
 
 
 def _preparar_snapshot(
@@ -432,6 +434,53 @@ def test_M8_A4(client: TestClient, app: FastAPI) -> None:
     novo = client.post("/api/v1/snapshots", json={"os_id": str(os_id)}, headers=_h())
     assert novo.status_code == 201, novo.text
     assert novo.json()["hash"] != snap["hash"]
+
+
+def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> None:
+    """A5 (C03 — UAT #3 adversarial): o link mágico é STANDALONE de verdade.
+
+    O aprovador externo recebe a URL por e-mail e abre no navegador: nenhum header do
+    app viaja junto. O fluxo inteiro (ver o pacote → decidir → uso único) tem que rodar
+    SEM `X-Tenant` — o tenant é derivado do próprio token no servidor. O escopo continua
+    fechado: header anunciando OUTRO tenant → 404 sem vazar a existência do link, e o
+    resto da API v1 segue exigindo o header (§8-M0-A2)."""
+    jornada_id, os_id, snap = _preparar_snapshot(client, app)
+    token = client.post(f"/api/v1/snapshots/{snap['id']}/link-magico", headers=_h()).json()["token"]
+
+    # 1) página pública SEM X-Tenant
+    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_EXTERNO)
+    assert pagina.status_code == 200, pagina.text
+    assert pagina.json()["snapshot"]["hash"] == snap["hash"]
+    assert pagina.json()["decisao"] is None
+
+    # 2) decisão SEM X-Tenant
+    decisao = client.post(
+        f"/api/v1/aprovacao/{token}/decidir",
+        json={"decisao": "aprovado", "decidido_por": "aprovador.externo@claro.com.br"},
+        headers=_H_EXTERNO,
+    )
+    assert decisao.status_code == 200, decisao.text
+    assert decisao.json()["decisao"] == "aprovado"
+    assert decisao.json()["decidido_meta"]["device"] == "pytest-aprovador-externo"
+    repo = app.state.repositorio_os
+    assert repo.obter_jornada(jornada_id).estado == "aprovado"  # efeito de domínio real
+    assert repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")
+
+    # 3) uso ÚNICO continua valendo sem header: 2ª decisão → 409
+    repetida = client.post(
+        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_EXTERNO
+    )
+    assert repetida.status_code == 409
+    assert repetida.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+
+    # 4) escopo fechado: header anunciando outro tenant não alcança o pacote
+    outro = client.get(f"/api/v1/aprovacao/{token}", headers={"X-Tenant": "torre-residencial"})
+    assert outro.status_code == 404
+
+    # 5) a isenção é SÓ do link mágico — o resto da API v1 segue exigindo X-Tenant
+    sem_tenant = client.get("/api/v1/os", headers={"Authorization": "Bearer dev-analista"})
+    assert sem_tenant.status_code == 400
+    assert client.post(f"/api/v1/snapshots/{snap['id']}/link-magico").status_code == 400
 
 
 # ------------------------------------------------- Contrato das demais rotas §8-M8 (T9)

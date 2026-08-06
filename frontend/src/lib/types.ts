@@ -129,6 +129,7 @@ export interface ChecagemOut {
   detalhe: string;
 }
 
+/** Decisão VIGENTE da checagem de um campo (uma por campo — emenda B01). */
 export interface ValidacaoOut {
   id: string;
   os_id: string;
@@ -136,7 +137,9 @@ export interface ValidacaoOut {
   veredito: "ok" | "falha";
   checagens: ChecagemOut[];
   evidencia: Record<string, unknown>;
-  created_at: string;
+  created_at: string; // primeira checagem do campo
+  por: string | null; // quem executou a checagem vigente
+  atualizado_em: string | null; // quando (null em linhas anteriores à emenda B01)
 }
 
 export interface MensagemThreadOut {
@@ -694,7 +697,9 @@ export interface SyncRunOut {
 
 export interface ItemPreflight {
   item: string;
-  status: "pass" | "warn" | "fail";
+  /** `n/a` (C04): item que NÃO pôde ser verificado (sem insumo para comparar) — não
+   *  bloqueia, mas também não conta como aprovação (a bateria não fica verde). */
+  status: "pass" | "warn" | "fail" | "n/a";
   evidencia: Record<string, unknown>;
   [extra: string]: unknown;
 }

@@ -55,29 +55,50 @@ class ServicoValidacao:
     def validar_campo(
         self, tenant_id: str, os_id: uuid.UUID, campo: str, *, actor: str
     ) -> ValidacaoCampo:
-        """POST /os/{id}/validacoes/{campo} — checagem automática + evidência (§8-M4)."""
+        """POST /os/{id}/validacoes/{campo} — checagem automática + evidência (§8-M4).
+
+        IDEMPOTENTE por (os_id, campo) desde a emenda B01: revalidar o MESMO campo
+        atualiza a decisão vigente (mesmo `id`, `created_at` da primeira checagem) em vez
+        de criar duplicata — o que a tela hidratada mostra é o que o portão GO enxerga.
+        Cada execução segue registrada no outbox (`validacao.executada`, §2.3).
+        """
         os_ = self._exigir_campo(tenant_id, os_id, campo)
         agora = self._relogio.agora()
         veredito, checagens, evidencia = regras.executar_checagens(
             valor_do_campo(os_.briefing, campo), self._fonte.consultar(campo), agora
         )
+        vigente = self._vigente(os_.id, campo)
         validacao = ValidacaoCampo(
-            id=uuid.uuid4(),
+            id=vigente.id if vigente is not None else uuid.uuid4(),
             os_id=os_.id,
             campo=campo,
             veredito=veredito,
             checagens=checagens,
             evidencia=evidencia,
-            created_at=agora,
+            created_at=vigente.created_at if vigente is not None else agora,
+            por=actor,
+            atualizado_em=agora,
         )
-        self._repo.adicionar_validacao(validacao)
+        self._repo.adicionar_validacao(validacao)  # upsert por id (§2.1)
         self._evento(
             os_,
             "validacao.executada",
-            {"validacao_id": str(validacao.id), "campo": campo, "veredito": veredito},
+            {
+                "validacao_id": str(validacao.id),
+                "campo": campo,
+                "veredito": veredito,
+                "revalidacao": vigente is not None,
+            },
             actor,
         )
         return validacao
+
+    def listar_validacoes(self, tenant_id: str, os_id: uuid.UUID) -> list[ValidacaoCampo]:
+        """GET /os/{id}/validacoes (emenda B01) — decisão vigente de cada campo já checado,
+        em ordem cronológica. Leitura pura: é daqui que a tela T3 se recupera após reload
+        ou restart do container (os POSTs deixaram de ser a única fonte da verdade)."""
+        os_ = self._servico_os.obter_os(tenant_id, os_id)  # tenant errado/inexistente → 404
+        return self._repo.listar_validacoes(os_.id)
 
     def abrir_pendencia_de_campo(
         self,
@@ -208,6 +229,12 @@ class ServicoValidacao:
         return os_, documento
 
     # -------------------------------------------------------------- Interno
+    def _vigente(self, os_id: uuid.UUID, campo: str) -> ValidacaoCampo | None:
+        """Decisão vigente do campo: a ÚLTIMA linha (contrato da porta). Linhas legadas
+        duplicadas (anteriores à emenda B01) convergem para uma na próxima revalidação."""
+        do_campo = self._repo.listar_validacoes(os_id, campo)
+        return do_campo[-1] if do_campo else None
+
     def _exigir_campo(self, tenant_id: str, os_id: uuid.UUID, campo: str) -> OS:
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         if campo not in os_.briefing:

@@ -16,7 +16,10 @@ from domain.validacao.modelos import DocumentoPortao, ThreadWarRoom, ValidacaoCa
 
 class RepositorioValidacao(Protocol):
     # --- Validações campo-a-campo (validacao_campo) ---
-    def adicionar_validacao(self, validacao: ValidacaoCampo) -> None: ...
+    def adicionar_validacao(self, validacao: ValidacaoCampo) -> None:
+        """UPSERT por `id` (emenda B01): o serviço reusa o id da decisão vigente do campo
+        ao revalidar, então a mesma chamada grava ou atualiza — nunca duplica."""
+        ...
 
     def listar_validacoes(self, os_id: uuid.UUID, campo: str | None = None) -> list[ValidacaoCampo]:
         """Validações da OS em ordem cronológica (a última do campo é a vigente)."""

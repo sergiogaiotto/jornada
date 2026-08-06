@@ -7,15 +7,26 @@
  * A9 (UAT): "Abrir pendência" NÃO dispara mais o POST em 1 clique cego — abre um
  * diálogo modal que coleta título (obrigatório, prefill citando o campo), descrição
  * (opcional) e severidade (default `media`) antes de enviar. Esc/clique-fora cancelam.
+ *
+ * B01 (UAT #2): a tela NÃO guarda mais o estado na sessão — hidrata no mount de
+ * `GET /os/{id}/validacoes` e `GET /os/{id}/pendencias`. Antes, reload ou restart do
+ * container zeravam a tela embora o dado estivesse no Postgres, e o usuário revalidava
+ * às cegas. As mutações apenas invalidam as queries: o servidor é a fonte da verdade.
  */
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, BarraProgresso, EstadoVazio, TituloTela } from "../components/ui/basics";
 import { post } from "../lib/api";
-import { useBriefing, useFecharForaEsc, usePainelContextual } from "../lib/hooks";
+import {
+  useBriefing,
+  useFecharForaEsc,
+  usePainelContextual,
+  usePendencias,
+  useValidacoes,
+} from "../lib/hooks";
 import {
   campoBriefing,
   valorLegivel,
@@ -24,6 +35,36 @@ import {
 } from "../lib/types";
 
 type Severidade = "baixa" | "media" | "alta";
+
+/** Âncora da pendência no campo (`pendencia.origem` — §8-M4). */
+const ORIGEM = (campo: string) => `validacao:${campo}`;
+
+const CHIP_SEVERIDADE: Record<string, string> = {
+  alta: "mchip-r",
+  media: "mchip-w",
+  baixa: "mchip-n",
+};
+
+/**
+ * Espelho EXATO da regra do portão GO (`domain/validacao/regras.campo_decidido`):
+ * campo decidido ⇔ última validação `ok` OU tratamento consciente (há pendência
+ * ancorada no campo e nenhuma segue aberta). O contador da tela precisa contar o
+ * mesmo que o backend recusa — senão promete um GO que o 409 nega (§1.3.5).
+ */
+function campoDecidido(
+  validacao: ValidacaoOut | undefined,
+  ancoradas: PendenciaOut[],
+): boolean {
+  if (validacao?.veredito === "ok") return true;
+  return ancoradas.length > 0 && ancoradas.every((p) => p.status !== "aberta");
+}
+
+/** Quem/quando da decisão vigente (emenda B01) — sobrevive ao reload, então é exibível. */
+function autoria(v: ValidacaoOut): string {
+  const quando = v.atualizado_em ?? v.created_at;
+  const carimbo = new Date(quando).toLocaleString("pt-BR");
+  return v.por ? `${v.por} · ${carimbo}` : carimbo;
+}
 
 /** Payload do diálogo (A9) — vira o corpo do POST .../pendencia. */
 interface DadosPendencia {
@@ -152,25 +193,58 @@ function DialogoPendencia({
 
 export function Validacao() {
   const { id } = useParams<{ id: string }>();
+  const queryClient = useQueryClient();
   const { data: briefing, error: erroBriefing } = useBriefing(id);
+  // B01: estado vem do servidor (não da sessão) — reload/restart não zeram a tela
+  const { data: validacoes, error: erroValidacoes } = useValidacoes(id);
+  const { data: pendencias, error: erroPendencias } = usePendencias(id);
 
-  const [resultados, setResultados] = useState<Record<string, ValidacaoOut>>({});
-  const [pendencias, setPendencias] = useState<Record<string, PendenciaOut>>({});
   const [selecionado, setSelecionado] = useState<string | null>(null);
   // A9: campo cujo diálogo de pendência está aberto (null = fechado)
   const [campoDialogo, setCampoDialogo] = useState<string | null>(null);
   const fecharDialogo = useCallback(() => setCampoDialogo(null), []);
 
   const campos = useMemo(() => Object.entries(briefing?.briefing ?? {}), [briefing]);
-  const decididos = campos.filter(([campo]) => resultados[campo] || pendencias[campo]).length;
+
+  /** Decisão vigente por campo (o backend garante uma por campo — emenda B01). */
+  const resultados = useMemo(() => {
+    const mapa: Record<string, ValidacaoOut> = {};
+    for (const v of validacoes ?? []) mapa[v.campo] = v;
+    return mapa;
+  }, [validacoes]);
+
+  /** Pendências ancoradas, agrupadas pelo campo da `origem` (`validacao:{campo}`). */
+  const ancoradas = useMemo(() => {
+    const mapa: Record<string, PendenciaOut[]> = {};
+    for (const [campo] of campos) {
+      mapa[campo] = (pendencias ?? []).filter((p) => p.origem === ORIGEM(campo));
+    }
+    return mapa;
+  }, [pendencias, campos]);
+
+  /** Tudo que ainda bloqueia o GO — inclusive pendência do War Room, sem âncora. */
+  const abertas = useMemo(
+    () => (pendencias ?? []).filter((p) => p.status === "aberta"),
+    [pendencias],
+  );
+
+  const decididos = campos.filter(([campo]) =>
+    campoDecidido(resultados[campo], ancoradas[campo] ?? []),
+  ).length;
   const pct = campos.length > 0 ? (100 * decididos) / campos.length : 0;
+
+  /** Toda mutação re-hidrata as leituras da OS (validações, pendências e saúde). */
+  const recarregar = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: ["os", id] }),
+    [queryClient, id],
+  );
 
   const validar = useMutation({
     mutationFn: (campo: string) =>
       post<ValidacaoOut>(`/os/${id}/validacoes/${encodeURIComponent(campo)}`),
     onSuccess: (v) => {
-      setResultados((r) => ({ ...r, [v.campo]: v }));
       setSelecionado(v.campo);
+      recarregar(); // idempotente no servidor: revalidar atualiza a linha, não duplica
     },
   });
 
@@ -185,15 +259,18 @@ export function Validacao() {
           severidade: dados.severidade,
         },
       ),
-    onSuccess: (p, dados) => {
-      setPendencias((m) => ({ ...m, [dados.campo]: p }));
+    onSuccess: (_p, dados) => {
       setSelecionado(dados.campo);
       setCampoDialogo(null);
+      recarregar();
     },
   });
 
   const validacaoSelecionada = selecionado ? resultados[selecionado] : undefined;
-  const pendenciaSelecionada = selecionado ? pendencias[selecionado] : undefined;
+  // a aberta é a que importa (ainda trava o GO); sem aberta, mostra a que tratou o campo
+  const doSelecionado = selecionado ? (ancoradas[selecionado] ?? []) : [];
+  const pendenciaSelecionada =
+    doSelecionado.find((p) => p.status === "aberta") ?? doSelecionado[0];
 
   usePainelContextual(
     <>
@@ -211,6 +288,10 @@ export function Validacao() {
                   {c.ok ? "✓" : "✗"} <b>{c.tipo}</b>: {c.detalhe}
                 </span>
               ))}
+              {/* B01: quem/quando da decisão vigente — auditoria que sobrevive ao reload */}
+              <span className="mt-1 block text-[11px] text-faint">
+                checado por {autoria(validacaoSelecionada)}
+              </span>
             </span>
           </div>
           <div className="mfield block">
@@ -232,7 +313,15 @@ export function Validacao() {
                 : "Não bloqueante."}
             </span>
           </span>
-          <span className="mchip-r">aberta</span>
+          <span
+            className={
+              pendenciaSelecionada.status === "aberta"
+                ? (CHIP_SEVERIDADE[pendenciaSelecionada.severidade ?? ""] ?? "mchip-r")
+                : "mchip-g"
+            }
+          >
+            {pendenciaSelecionada.status}
+          </span>
         </div>
       ) : (
         <div className="text-[12px] text-muted">
@@ -260,12 +349,43 @@ export function Validacao() {
         }
       />
       {erroBriefing != null && <BannerErro erro={erroBriefing} contexto="Briefing" />}
+      {erroValidacoes != null && <BannerErro erro={erroValidacoes} contexto="Validações" />}
+      {erroPendencias != null && <BannerErro erro={erroPendencias} contexto="Pendências" />}
       {validar.error != null && <BannerErro erro={validar.error} contexto="Validação" />}
       {abrirPendencia.error != null && (
         <BannerErro erro={abrirPendencia.error} contexto="Pendência" />
       )}
 
       <BarraProgresso pct={pct} tom={pct === 100 ? "good" : "blue"} />
+
+      {/* B01: o que ainda trava o GO, recuperado do servidor (some ao resolver/aceitar) */}
+      {abertas.length > 0 && (
+        <div className="mcard mt-3 border-warn-line bg-warn-bg">
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-[.06em] text-warn">
+            {abertas.length} pendência(s) aberta(s) — travam o GO até resolução ou aceite
+          </div>
+          {abertas.map((p) => (
+            <div key={p.id} className="mfield bg-white">
+              <span className="min-w-0">
+                <span className="block text-[12.5px] font-bold">
+                  #{p.numero} · {p.titulo}
+                </span>
+                <span className="block break-words text-[11.5px] text-slatex">
+                  {p.origem?.startsWith("validacao:")
+                    ? `ancorada no campo ${p.origem.slice("validacao:".length)}`
+                    : "aberta no War Room (T4)"}
+                  {p.bloqueante ? " · bloqueante" : " · não bloqueante"}
+                  {p.accountable != null && " · com accountable definido"}
+                </span>
+              </span>
+              <span className={CHIP_SEVERIDADE[p.severidade ?? ""] ?? "mchip-n"}>
+                {p.severidade ?? "sem severidade"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="mt-3">
         {campos.length === 0 && (
           <EstadoVazio>Briefing vazio — estruture-o na Sala de Ideação (T2).</EstadoVazio>
@@ -273,8 +393,11 @@ export function Validacao() {
         {campos.map(([campo, entrada]) => {
           const e = campoBriefing(entrada);
           const resultado = resultados[campo];
-          const pendencia = pendencias[campo];
-          const comPendencia = Boolean(pendencia);
+          const doCampo = ancoradas[campo] ?? [];
+          const pendenciaAberta = doCampo.find((p) => p.status === "aberta");
+          // já tratada = pendência ancorada existe e nenhuma segue aberta (decide o campo)
+          const tratada = doCampo.length > 0 && pendenciaAberta === undefined;
+          const decidido = campoDecidido(resultado, doCampo);
           // A10 (UAT): estado de envio POR LINHA — `variables` é o campo da linha
           // clicada, então cada botão reflete (e dispara) somente o próprio campo.
           const validando = validar.isPending && validar.variables === campo;
@@ -283,7 +406,7 @@ export function Validacao() {
             <div
               key={campo}
               className={`mfield cursor-pointer ${
-                comPendencia
+                pendenciaAberta
                   ? "border-warn-line bg-warn-bg"
                   : selecionado === campo
                     ? "border-blue"
@@ -300,10 +423,14 @@ export function Validacao() {
                     ) : (
                       <span className="mchip-r">falha</span>
                     ))}
-                  {pendencia && (
-                    <span className="mchip-r">Pendência #{pendencia.numero} aberta</span>
+                  {pendenciaAberta && (
+                    <span className={CHIP_SEVERIDADE[pendenciaAberta.severidade ?? ""] ?? "mchip-r"}>
+                      Pendência #{pendenciaAberta.numero} aberta
+                      {pendenciaAberta.severidade && ` · ${pendenciaAberta.severidade}`}
+                    </span>
                   )}
-                  {!resultado && !pendencia && <span className="mchip-w">pendente</span>}
+                  {tratada && <span className="mchip-g">pendência tratada</span>}
+                  {!decidido && !pendenciaAberta && <span className="mchip-w">pendente</span>}
                 </span>
                 <span className="block break-words text-[11.5px] leading-snug text-slatex">
                   {valorLegivel(e.valor)}
@@ -311,6 +438,8 @@ export function Validacao() {
                     <>
                       {" · "}
                       {resultado.checagens.map((c) => `${c.ok ? "✓" : "✗"} ${c.tipo}`).join(" · ")}
+                      {" · "}
+                      {autoria(resultado)}
                     </>
                   )}
                 </span>
@@ -325,12 +454,13 @@ export function Validacao() {
                     validar.mutate(campo);
                   }}
                 >
-                  {validando ? "Validando…" : "Validar"}
+                  {/* B01: revalidar é idempotente no servidor — atualiza, não duplica */}
+                  {validando ? "Validando…" : resultado ? "Revalidar" : "Validar"}
                 </button>
                 <button
                   type="button"
                   className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
-                  disabled={abrindo || comPendencia}
+                  disabled={abrindo || Boolean(pendenciaAberta)}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     setSelecionado(campo);

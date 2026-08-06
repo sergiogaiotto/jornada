@@ -113,6 +113,11 @@ class RepositorioOsMemoria:
     def obter_os_por_codigo(self, codigo: str) -> OS | None:
         return next((o for o in self._os.values() if o.codigo == codigo), None)
 
+    def obter_os_por_id(self, os_id: uuid.UUID) -> OS | None:
+        """Sem escopo de tenant — só o link mágico usa (C03: o token é a credencial e
+        o tenant sai da OS dona do snapshot). Ver RepositorioAprovacao."""
+        return self._os.get(os_id)
+
     def listar_os(self, tenant_id: str, limit: int, offset: int) -> list[OS]:
         do_tenant = [o for o in self._os.values() if o.tenant_id == tenant_id]
         do_tenant.sort(key=lambda o: (o.created_at, o.codigo))
@@ -202,6 +207,13 @@ class RepositorioOsMemoria:
 
     # --- Validações campo-a-campo (`validacao_campo` — M4) ---
     def adicionar_validacao(self, validacao: ValidacaoCampo) -> None:
+        """UPSERT por id, espelhando o `on conflict (id) do update` do adapter SQL
+        (emenda B01): revalidar o mesmo campo substitui a decisão vigente NO LUGAR,
+        preservando a posição cronológica da primeira checagem."""
+        for indice, existente in enumerate(self._validacoes):
+            if existente.id == validacao.id:
+                self._validacoes[indice] = validacao
+                return
         self._validacoes.append(validacao)
 
     def listar_validacoes(self, os_id: uuid.UUID, campo: str | None = None) -> list[ValidacaoCampo]:

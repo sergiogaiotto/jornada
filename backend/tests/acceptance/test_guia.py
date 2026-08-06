@@ -62,6 +62,9 @@ def test_guia_A1(client: TestClient, app: FastAPI) -> None:
     assert any(CONTEXTO_COCKPIT in c for c in conteudos)
     assert any("home do portfólio de campanhas" in c for c in conteudos)  # histórico
     assert conteudos[-1].startswith("Por que não consigo editar a saúde?")
+    # C02 (§10.2): o PROMPT também é sanitizado — antes o telefone ia em claro ao hub
+    assert not any("11987654321" in c for c in conteudos)
+    assert "[TELEFONE]" in conteudos[-1]
 
     # ledger via_ai (LGPD Art. 20): os_id NULL (ajuda é da página) + PII mascarada (§10.2)
     invocacoes = [
@@ -74,7 +77,7 @@ def test_guia_A1(client: TestClient, app: FastAPI) -> None:
     assert invocacao.os_id is None
     assert corpo["invocacao_id"] == str(invocacao.id)
     assert "11987654321" not in str(invocacao.input)
-    assert "[PII-mascarada]" in invocacao.input["pergunta"]
+    assert "[TELEFONE]" in invocacao.input["pergunta"]
     assert invocacao.input["contexto_chars"] == len(CONTEXTO_COCKPIT)
 
     # contrato: contexto > 8k chars → 422 (o back NÃO aceita payload sem limite)

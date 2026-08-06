@@ -35,6 +35,16 @@ const STATUS_DOT: Record<string, string> = {
   pass: "text-good",
   warn: "text-warn",
   fail: "text-crit",
+  "n/a": "text-faint", // C04: não verificado — nem verde nem vermelho
+};
+
+// C04: `n/a` = item que não pôde ser verificado (sem insumo). Marca própria (–) para
+// não ser lido como aprovado (✓) nem como reprovado (✗).
+const STATUS_ICONE: Record<string, string> = {
+  pass: "✓",
+  warn: "⚠",
+  fail: "✗",
+  "n/a": "–",
 };
 
 const SEMAFORO_CHIP: Record<string, string> = {
@@ -346,18 +356,27 @@ export function Prevoo() {
               {preflight.itens.map((item) => (
                 <div key={item.item} className="flex items-start gap-2 text-[12px]">
                   <span className={`font-bold ${STATUS_DOT[item.status] ?? "text-faint"}`}>
-                    {item.status === "pass" ? "✓" : item.status === "warn" ? "⚠" : "✗"}
+                    {STATUS_ICONE[item.status] ?? "✗"}
                   </span>
                   <span>
                     <b>{rotuloFonte(item.item)}</b>{" "}
                     <span className="text-[11px] uppercase text-faint">{item.status}</span>
+                    {item.status === "n/a" && (
+                      <span className="block text-[11px] text-muted">
+                        {String(
+                          (item.evidencia as Record<string, unknown>)?.detalhe ??
+                            "não verificado — sem insumo para comparar",
+                        )}
+                      </span>
+                    )}
                   </span>
                 </div>
               ))}
               <div className="mt-1 text-[11px] text-faint">
                 FAIL ⇒ vermelho bloqueia o apply; prod exige pré-voo executado e
                 não-vermelho (§5.4.4) · inclui re-varredura last-mile das 7 listas e
-                dry-run com seed list.
+                dry-run com seed list · <b>n/a</b> = não havia o que verificar: não
+                bloqueia, mas também não deixa a bateria verde.
               </div>
             </div>
           ) : (

@@ -583,7 +583,10 @@ def test_M9_preflight_bateria_com_evidencia(
     assert por_item["listas_last_mile"]["status"] == "pass"
     assert por_item["lint_ampscript"]["status"] == "pass"
     assert por_item["limites_sfmc"]["status"] == "pass"
-    assert por_item["drift_zero"]["status"] == "pass"  # nada aplicado ⇒ 0 drift
+    # C04: nada aplicado ⇒ NADA a comparar — `n/a` com detalhe, jamais `pass`
+    assert por_item["drift_zero"]["status"] == "n/a"
+    assert por_item["drift_zero"]["evidencia"]["verificados"] == 0
+    assert "não há estado real para comparar" in por_item["drift_zero"]["evidencia"]["detalhe"]
 
     # last-mile registrado no certificado (§4.1: re-varredura no disparo)
     repo = app_sfmc.state.repositorio_os
@@ -605,3 +608,22 @@ def test_M9_preflight_bateria_com_evidencia(
     assert por_item["drift_zero"]["evidencia"]["verificados"] == RECURSOS_V1
     seed = por_item["seed_dry_run"]["evidencia"]["entradas"][0]["seed"]
     assert seed["SubscriberKey"].startswith("seed-jrn-")  # sintética — nunca PII (§10.2)
+
+    # C04 (UAT #3): a MESMA bateria em prod, onde nada desta OS foi publicado. Todo o
+    # resto passa (as DEs existem no mock), mas não há recurso para comparar: drift vira
+    # `n/a` com detalhe — e um item não verificado NÃO deixa a bateria verde sozinho.
+    prod = client.post(f"/api/v1/preflight/{snapshot['id']}?ambiente=prod", headers=_h()).json()
+    por_item = {i["item"]: i for i in prod["itens"]}
+    assert por_item["drift_zero"]["status"] == "n/a"
+    assert por_item["drift_zero"]["evidencia"] == {
+        "ambiente": "prod",
+        "verificados": 0,
+        "com_drift": [],
+        "detalhe": por_item["drift_zero"]["evidencia"]["detalhe"],
+    }
+    assert "não há estado real para comparar" in por_item["drift_zero"]["evidencia"]["detalhe"]
+    assert {i["status"] for i in prod["itens"]} == {"pass", "n/a"}  # zero warn, zero fail
+    assert prod["resultado"] == "amarelo"  # n/a não é aprovação (antes: verde)
+    # `n/a` NÃO bloqueia — quem bloqueia é `fail`/vermelho (§5.4.4)
+    assert client.post(f"{base}/plan?ambiente=prod", headers=_h()).status_code == 201
+    assert client.post(f"{base}/apply?ambiente=prod", headers=_h()).status_code == 201

@@ -20,8 +20,15 @@ PORTOES: tuple[str, ...] = ("go",)  # demais portões (T9/T10) chegam com M8
 
 @dataclass
 class ValidacaoCampo:
-    """Linha de `validacao_campo` — resultado de UMA execução de checagem automática
-    do campo do briefing contra a fonte (§8-M4: contagem, schema, frescor)."""
+    """Linha de `validacao_campo` — a decisão VIGENTE da checagem automática de um campo
+    do briefing contra a fonte (§8-M4: contagem, schema, frescor).
+
+    Emenda B01 (2026-08-06): a linha é única por (os_id, campo) — revalidar o mesmo campo
+    ATUALIZA esta linha em vez de empilhar duplicatas (a UI hidrata dela após reload).
+    O histórico de cada execução continua no outbox `domain_event` (validacao.executada,
+    §2.3) — a tabela guarda o estado, o outbox guarda o filme.
+    `created_at` = primeira checagem do campo · `atualizado_em`/`por` = a vigente (quando/quem).
+    """
 
     id: uuid.UUID
     os_id: uuid.UUID
@@ -30,6 +37,8 @@ class ValidacaoCampo:
     checagens: list[dict[str, Any]]  # [{tipo, ok, detalhe}]
     evidencia: dict[str, Any]  # {fonte, contagem, schema, ultima_atualizacao, ...}
     created_at: datetime
+    por: str | None = None  # actor da checagem vigente (email do usuário)
+    atualizado_em: datetime | None = None  # None em linhas anteriores à emenda B01
 
 
 @dataclass
