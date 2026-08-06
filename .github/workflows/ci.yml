@@ -91,22 +91,28 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          SHA_CURTO="$(git rev-parse --short "$GITHUB_SHA")"
+          SHA_CURTO="${GITHUB_SHA:0:7}"
           echo "GIT_SHA alvo: $SHA_CURTO"
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@vps.falagaiotto.com.br \
             "cd /opt/jornada && git fetch origin && git reset --hard origin/main \
-             && export GIT_SHA=\$(git rev-parse --short HEAD) \
+             && export GIT_SHA=\$(git rev-parse HEAD | cut -c1-7) \
              && docker compose -f docker-compose.prod.yml --env-file .env up -d --build \
              && docker compose -f docker-compose.prod.yml --env-file .env ps --format '{{.Name}} {{.Status}}'"
       - name: Smoke pós-deploy (com prova de versão — A22)
         run: |
-          sleep 8
-          SHA_CURTO="$(git rev-parse --short "$GITHUB_SHA")"
+          SHA_CURTO="${GITHUB_SHA:0:7}"
+          # Espera ATIVA (o 1º boot com Postgres roda `alembic upgrade head` antes de
+          # servir): até 120s pelo SHA deste run responder — sleep fixo é aposta.
+          SHA_NO_AR=""
+          for i in $(seq 1 24); do
+            SHA_NO_AR="$(curl -fsS --max-time 5 http://vps.falagaiotto.com.br:8050/healthz 2>/dev/null \
+              | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sha",""))' 2>/dev/null || echo "")"
+            [ "$SHA_NO_AR" = "$SHA_CURTO" ] && break
+            sleep 5
+          done
+          echo "sha no ar: '$SHA_NO_AR' · esperado: '$SHA_CURTO'"
+          test "$SHA_NO_AR" = "$SHA_CURTO" || { echo "::error::deploy-fantasma: o ar responde '$SHA_NO_AR', esperado '$SHA_CURTO'"; exit 1; }
           curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" http://vps.falagaiotto.com.br:8050/
           curl -fsS http://vps.falagaiotto.com.br:8050/api/v1/os -H "X-Tenant: torre-movel" \
             -H "Authorization: Bearer dev-analista" | grep -q "OS-2026-0457" && echo "demo OK"
-          # A22 — o deploy só é sucesso se o SHA que responde é o SHA deste run.
-          SHA_NO_AR="$(curl -fsS http://vps.falagaiotto.com.br:8050/healthz | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sha",""))')"
-          echo "sha no ar: $SHA_NO_AR · esperado: $SHA_CURTO"
-          test "$SHA_NO_AR" = "$SHA_CURTO" || { echo "::error::deploy-fantasma: o ar responde '$SHA_NO_AR', esperado '$SHA_CURTO'"; exit 1; }
           echo "version-stamp OK"
