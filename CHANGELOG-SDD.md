@@ -1410,3 +1410,9 @@ Emenda §1.3.3 — só seeds: nenhum contrato de API, DDL ou migração muda.
   `origem: "seed"`; seed rodada duas vezes no MESMO repositório sem duplicar agente/skill/caso/
   run; e a causa-raiz — seed sobre banco já populado converge o roster novo. `test_M12` passa a
   criar `triagem_sandbox` (o nome `triagem_audiencia` agora pertence ao roster semeado).
+
+## 2026-08-06 — A24 · Evidências de compliance pinadas no RAG
+- **Achado (VPS, pós-A11):** com o RAG em produção, o Engineer deixou de recusar por "sem evidências" e passou a recusar por falta ESPECÍFICA de opt-in por canal e da estrutura de `lista_supressao` — embora as entradas existissem na base. Causa: retriever puramente semântico (top-k=8); a consulta "pós-pago 5G com ARPU alto" trazia só colunas de plano.
+- **Correção:** entradas com `meta.sempre_incluir: true` entram SEMPRE, à frente do top-k (dedup por id). Marcadas na seed as 6 evidências que o Guard determinístico exige em toda segmentação: as 7 listas de supressão, os 4 opt-in por canal e a chave de ativação `contato_hash`.
+- **Princípio:** evidência obrigatória de compliance não depende de sorte semântica.
+- Testes: `test_retriever_pina_evidencias_de_compliance` (unit) e reforço do aceite `test_A11_engineer_recebe_evidencias_do_retriever_e_cita` (top-k ≥ 8 + refs de compliance presentes e à frente).

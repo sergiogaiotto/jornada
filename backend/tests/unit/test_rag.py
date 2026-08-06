@@ -124,6 +124,28 @@ def test_retriever_top_k_8_e_degrade_suave() -> None:
     assert degradado.buscar(TENANT, "consumo_pct", bases=["dicionario_dados"]) == []
 
 
+def test_retriever_pina_evidencias_de_compliance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A24: evidência `meta.sempre_incluir` entra SEMPRE, mesmo quando a consulta é
+    semanticamente distante. Achado da VPS: buscar "pós-pago 5G ARPU alto" trazia só
+    colunas de plano, o Guard exigia opt-in/supressão e o Engineer recusava — com as
+    entradas presentes na base. Compliance obrigatório não depende de sorte semântica."""
+    repo = RepositorioOsMemoria()
+    for i in range(12):  # ruído semântico: plano/ARPU dominam o top-k
+        repo.adicionar_evidencia(_evidencia(f"plano_5g arpu faixa {i} elegibilidade upgrade"))
+    pinada = _evidencia("lista_supressao: as 7 listas obrigatórias em toda segmentação")
+    pinada.ref = "lista_supressao"
+    pinada.meta = {"sempre_incluir": True}
+    repo.adicionar_evidencia(pinada)
+
+    resultado = RetrieverService(repo, EmbeddingFake(dim=64)).buscar(
+        TENANT, "plano 5g arpu alto", bases=["dicionario_dados"]
+    )
+
+    assert resultado[0].id == pinada.id, "pinada vem à frente do top-k"
+    assert len({e.id for e in resultado}) == len(resultado), "sem duplicata (dedup por id)"
+    assert 8 <= len(resultado) <= 9  # top-k 8 + a pinada, quando ela já não ranqueia
+
+
 def test_evidencias_para_contexto_formato_citavel() -> None:
     e = _evidencia("consumo_pct percentual")
     e.ref = "hybris_base_clientes.consumo_pct"

@@ -48,9 +48,16 @@ def test_A11_engineer_recebe_evidencias_do_retriever_e_cita(
     assert corpo["via_ai"] is True and corpo["evidencias"]  # citadas na saída
 
     contexto = json.loads(app.state.llm.chamadas[0]["mensagens"][1]["content"])
-    assert len(contexto["evidencias_rag"]) == 8  # §7.3: top-k=8 no preparar_contexto
-    trechos = " ".join(e["trecho"] for e in contexto["evidencias_rag"])
+    evidencias = contexto["evidencias_rag"]
+    assert len(evidencias) >= 8  # §7.3: top-k=8 + as pinadas de compliance (A24)
+    trechos = " ".join(e["trecho"] for e in evidencias)
     assert "consumo_pct" in trechos  # ranking real: a consulta puxa a coluna citada
+    # A24: o Guard exige as 7 listas e opt-in por canal em TODA segmentação — essas
+    # evidências entram sempre, à frente do top-k (não dependem de sorte semântica).
+    refs = [e["ref"] for e in evidencias]
+    assert "lista_supressao" in refs
+    assert any(r.startswith("hybris_base_clientes.opt_in_") for r in refs)
+    assert refs[0] in {"lista_supressao"} or refs[0].startswith("hybris_base_clientes.")
     assert all(
         e["base"] == "dicionario_dados" and e["id"] and "trecho" in e
         for e in contexto["evidencias_rag"]

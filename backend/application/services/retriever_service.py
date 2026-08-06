@@ -55,4 +55,25 @@ class RetrieverService:
         except LLMIndisponivel as exc:  # EmbeddingIndisponivel herda (§10.6)
             logger.warning("RAG pulado: hub de embeddings indisponível (%s)", exc)
             return []
-        return self._repo.buscar_evidencias(tenant_id, list(bases), vetor, self._top_k)
+        semanticas = self._repo.buscar_evidencias(tenant_id, list(bases), vetor, self._top_k)
+        return self._com_pinadas(tenant_id, bases, semanticas)
+
+    def _com_pinadas(
+        self, tenant_id: str, bases: Sequence[str], semanticas: list[AgenteEvidence]
+    ) -> list[AgenteEvidence]:
+        """Evidências `meta.sempre_incluir` entram SEMPRE, à frente do top-k.
+
+        O Guard determinístico exige em TODA segmentação as 7 listas de supressão e o
+        opt-in por canal — evidência obrigatória não pode depender de sorte semântica:
+        na VPS, "público pós-pago 5G com ARPU alto" trazia só colunas de plano e o
+        Engineer recusava por falta de evidência de compliance (achado A24), embora as
+        entradas existissem na base. Dedup por id preserva a ordem do top-k."""
+        pinadas: list[AgenteEvidence] = []
+        for base in bases:
+            for evidencia in self._repo.listar_evidencias(tenant_id, base):
+                if (evidencia.meta or {}).get("sempre_incluir"):
+                    pinadas.append(evidencia)
+        if not pinadas:
+            return semanticas
+        vistos = {e.id for e in pinadas}
+        return pinadas + [e for e in semanticas if e.id not in vistos]
