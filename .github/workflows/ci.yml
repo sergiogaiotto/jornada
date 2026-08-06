@@ -11,6 +11,20 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:                    # A7 parte 1: Postgres real p/ pytest -m integration
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jornada
+          POSTGRES_PASSWORD: jornada
+          POSTGRES_DB: jornada
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jornada -d jornada"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,10 +44,15 @@ jobs:
         run: mypy
       - name: Pytest (unit/contract/aceite, sem integração) + cobertura >= 80%
         # --cov inclui domain e application (M1): medir só app/api mascarava o núcleo
+        # DATABASE_URL fica FORA deste step: os aceites valem sobre repositório em memória
         run: >
           python -m pytest -m "not integration"
           --cov=app --cov=api --cov=domain --cov=application
           --cov-report=term-missing --cov-fail-under=80
+      - name: Pytest (integração — Postgres real, A7 parte 1)
+        env:
+          DATABASE_URL: postgresql+asyncpg://jornada:jornada@localhost:5432/jornada
+        run: python -m pytest -m integration
 
   compose-validate:
     runs-on: ubuntu-latest
@@ -72,13 +91,22 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          SHA_CURTO="$(git rev-parse --short "$GITHUB_SHA")"
+          echo "GIT_SHA alvo: $SHA_CURTO"
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@vps.falagaiotto.com.br \
-            'cd /opt/jornada && git fetch origin && git reset --hard origin/main \
+            "cd /opt/jornada && git fetch origin && git reset --hard origin/main \
+             && export GIT_SHA=\$(git rev-parse --short HEAD) \
              && docker compose -f docker-compose.prod.yml --env-file .env up -d --build \
-             && docker compose -f docker-compose.prod.yml --env-file .env ps --format "{{.Name}} {{.Status}}"'
-      - name: Smoke pós-deploy
+             && docker compose -f docker-compose.prod.yml --env-file .env ps --format '{{.Name}} {{.Status}}'"
+      - name: Smoke pós-deploy (com prova de versão — A22)
         run: |
-          sleep 5
+          sleep 8
+          SHA_CURTO="$(git rev-parse --short "$GITHUB_SHA")"
           curl -fsS -o /dev/null -w "web: HTTP %{http_code}\n" http://vps.falagaiotto.com.br:8050/
           curl -fsS http://vps.falagaiotto.com.br:8050/api/v1/os -H "X-Tenant: torre-movel" \
             -H "Authorization: Bearer dev-analista" | grep -q "OS-2026-0457" && echo "demo OK"
+          # A22 — o deploy só é sucesso se o SHA que responde é o SHA deste run.
+          SHA_NO_AR="$(curl -fsS http://vps.falagaiotto.com.br:8050/healthz | python3 -c 'import sys,json;print(json.load(sys.stdin).get("sha",""))')"
+          echo "sha no ar: $SHA_NO_AR · esperado: $SHA_CURTO"
+          test "$SHA_NO_AR" = "$SHA_CURTO" || { echo "::error::deploy-fantasma: o ar responde '$SHA_NO_AR', esperado '$SHA_CURTO'"; exit 1; }
+          echo "version-stamp OK"

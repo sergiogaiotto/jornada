@@ -3,6 +3,219 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — Auditoria de fechamento do lote (A7/A11/A22/A8/A9/A18/A23)
+Passagem cética sobre o lote antes do commit. Gates: `pytest -m "not integration"`
+**195 passed** (13 de integração deselecionados — exigem Postgres), `ruff check` e
+`ruff format --check` limpos (259 arquivos), `mypy` verde (26 arquivos — o escopo
+configurado é `backend/app` + `backend/api`), `npm run build` OK.
+- **Guia desatualizado corrigido** (`frontend/src/guia/conteudo.ts`): duas "pegadinhas"
+  ainda ensinavam os bugs como se estivessem de pé — a de Criativo dizia que "o KV
+  master default é da campanha de franquia … (achado A8, **aberto**)" e a de Validação,
+  que "a pendência nasce com 1 clique, sem diálogo (achado A9)". O Guia é texto DE
+  PRODUTO (alimenta o "IA, me ajude com esta página"), então descrever comportamento
+  que não existe mais é defeito, não documentação atrasada: ambas reescritas para o
+  comportamento real (derivação do briefing; diálogo com título obrigatório + Esc/
+  clique-fora). O par A18 já havia sido atualizado junto com a correção.
+- **A22 estava implementado e não documentado** — SDD e CHANGELOG ganharam as entradas
+  abaixo. Ele muda o contrato de `GET /healthz` (§8-M0-A1), então §1.3.3 exige emenda.
+- Ficou ABERTO (não é regressão do lote, não entrou no escopo): o painel contextual do
+  T6 (`frontend/src/pages/Criativo.tsx`) exibe um "Benchmark RAG" com texto FIXO
+  ("Top-5 criativos de franquia…"). Era cenário de mock aceitável enquanto o RAG era
+  stub; com o A11 entregando busca real, um número inventado ao lado de evidências
+  reais passa a confundir — deve virar consulta ao retriever ou sair da tela.
+
+## 2026-08-06 — A22 · Version-stamp de deploy (emenda §8-M0-A1 + §13)
+Achado A22: em 2026-08-05 o smoke pós-deploy passou VERDE sobre uma imagem antiga —
+ele só checava `HTTP 200`, que o container velho responde igual ao novo. O deploy
+"terminou com sucesso" e a correção não estava no ar ("deploy-fantasma").
+- **O commit viaja dentro da imagem, não é lido em runtime:** `deploy/deploy.sh` e o
+  job `deploy` do `ci.yml` exportam `GIT_SHA=$(git rev-parse --short HEAD)`;
+  `docker-compose.prod.yml` o repassa como **build arg** para `api` e `web`;
+  `backend/Dockerfile` faz `ARG GIT_SHA=dev` + `ENV GIT_SHA` e `frontend/Dockerfile`
+  `ARG GIT_SHA` + `ENV VITE_GIT_SHA` **antes do `npm run build`** (depois seria tarde:
+  o valor precisa existir quando o Vite congela o bundle). Nenhum comando git roda no
+  container — fora do docker o valor é `dev`.
+- **Superfície de leitura:** `GET /healthz` passa a devolver `{db, llm, sha}`
+  (`backend/app/main.py`) e o rodapé do rail mostra `build <sha>`
+  (`frontend/src/components/shell/Rail.tsx`) — dá para conferir a versão da SPA sem
+  DevTools. Emenda no §8-M0: o aceite A1 agora inclui `sha` e ganhou o **A3**.
+- **O smoke vira gate de verdade** (`ci.yml`, "Smoke pós-deploy (com prova de versão)"):
+  lê `sha` do `/healthz` público e compara com o SHA do run — divergiu, imprime
+  `::error::deploy-fantasma` e sai 1. Para o smoke conseguir ler de fora, `nginx.conf`
+  expõe `location = /healthz` (match exato, prioridade máxima sobre o fallback da SPA)
+  proxeando `api:8000` na MESMA origem da porta pública 8050.
+- **Testes** (`tests/acceptance/test_M0.py`): o corpo do `/healthz` é exatamente
+  `{db, llm, sha}`; sem `GIT_SHA` no ambiente → `"dev"`; com `GIT_SHA=abc1234` → o
+  valor injetado (a asserção prova que a fonte é o ambiente da imagem, não o git local).
+
+## 2026-08-06 — A9 · UI: "Abrir pendência" pede contexto antes do POST (T3)
+Achado A9 do UAT: na Validação de Prontidão (T3) o botão "Abrir pendência" disparava
+o `POST /os/{id}/validacoes/{campo}/pendencia` com corpo `{}` em UM clique — a
+pendência nascia sem título próprio (caía no default do serviço, "Validação do campo
+'x' reprovada"), sem descrição e sem severidade, ou seja, sem nada que ajudasse quem
+fosse resolvê-la depois.
+- **Diálogo modal antes do POST** (`frontend/src/pages/Validacao.tsx`, componente local
+  `DialogoPendencia`): título **obrigatório** com prefill sugerido `Validar <campo> com
+  o dono do dado` (editável, submit desabilitado se ficar vazio), descrição opcional
+  (textarea) e severidade `baixa|média|alta` com default **`media`**. O botão da linha
+  virou "Abrir pendência…" (reticências = abre diálogo, não age).
+- **Cancelar por Esc / clique-fora** reusando `useFecharForaEsc` de `src/lib/hooks.ts`
+  (ref no painel — o backdrop conta como "fora"), mesmo padrão do DropdownGuia e do
+  `HeaderVersoes` do canvas; botões × e Cancelar ficam dentro do painel.
+- **Payload real no POST**: `{titulo, descricao|null, severidade}` — `bloqueante` segue
+  o default `true` do schema (a pendência de campo continua travando o GO, §8-M4-A1).
+- O estado de envio POR LINHA (A10) foi preservado: `mutation.variables` deixou de ser
+  a string do campo e passou a ser o objeto do diálogo, então o busy/disabled da linha
+  agora compara `variables?.campo`. Diálogo remontado por `key={campo}` para o prefill
+  acompanhar a linha clicada.
+- **Sem mudança de contrato de API**: `PendenciaDeCampoCriar`
+  (`backend/api/v1/validacao.py`) já aceitava `titulo`/`descricao`/`severidade`
+  opcionais e o `ServicoValidacao.abrir_pendencia_de_campo` já os repassava ao
+  `ServicoOs.abrir_pendencia` — só o frontend não os enviava. Verificado por
+  round-trip (titulo/descricao/severidade persistidos e devolvidos no `PendenciaOut`);
+  nenhum teste novo no backend porque nenhuma linha de backend mudou. Sem emenda ao
+  SDD: §8-M4 especifica o efeito da pendência, não a interação que a coleta.
+
+## 2026-08-06 — A23 · UI: "Pedidos em aberto" sempre visível no Cockpit (T1)
+Achado A23 do UAT (severidade baixa, mas de primeira impressão): o bloco só era
+renderizado quando `GET /pedidos` trazia itens, então um tenant novo abria o
+Cockpit sem nenhum sinal de que existe fila de intake — a feature parecia ausente.
+- **Estado vazio explícito e acionável** (`frontend/src/pages/Cockpit.tsx`): o card
+  passa a renderizar sempre, com o contador honesto no título (`Pedidos em aberto · 0`),
+  a frase "Nenhum pedido em aberto — comece por + Nova Campanha" e o próprio botão
+  **+ Nova Campanha** dentro do bloco — o próximo passo fica onde o usuário olhou.
+- **Estados de carga/erro distinguidos do vazio:** contador mostra `…` enquanto a
+  query roda e `—` quando falha (o `BannerErro` de pedidos já cobria a falha), para
+  não afirmar "nenhum pedido" sobre dado que ainda não chegou.
+- **Sem mudança de comportamento com pedidos na fila:** mesma listagem (solicitante,
+  chip de estado, completude, faltantes) e mesmas ações Abrir/Arquivar/Abrir OS.
+- Botão "+ Nova Campanha" extraído em `BotaoNovaCampanha` e reusado no cabeçalho e no
+  estado vazio — uma definição só de rótulo, `title` e estado `Criando…`.
+- Sem emenda ao SDD: §8-M3 não especifica renderização condicional; é ajuste de UI.
+
+## 2026-08-05 — A11 · RAG funcional em produção (emenda §3.1 + §4 + §7.4 + §10.9)
+O stub de RAG virou o pipeline REAL prometido no §7.4 — a "única exceção" da
+persistência A7 caiu:
+- **EmbeddingPort + adapters** (`application/ports/embedding.py`,
+  `adapters/embedding/{hubgpu,fake}.py`): adapter real OpenAI-compatible
+  (`POST {EMBED_BASE_URL}/embeddings`, modelo `EMBED_MODEL`, dim `EMBED_DIM`,
+  timeout novo `EMBED_TIMEOUT_S=30` — §3.1/.env.example; client lazy, jamais em
+  teste §1.3.5). `EmbeddingIndisponivel` HERDA de `LLMIndisponivel`: os handlers
+  503 `degraded` (§10.6) cobrem embeddings sem código novo. Fake determinístico
+  (bag-of-words com hashing blake2s + peso por comprimento do token + L2): mesmo
+  texto → mesmo vetor em qualquer processo, e ranking de teste exercita cosseno
+  de verdade.
+- **`agente_evidence` persistida** (`tabelas.py` + `sql.py`): coluna
+  `pgvector.sqlalchemy.Vector(1024)`, busca top-k por `cosine_distance` (índice
+  HNSW da migração 0001) filtrada por tenant+bases; upsert por id. Fallback em
+  memória (`memoria.py`): busca ingênua em Python puro, MESMO contrato
+  (`buscar_evidencias` na porta nova `repositorio_evidencia.py`). Evidência SEM
+  vetor (promoção M11 — caminho determinístico §10.6, nunca depende do hub) cai
+  no fallback em memória em vez de violar o NOT NULL; a promoção agora embeda
+  MELHOR-ESFORÇO via porta (aceite M11 atualizado: embedding real, não mais None).
+- **RetrieverService** (`application/services/retriever_service.py`): top-k=8
+  (§7.3) filtrado por `bases_rag` do SKILL.md (§7.1 — o dataclass Skill expõe o
+  campo) + tenant; degrade SUAVE: hub fora → `[]` com log (o `exige_evidencia`
+  da skill continua o guarda-corpo — sem evidência, nada é inventado).
+- **CLI `python -m app.rag`** (`backend/app/rag.py`): `ingest <base> <arquivo.jsonl>`
+  (linhas `{texto|chunk, ref?, meta?}`; chunking ~700 tokens/overlap 80 com
+  token≈palavra determinístico; embeddings em LOTE; ids uuid5 → re-ingestão
+  idempotente, padrão §11.4/A15; base validada no conjunto fechado §4.1) e
+  `reindex` (§10.4). Seed DEMO `mocks/seeds/dicionario_dados.jsonl` (17 entradas
+  realistas do read model de ativação) ingerida no boot DEMO_MODE; sem hub → seed
+  PULADA com log, boot intacto. `create_app` ganhou parâmetro `embedding`
+  (testes de demo injetam o fake — o hub real segue jamais tocado em teste).
+- **Wire dos agentes**: engineer recebe `evidencias_rag` e consultor `precedentes`
+  no contexto (formato citável `{id, base, ref, trecho}` — chave AUSENTE quando
+  vazio: prompt pré-A11 idêntico); span `rag_retrieve` no trace §10.8. Testes:
+  aceite A11 (FakeEmbedding+FakeLLM: SQL com evidências citadas no prompt/ledger,
+  degrade sem 500, precedentes só das bases autorizadas), units de
+  chunking/fake/busca/ingestão e integração Postgres real (ingest+retrieve+
+  reindex+idempotência em pgvector).
+
+## 2026-08-05 — A7 (parte 2) · Persistência PostgreSQL de TODOS os agregados (emenda §4 + §4.1 + §10.9)
+A parte 2 completa o A7: o `RepositorioSql` agora cobre TODO o DDL §4.1 — twin
+(`jornada_versao` com simulação/Previsto), `snapshot`/`aprovacao`, audiência
+(`segmento`/`certificado_elegibilidade`/`dc_segment_cache`), `criativo` (células
+dataclass ↔ jsonb), `experimento`, compilador (`sync_run`/`resource_registry` com
+upsert pela unique tenant+ambiente+external_key/`drift_check`/`preflight_run`),
+lançamento (`launch`/`telemetry_event` identity/`incidente`), otimização
+(`proposta_otimizacao`/`aprendizado`/`calibracao_prior`), Ateliê (`agente`/
+`skill_versao`/`harness_*`/`policy_versao`) e o ledger `invocacao`. Única exceção:
+`agente_evidence` segue em memória (stub RAG §7.4 tem `embedding=None`; a coluna
+`vector(1024)` é NOT NULL — migra com o adapter pgvector real). Decisões:
+- **§4.1 + migração `0012_a7_ordem_estavel`**: `segmento`, `experimento`, `aprovacao`
+  e `launch` ganham `created_at timestamptz default now()`. Motivo: essas listas têm
+  contrato "o último é o corrente" (`segmentos[-1]`, `aprovacoes[-1]`,
+  `experimento_da_os`, launch de referência do monitor) e o DDL original não tinha
+  NENHUMA coluna de ordenação — em memória valia a ordem de inserção; no SQL ela
+  precisa ser durável. A coluna é escrita SÓ pelo default do banco (o adapter nunca a
+  envia; o upsert por id a preserva) — dataclasses de domínio intactas.
+  `listar_agentes`/`listar_skills` ordenam por nome/versão (exibição — sem coluna nova).
+- **Roster no boot com SQL** (`app/main.py`): a FK `invocacao.agente_id → agente`
+  (§4.1) exige as linhas do roster ANTES do primeiro ledger; os serviços usam
+  `agente_uuid(nome)` (uuid5) — os MESMOS ids das seeds do Ateliê. Com SQL ativo,
+  `semear_atelie`+`semear_politicas` (idempotentes) rodam no create_app; em memória
+  segue a semeadura tardia das rotas (comportamento dos testes de aceite intacto).
+- **`salvar_certificado`** (porta `RepositorioSync` + memória/SQL + 1 linha no
+  `prevoo_service`): a re-varredura last-mile gravava `certificado.last_mile` por
+  MUTAÇÃO do objeto — funcionava por referência em memória e se perderia com SQL
+  (objeto hidratado é cópia). Mutação pós-leitura agora persiste explicitamente.
+- **Seeds**: com a persistência completa, a guarda do `semear_demo` (OS+jornadas) lê
+  o Postgres e restart vira no-op de verdade; `telemetry_event` (identity, sem upsert)
+  só entra na primeira semeadura — nada duplica (validado no teste de boot duplo).
+- **Compose**: `docker-compose.prod.yml` (VPS demo) ganha service `db`
+  (`pgvector/pgvector:pg16`, volume nomeado `db-data`, healthcheck) e a api passa a
+  rodar `alembic upgrade head && uvicorn` com `DATABASE_URL` e `depends_on` saudável —
+  MESMO padrão do compose dev (que já estava correto). A nota "repositórios em
+  memória (demo)" do cabeçalho caiu.
+- **Testes**: `tests/integration/test_persistencia_sql_parte2.py` — twin com 3
+  versões + restaurar (nova versão com grafo antigo; `proxima_versao` max+1 do banco),
+  ledger `invocacao` com roster (FK + `versoes_skills_publicadas`), launch+telemetria+
+  incidente (rampa, `apos_id`, `maior_id_telemetria`), snapshot/aprovação/segmento
+  (2º segmento → `[-1]` correto pós-restart)/certificado last-mile/criativo round-trip,
+  compilador (plan/apply, registry upsert+remoção, drift adopt, pré-voo) e otimização/
+  calibração/política. Fixture: truncagem ampliada para TODAS as tabelas. Suíte:
+  173 unit/aceite + 11 integração verdes; mypy/ruff/build front verdes (fix de
+  tipagem pré-existente em `adapters/aleatorio.py`: anotação `ModuleType | None`).
+
+## 2026-08-05 — A7 (parte 1) · Persistência PostgreSQL dos agregados core (emenda §4 + §10.9 + §3.2 + §13)
+O repositório em memória deixou de ser a única persistência: os agregados core agora
+vivem no Postgres do DDL §4.1 quando há banco. Zero mudança em domínio/serviços/rotas —
+só um adapter novo atrás das MESMAS portas (hexagonal §2.1).
+- **Adapter** `adapters/persistence/sql.py`: `RepositorioSql` estende o repositório em
+  memória e sobrepõe com SQL os agregados core — `os` + `pendencia` + `sla_clock` +
+  `validacao_campo` + `os_thread` + `documento_portao` (RepositorioOs/Validacao),
+  `pedido` (RepositorioIntake), `etapa_workflow` + `hike_import_log`
+  (RepositorioWorkflow) e o outbox `domain_event` (§2.3, id do identity). Os demais
+  agregados (jornadas, snapshots, launch, telemetria, ateliê…) seguem em memória na
+  MESMA instância até a parte 2. Hidratação via `adapters/persistence/tabelas.py`
+  (SQLAlchemy Core espelhando o DDL §4.1 — schema é 100% alembic, nunca `create_all`).
+- **Escolha de driver**: engine SÍNCRONO `psycopg2` (portas de repositório são `def`
+  síncronos; `psycopg2-binary~=2.9` entra no §3.2). O `DATABASE_URL` canônico continua
+  `postgresql+asyncpg` (§3.1 — alembic/healthz); o adapter normaliza o driver.
+- **Seleção por config** (`app/main.py`): `DATABASE_URL` setado no ambiente E alcançável
+  (sonda de 2s, cacheada) → repos SQL; senão memória — dev sem docker segue idêntico.
+- **Seeds §11.4 idempotentes em restart**: `adicionar_*`/`salvar_*` SQL fazem upsert por
+  `id`; como TODOS os ids das seeds são uuid5 determinísticos (A15), re-semear não
+  duplica. Guarda do `semear_demo` agora exige OS (SQL) E jornadas (memória): num
+  restart com Postgres populado, a parte em memória é re-semeada e o demo continua
+  ponta a ponta (validado com boot duplo contra o Postgres do compose).
+- **Semânticas melhoradas pelo SQL**: `proximo_sequencial_os` = max+1 dos códigos
+  `OS-{ano}-NNNN` existentes (o contador em memória zerava a cada boot);
+  `proximo_numero_pendencia` = max(numero)+1.
+- **Testes**: `tests/integration/` (`@pytest.mark.integration`, Postgres REAL) — CRUD de
+  OS+pendência+SLA, pedido, esteira/validação/War Room/documento (bytea) sobrevivem a
+  engine/sessão novos; seeds 2× sem duplicar; seleção SQL. Fixture sobe container
+  efêmero `pgvector/pgvector:pg16` via docker CLI (ou usa `DATABASE_URL`; sem ambos →
+  skip). `alembic upgrade head` no setup (env.py aceita URL injetada via config).
+  Unit novos (sem docker): fallback memória (URL ausente/inalcançável) e normalização
+  de driver. Guarda-corpo no conftest: fora de `@integration`, `DATABASE_URL` é
+  removido do ambiente — aceites M0–M12 valem SEMPRE sobre memória isolada.
+- **CI (§13)**: job backend ganha service `pgvector/pgvector:pg16` + step
+  `pytest -m integration` com `DATABASE_URL`; o step de unit/aceite roda sem a
+  variável (memória). Suíte local: 173 verdes + 5 de integração.
+
 ## 2026-08-05 — UI · "+ Nova Campanha" nativa + Sala de Ideação em modo pedido (T2)
 SEM mudança de contrato (nenhum endpoint novo — consome o CRUD §8-M3 da emenda
 abaixo). Frontend:
@@ -1136,3 +1349,64 @@ adicionado ao roster §7.2, perfil 20b — §3: resumos de UI).
 ## 2026-08-05 · Nomenclatura: "Portão" → "QA" na UI
 - Termo visível da plataforma passa a ser **QA** (65 substituições no front + README, com flexões: "portão duro"→"QA bloqueante", "portão de saída"→"QA de saída"). Rotas (/portoes), identificadores e eventos (`gate.*`) inalterados. Glossário §14 registra a equivalência.
 - Auditoria da sessão eliminou 2 reintroduções do termo "RAID" (glossário do Guia e docstring de modelos) — vocabulário canônico segue: **pendência (ex-Hike)**.
+
+## 2026-08-06 · A8 (UAT): KV master default derivado do briefing (emenda §8-M6)
+Emenda §1.3.3 — endpoint novo `GET /api/v1/os/{id}/criativos/kv-padrao` + aceite **A4** no §8-M6.
+- **Achado A8 (UAT VPS 2026-08-05)**: o Estúdio Criativo abria com um KV master fixo (copy da
+  campanha de franquia) escrito no front (`Criativo.tsx`), que aparecia até em OS de outro tema
+  (recarga, portabilidade) — e ia inteiro como `kv_master` no `POST /criativos/gerar`.
+- **Backend**: `domain/criativo/kv_padrao.py` — função PURA, ZERO LLM (§1.1.3): `headline` ← 1ª
+  frase do `objetivo` (capitalizada, truncada em 90 sem picar palavra), `oferta` ← `oferta`,
+  `cta` ← verbo canônico da intenção do objetivo (recarga→"Recarregar agora", upgrade/upsell→
+  "Fazer upgrade agora", …) combinado com os **canais reais** (`canais` só sms/whatsapp →
+  "Responda SIM"), `tom` ← `tom_de_marca`. Aceita o briefing nos dois formatos (`{campo:{valor,
+  inferido}}` da OS §8-M3 e valores crus do `POST /os`) e `canais` como lista ou texto livre
+  ("E-mail e Push Minha Claro" → email, push). Campo sem fonte → placeholder explícito
+  (`(defina o Key Visual)` / `(defina a oferta)` / `(defina o CTA)` / `(defina o tom de marca)`)
+  — nunca copy de outra campanha (§1.3.5). Serviço `ServicoCriativo.kv_master_padrao` + rota
+  `GET /os/{id}/criativos/kv-padrao` (`{kv_master, derivado_de, suficiente, via_ai:false}`;
+  leitura, não persiste nada; OS de outro tenant/inexistente → 404). A derivação não censura o
+  briefing: termo proibido segue reprovado pelos validadores no `gerar` (422).
+- **Frontend**: `Criativo.tsx` perde a constante hardcoded; o KV vem do endpoint com precedência
+  edição do usuário > KV que gerou a matriz > default do briefing (placeholder só enquanto a
+  query não responde). Nota sob os chips: campos do briefing usados, ou aviso âmbar quando o
+  briefing não tem objetivo/oferta.
+- **Testes**: `test_M6_A4` (API: OS de recarga → KV do briefing dela, sem termo de franquia;
+  CTA conversacional vs verbo da intenção; OS sem briefing → `(defina o Key Visual)`; 404) e
+  `tests/unit/test_kv_padrao.py` (função pura nos dois formatos de briefing, truncagem, canais
+  em texto livre + **guarda-corpo** varrendo `frontend/src` e `backend` contra a reintrodução da
+  copy fixa — mesmo padrão da guarda de vocabulário canônico A20).
+
+## 2026-08-06 · A18 (UAT): Ateliê demo sem "0 triagens" nem "— sem run" (§11.4/§7.2)
+Emenda §1.3.3 — só seeds: nenhum contrato de API, DDL ou migração muda.
+- **Achado A18 (UAT VPS)**: o Ateliê em produção mostrava "0 triagens" no cabeçalho e "— sem
+  run" no harness de todo agente. Duas causas: (a) `semear_atelie` derivava o roster APENAS
+  dos `agents/skills/*.skill.md` — as 5 triagens do §7.2 não têm SKILL.md no disco e nunca
+  entravam; (b) a guarda era global (`if listar_agentes(tenant): return`), então um banco
+  semeado por deploy ANTERIOR jamais recebia roster novo — em produção a seed virava no-op
+  permanente. Somado a isso, a v1.0 nascia `publicada` sem `harness_score` e sem `harness_run`,
+  e o chip do roster T16 lê exatamente esses campos.
+- **Backend (`adapters/atelie_seeds.py`)**: (1) constante `TRIAGENS` com as 5 células IPO da
+  esteira — `triagem_intake` (etapa briefing) · `triagem_audiencia` · `triagem_criativo` ·
+  `triagem_jornada` · `triagem_operacao` (disparo) — e `skill_md_triagem()`, que monta o
+  **SKILL.md canônico §7.1** de cada uma (front-matter `camada: triagem`, `modelo_perfil: 20b`,
+  `saida: {formato: json}`; corpo curto com o contrato do roster: rotear + checklist da célula,
+  item sem evidência vira **pendência humana**, nunca suposição do 20b), semeada como v1.0
+  PUBLICADA. (2) `_semear_harness_runs`: um `harness_run` por agente-chave (`NOTAS_HARNESS_SEED`
+  = consultor/engineer/flow/copy/sync) COM golden dataset — notas base por dimensão na banda
+  90–97 com ±1 por caso (média = a base), consolidadas pelo **mesmo** `domain/atelie/harness.py`
+  do serviço, `passou=true`, `skill_md_hash` do texto semeado e `origem: "seed"` (vitrine, sem
+  LLM); o `harness_score` da skill é preenchido só quando ainda estava nulo. Agente sem SKILL.md
+  (`sync`, §7.2/M9) ou sem casos golden **não** ganha run — QA não se fabrica (§1.3.5).
+  (3) Idempotência por ENTIDADE: guarda rápida por completude do roster (nomes esperados = stems
+  do disco + `guard` + triagens) e, dentro, `obter_agente`/`obter_skill`/ids uuid5 antes de cada
+  insert — re-semear converge sem duplicar (memória e SQL, onde `adicionar_*` já faz upsert por
+  id). O que já está no banco não é reescrito: edição do operador vence a seed.
+- **Frontend**: a pegadinha do Guia (T16) que documentava o achado passa a explicar o run de
+  vitrine ("rode o harness para medir o texto atual").
+- **Testes** (`tests/acceptance/test_A18_atelie_seeds.py`, 5 casos): as 5 triagens no
+  `GET /agentes` com v1.0 publicada e SKILL.md que passa no parser §7.1; run verde + score no
+  roster para cada agente-chave (1 run, 3 casos, todas as dimensões ≥ 90 e ≤ 97); marcação
+  `origem: "seed"`; seed rodada duas vezes no MESMO repositório sem duplicar agente/skill/caso/
+  run; e a causa-raiz — seed sobre banco já populado converge o roster novo. `test_M12` passa a
+  criar `triagem_sandbox` (o nome `triagem_audiencia` agora pertence ao roster semeado).

@@ -11,6 +11,9 @@
 - `editar_kv_master` (PUT /criativos/{id}/kv-master): compliance determinístico do
   novo KV + marca TODAS as células derivadas `adaptado_revisar` (A2); warn 20b é
   best-effort (LLM fora → sem avisos; a edição NUNCA depende de LLM — §10.6).
+- `kv_master_padrao` (GET /os/{id}/criativos/kv-padrao): KV de PARTIDA derivado do
+  briefing da OS — código puro, ZERO LLM (A8 do UAT: o Estúdio abria com copy fixa da
+  campanha de franquia mesmo em OS de outro tema).
 Eventos (§2.3): agent.invoked · criativo.gerado · criativo.celula_alterada ·
 criativo.kv_master_editado.
 """
@@ -28,8 +31,8 @@ from application.services.os_service import ServicoOs
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
+from domain.criativo import kv_padrao, validadores
 from domain.criativo import matriz as regras
-from domain.criativo import validadores
 from domain.criativo.erros import SaidaDoCriativoInvalida
 from domain.criativo.modelos import (
     CANAIS_CRIATIVO,
@@ -219,6 +222,23 @@ class ServicoCriativo:
             actor=actor,
         )
         return criativo, avisos
+
+    # ------------------------------------------------------- KV master padrão
+    def kv_master_padrao(
+        self, tenant_id: str, os_id: uuid.UUID
+    ) -> tuple[dict[str, str], list[str], bool]:
+        """GET /os/{id}/criativos/kv-padrao — KV de partida derivado do BRIEFING (A8).
+
+        Determinístico, sem LLM e sem persistir nada: devolve `(kv_master, campos do
+        briefing usados, briefing suficiente?)`. Briefing insuficiente → placeholders
+        neutros ("(defina o Key Visual)"), nunca copy de outra campanha (§1.3.5).
+        """
+        os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
+        return (
+            kv_padrao.derivar_kv_master(os_.briefing),
+            kv_padrao.campos_derivados(os_.briefing),
+            kv_padrao.suficiente(os_.briefing),
+        )
 
     # --------------------------------------------------------------- Interno
     def _exigir_criativo(self, tenant_id: str, criativo_id: uuid.UUID) -> tuple[Criativo, OS]:

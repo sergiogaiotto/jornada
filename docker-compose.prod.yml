@@ -1,18 +1,39 @@
 # Jornada — deploy de demonstração (VPS) · porta pública 8050
 # Uso: criar .env com APP_SECRET (openssl rand -hex 32) e:
 #   docker compose -f docker-compose.prod.yml up -d --build
-# Nota: repositórios em memória (demo); o hub LLM da Claro só responde de dentro da
-# rede Claro — fora dela a IA degrada para 503 + modo manual (§10.6), o restante
-# da plataforma funciona normalmente com a OS demo semeada.
+# Nota: persistência PostgreSQL (A7 — service `db`, volume nomeado; a api roda
+# `alembic upgrade head` no start, como no compose dev). O hub LLM da Claro só
+# responde de dentro da rede Claro — fora dela a IA degrada para 503 + modo manual
+# (§10.6), o restante da plataforma funciona normalmente com a OS demo semeada
+# (seeds idempotentes: restart não duplica — upsert por uuid5, §11.4/A15).
 name: jornada
 
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: jornada
+      POSTGRES_PASSWORD: ${JORNADA_DB_PASSWORD:-jornada}
+      POSTGRES_DB: jornada
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jornada -d jornada"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   api:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}   # A22 · version-stamp → GET /healthz.sha
     restart: unless-stopped
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
+      DATABASE_URL: postgresql+asyncpg://jornada:${JORNADA_DB_PASSWORD:-jornada}@db:5432/jornada
       # Demo pública: APP_ENV=dev habilita as seeds da OS-2026-0457 e o Bearer de
       # demonstração (sem IdP). Dados 100% sintéticos — nenhum dado real na VPS.
       APP_ENV: dev
@@ -26,6 +47,12 @@ services:
       LLM_API_KEY: not-needed
       LLM_TIMEOUT_S: "300"
       LLM_DEGRADED_MODE: auto
+      # A11 — RAG (§7.4): o hub de embeddings responde da VPS; a seed dicionario_dados
+      # é ingerida no boot (sem hub → pulada com log, boot intacto).
+      EMBED_BASE_URL: https://hub-gpus.claro.com.br/embed06b/v1
+      EMBED_MODEL: Qwen/Qwen3-Embedding-0.6B
+      EMBED_DIM: "1024"
+      EMBED_TIMEOUT_S: "30"
       LANGFUSE_ENABLED: "true"
       LANGFUSE_HOST: http://langfuse:3000
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PK:?defina LANGFUSE_PK no .env}
@@ -41,8 +68,12 @@ services:
       DC_CLIENT_ID: mock
       DC_CLIENT_SECRET: mock
     depends_on:
-      - mock-sfmc
-      - mock-datacloud
+      db:
+        condition: service_healthy
+      mock-sfmc:
+        condition: service_started
+      mock-datacloud:
+        condition: service_started
 
   mock-sfmc:
     build: ./mocks/sfmc-server
@@ -55,7 +86,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        GIT_SHA: ${GIT_SHA:-dev}   # A22 · version-stamp → rodapé do shell
     restart: unless-stopped
     ports:
       - "8050:80"
@@ -104,4 +138,5 @@ services:
       - "13000:3000"
 
 volumes:
+  db-data:
   db-langfuse-data:

@@ -35,6 +35,7 @@ from typing import Any
 
 from agents import otimizacao as agente_optimize
 from application.ports.clock import ClockPort
+from application.ports.embedding import EmbeddingPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
 from application.ports.repositorio_otimizacao import RepositorioOtimizacao
@@ -132,11 +133,13 @@ class ServicoOtimizacao(_Base):
         llm: LLMPort,
         tracer: TracerPort,
         simulador: ServicoSimulador,
+        embedding: EmbeddingPort | None = None,
     ) -> None:
         super().__init__(repositorio, relogio)
         self._llm = llm
         self._tracer = tracer
         self._simulador = simulador
+        self._embedding = embedding  # A11: melhor esforço na promoção (§8-M11-A3)
 
     # ------------------------------------------------------ GET /os/{id}/propostas
     def propostas(
@@ -659,7 +662,9 @@ class ServicoOtimizacao(_Base):
             texto=texto,
             meta={"experimento_id": str(experimento.id), "resultado": resultado},
         )
-        if significativo:  # stub de ingestão: chunk íntegro; embedding no `rag reindex` §7.4
+        if significativo:  # A11: embedding melhor-esforço; a apuração (§10.6, zero
+            # hub no caminho crítico) NUNCA falha por RAG — sem vetor a linha fica
+            # no fallback e o `rag reindex` (§7.4) completa depois.
             self._repo.adicionar_evidencia(
                 AgenteEvidence(
                     id=uuid.uuid4(),
@@ -673,6 +678,7 @@ class ServicoOtimizacao(_Base):
                         "lift": resultado["lift"],
                         "ic95": resultado["ic95"],
                     },
+                    embedding=self._embed_melhor_esforco(texto),
                 )
             )
             self._evento(
@@ -683,6 +689,16 @@ class ServicoOtimizacao(_Base):
                 actor="sistema",
             )
         return aprendizado
+
+    def _embed_melhor_esforco(self, texto: str) -> list[float] | None:
+        """Vetor do chunk promovido quando o hub responde; QUALQUER falha → None
+        (caminho determinístico da apuração jamais depende do hub — §10.6)."""
+        if self._embedding is None or not self._embedding.disponivel():
+            return None
+        try:
+            return self._embedding.embed([texto])[0]
+        except Exception:  # noqa: BLE001 — robustez: RAG nunca derruba a apuração
+            return None
 
     def _aprendizado(
         self, os_: OS, *, origem: str, status: str, texto: str, meta: dict[str, Any]

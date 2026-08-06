@@ -19,6 +19,7 @@ tocar domínio nem serviços (hexagonal §2.1).
 """
 
 import itertools
+import math
 import uuid
 from datetime import UTC, datetime
 
@@ -41,6 +42,16 @@ from domain.jornada.modelos import (
 from domain.lancamento.modelos import Incidente, Launch, TelemetryEvent
 from domain.otimizacao.modelos import Aprendizado, CalibracaoPrior, PropostaOtimizacao
 from domain.validacao.modelos import DocumentoPortao, ThreadWarRoom, ValidacaoCampo
+
+
+def _cosseno(a: list[float], b: list[float]) -> float:
+    """Similaridade de cosseno em Python puro (busca ingênua §7.4 — A11). Dimensões
+    divergentes (EMBED_DIM trocado sem reindex — §10.4) rankeiam por último."""
+    if not a or len(a) != len(b):
+        return -1.0
+    produto = sum(x * y for x, y in zip(a, b, strict=True))
+    normas = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return produto / normas if normas else 0.0
 
 
 class RepositorioOsMemoria:
@@ -237,6 +248,15 @@ class RepositorioOsMemoria:
 
     def listar_certificados(self, os_id: uuid.UUID) -> list[CertificadoElegibilidade]:
         return [c for c in self._certificados if c.os_id == os_id]
+
+    def salvar_certificado(self, certificado: CertificadoElegibilidade) -> None:
+        """Persiste mutação pós-emissão (last_mile §4.1 — A7 parte 2): substitui por
+        id preservando a posição (ordem de emissão)."""
+        for indice, existente in enumerate(self._certificados):
+            if existente.id == certificado.id:
+                self._certificados[indice] = certificado
+                return
+        self._certificados.append(certificado)
 
     # --- Cache Data Cloud (`dc_segment_cache` §4.1 — M5/T5a) ---
     def salvar_dc_cache(self, entrada: DcSegmentCache) -> None:
@@ -593,12 +613,35 @@ class RepositorioOsMemoria:
         ]
         return max(publicadas, key=lambda p: p.versao) if publicadas else None
 
-    # --- RAG (`agente_evidence` §4.1 — STUB de ingestão M11: embedding None §7.4) ---
+    # --- RAG (`agente_evidence` §4.1/§7.4 — A11: fallback memória sem DB) ---
     def adicionar_evidencia(self, evidencia: AgenteEvidence) -> None:
+        """UPSERT por id (mesma semântica do SQL): re-ingestão com ids uuid5 não duplica."""
+        for indice, existente in enumerate(self._evidencias):
+            if existente.id == evidencia.id:
+                self._evidencias[indice] = evidencia
+                return
         self._evidencias.append(evidencia)
 
     def listar_evidencias(self, tenant_id: str, base: str) -> list[AgenteEvidence]:
         return [e for e in self._evidencias if e.tenant_id == tenant_id and e.base == base]
+
+    def buscar_evidencias(
+        self, tenant_id: str, bases: list[str], embedding: list[float], k: int
+    ) -> list[AgenteEvidence]:
+        """Similaridade de cosseno INGÊNUA em Python puro (fallback dev sem Postgres —
+        §7.4): mesmo contrato do pgvector (top-k filtrado por tenant + bases), sem
+        índice. Evidência sem embedding (legado/stub) fica fora do ranking."""
+        candidatas = [
+            e
+            for e in self._evidencias
+            if e.tenant_id == tenant_id and e.base in bases and e.embedding
+        ]
+        pontuadas = sorted(
+            candidatas,
+            key=lambda e: _cosseno(e.embedding or [], embedding),
+            reverse=True,
+        )
+        return pontuadas[: max(k, 0)]
 
     # --- Outbox (§2.3) ---
     def adicionar_evento(self, evento: EventoDominio) -> None:

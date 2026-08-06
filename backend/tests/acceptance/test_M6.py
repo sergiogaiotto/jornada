@@ -260,3 +260,67 @@ def test_M6_A3(client: TestClient, app: FastAPI) -> None:
         c for c in revisar.json()["celulas"] if (c["canal"], c["variante"]) == ("email", "A")
     )
     assert celula["estado"] == "revisar" and celula["aprovada_por"] is None
+
+
+def _criar_os_com(client: TestClient, nome: str, briefing: dict[str, Any]) -> dict[str, Any]:
+    resposta = client.post(
+        "/api/v1/os", json={"nome": nome, "tshirt": "M", "briefing": briefing}, headers=_h()
+    )
+    assert resposta.status_code == 201, resposta.text
+    return resposta.json()
+
+
+def test_M6_A4(client: TestClient) -> None:
+    """A4 (emenda 2026-08-06 — achado A8 do UAT): o KV master de PARTIDA do Estúdio sai
+    do BRIEFING DA PRÓPRIA OS (determinístico, ZERO LLM), nunca de copy fixa de outra
+    campanha; sem briefing suficiente → placeholder neutro "(defina o Key Visual)"."""
+    recarga = _criar_os_com(
+        client,
+        "Reativação Pré-Pago",
+        {
+            "objetivo": "Reativar pré-pago sem recarga há 30 dias",
+            "oferta": "Bônus de 2 GB na recarga de R$ 30",
+            "canais": ["sms", "whatsapp"],
+            "tom_de_marca": "Simples e direto, sem jargão",
+        },
+    )
+    resposta = client.get(f"/api/v1/os/{recarga['id']}/criativos/kv-padrao", headers=_h())
+    assert resposta.status_code == 200, resposta.text
+    corpo = resposta.json()
+    kv_recarga = corpo["kv_master"]
+
+    # OS de recarga NÃO recebe o texto da campanha de franquia (regressão A8)
+    junto = " ".join(kv_recarga.values()).lower()
+    assert "franquia" not in junto and "estourar" not in junto
+    assert kv_recarga["headline"] == "Reativar pré-pago sem recarga há 30 dias"
+    assert kv_recarga["oferta"] == "Bônus de 2 GB na recarga de R$ 30"
+    assert kv_recarga["cta"] == "Responda SIM"  # canais reais: só sms/whatsapp
+    assert kv_recarga["tom"] == "Simples e direto, sem jargão"
+    assert corpo["suficiente"] is True and corpo["via_ai"] is False
+    assert corpo["derivado_de"] == ["objetivo", "oferta", "tom_de_marca", "canais"]
+
+    # outra OS, outro tema → outro KV (nada de default compartilhado entre OSs)
+    upgrade = _criar_os_com(
+        client,
+        "Upgrade Pós-Pago 5G",
+        {"objetivo": "Upgrade de pós-pago para 5G", "canais": ["email", "push"]},
+    )
+    kv_upgrade = client.get(f"/api/v1/os/{upgrade['id']}/criativos/kv-padrao", headers=_h()).json()[
+        "kv_master"
+    ]
+    assert kv_upgrade["headline"] == "Upgrade de pós-pago para 5G"
+    assert kv_upgrade["cta"] == "Fazer upgrade agora"
+    assert kv_upgrade["oferta"] == "(defina a oferta)"  # campo sem fonte → placeholder
+    assert kv_upgrade != kv_recarga
+
+    # briefing insuficiente → placeholder explícito (nunca copy de outra campanha)
+    vazia = _criar_os_com(client, "OS sem briefing", {})
+    corpo_vazio = client.get(f"/api/v1/os/{vazia['id']}/criativos/kv-padrao", headers=_h()).json()
+    assert corpo_vazio["kv_master"]["headline"] == "(defina o Key Visual)"
+    assert all(v.startswith("(defina") for v in corpo_vazio["kv_master"].values())
+    assert corpo_vazio["suficiente"] is False and corpo_vazio["derivado_de"] == []
+
+    # leitura escopada por tenant/OS: OS inexistente → 404 problem+json (mapa M1)
+    inexistente = client.get(f"/api/v1/os/{uuid.uuid4()}/criativos/kv-padrao", headers=_h())
+    assert inexistente.status_code == 404
+    assert inexistente.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)

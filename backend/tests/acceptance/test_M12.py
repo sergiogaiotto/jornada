@@ -271,16 +271,17 @@ def test_M12_parser_e_ciclo_de_vida(client: TestClient, app: FastAPI) -> None:
     obsoleto = client.post(f"/api/v1/skills/{rascunho['id']}/publicar", headers=_h("dev-lider"))
     assert obsoleto.status_code == 409 and "obsoleto" in obsoleto.json()["detail"]
 
-    # harness sem golden dataset → 409 (agente novo criado sem casos)
+    # harness sem golden dataset → 409 (agente novo criado sem casos). O nome é de
+    # sandbox: as 5 triagens do roster §7.2 já vêm das seeds (A18) e colidiriam aqui.
     novo = client.post(
         "/api/v1/agentes",
-        json={"nome": "triagem_audiencia", "camada": "triagem", "modelo_perfil": "20b"},
+        json={"nome": "triagem_sandbox", "camada": "triagem", "modelo_perfil": "20b"},
         headers=_h(),
     )
     assert novo.status_code == 201, novo.text
     skill_nova = client.post(
         f"/api/v1/agentes/{novo.json()['id']}/skills",
-        json={"skill_md": _skill_md(nome="triagem_audiencia", versao="1.0")},
+        json={"skill_md": _skill_md(nome="triagem_sandbox", versao="1.0")},
         headers=_h(),
     )
     sem_casos = client.post(f"/api/v1/skills/{skill_nova.json()['id']}/harness", headers=_h())
@@ -290,7 +291,7 @@ def test_M12_parser_e_ciclo_de_vida(client: TestClient, app: FastAPI) -> None:
     assert (
         client.post(
             "/api/v1/agentes",
-            json={"nome": "triagem_audiencia", "camada": "triagem"},
+            json={"nome": "triagem_sandbox", "camada": "triagem"},
             headers=_h(),
         ).status_code
         == 409

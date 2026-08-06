@@ -171,6 +171,8 @@ class ServicoPrevoo:
                 "status": resultado["status"],
                 "evidencia": resultado["evidencia"],
             }
+            # A7 parte 2: mutação explícita persistida (com SQL o objeto é uma cópia)
+            self._repo.salvar_certificado(certificado)
         return resultado
 
     def _conteudos_ampscript(self, os_: OS, recursos: list[dict[str, Any]]) -> dict[str, str]:

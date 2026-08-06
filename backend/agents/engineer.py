@@ -13,6 +13,7 @@ PII: o prompt recebe briefing/instruções — jamais contatos ou o bloco `solic
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,18 +42,28 @@ class SaidaEngineer:
 
 
 def montar_mensagens(
-    skill: Skill, briefing: dict[str, Any], instrucoes: str
+    skill: Skill,
+    briefing: dict[str, Any],
+    instrucoes: str,
+    evidencias_rag: Sequence[dict[str, str]] = (),
 ) -> list[dict[str, str]]:
-    """Mensagens OpenAI-style. SEM PII: só valores do briefing + instruções (§1.3.5)."""
+    """Mensagens OpenAI-style. SEM PII: só valores do briefing + instruções (§1.3.5).
+
+    `evidencias_rag` (A11 — §7.4): top-k do retriever nas bases da skill
+    (dicionario_dados/historico_campanhas) no formato citável que a skill já espera
+    ("Cite a evidência RAG de cada coluna usada"). Vazio → chave fora do contexto
+    (prompt idêntico ao pré-A11; com exige_evidencia a skill responde que não sabe)."""
     resumo = {
         campo: (entrada.get("valor") if isinstance(entrada, dict) else entrada)
         for campo, entrada in briefing.items()
     }
-    contexto = {
+    contexto: dict[str, Any] = {
         "briefing": resumo,
         "instrucoes": instrucoes,
         "listas_obrigatorias_no_where": list(SETE_LISTAS),
     }
+    if evidencias_rag:
+        contexto["evidencias_rag"] = list(evidencias_rag)
     return [
         {"role": "system", "content": skill.corpo},
         {"role": "user", "content": json.dumps(contexto, ensure_ascii=False)},

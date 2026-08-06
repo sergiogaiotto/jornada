@@ -25,6 +25,7 @@ from typing import Annotated, Any, Literal, cast
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from adapters.embedding.hubgpu import EmbeddingHubGPU
 from adapters.llm.hubgpu import LLMHubGPU
 from adapters.observabilidade.langfuse import TracerLangfuse
 from adapters.relogio import RelogioSistema
@@ -40,12 +41,15 @@ from api.v1.os_governanca import (
 from app.auth import Usuario, get_portador
 from app.config import get_settings
 from app.errors import problem_response
+from application.ports.embedding import EmbeddingPort
 from application.ports.llm import LLMIndisponivel, LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.repositorio_evidencia import RepositorioEvidencia
 from application.ports.repositorio_intake import RepositorioIntake
 from application.ports.repositorio_os import RepositorioOs
 from application.services.consultor_service import ServicoConsultor
 from application.services.os_service import ServicoOs
+from application.services.retriever_service import RetrieverService
 
 
 class RotaIntake(RotaComErrosDeDominio):
@@ -92,6 +96,24 @@ def get_tracer(request: Request) -> TracerPort:
     return tracer
 
 
+def get_embedding(request: Request) -> EmbeddingPort:
+    """Embeddings atrás de porta (A11 — §2.1). Testes SEMPRE injetam o fake em
+    app.state.embedding (§1.3.5); fora de teste, o adapter real fica atrás de
+    LLM_DEGRADED_MODE (§10.6) — mesmo padrão de get_llm."""
+    embedding = getattr(request.app.state, "embedding", None)
+    if embedding is None:
+        embedding = EmbeddingHubGPU(get_settings())
+        request.app.state.embedding = embedding
+    return embedding
+
+
+def get_retriever(request: Request) -> RetrieverService:
+    """Retriever §7.4: top-k=8 sobre `agente_evidence`, mesma instância de repositório
+    do app (implementa RepositorioEvidencia — tipagem estrutural §2.1)."""
+    repositorio = get_repositorio_os(request)
+    return RetrieverService(cast(RepositorioEvidencia, repositorio), get_embedding(request))
+
+
 def get_servico_consultor(
     request: Request, servico_os: Annotated[ServicoOs, Depends(get_servico_os)]
 ) -> ServicoConsultor:
@@ -105,6 +127,7 @@ def get_servico_consultor(
         servico_os,
         get_llm(request),
         get_tracer(request),
+        retriever=get_retriever(request),  # A11: precedentes citáveis (§7.4)
     )
 
 

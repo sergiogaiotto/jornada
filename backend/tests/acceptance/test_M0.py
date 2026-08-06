@@ -5,6 +5,7 @@ Rodam via TestClient, sem docker (ping de DB dublado no conftest — CHANGELOG-S
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.errors import PROBLEM_CONTENT_TYPE
@@ -20,8 +21,20 @@ def test_M0_A1(client: TestClient) -> None:
     corpo = resposta.json()
     assert corpo["db"] == "ok"
     assert corpo["llm"] in ("skip", "ok")
-    assert set(corpo) == {"db", "llm"}
+    assert set(corpo) == {"db", "llm", "sha"}  # A22: version-stamp
     assert duracao < 2.0
+
+
+def test_M0_healthz_expoe_version_stamp(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A22: /healthz devolve o commit embutido na imagem (ENV GIT_SHA; 'dev' fora do
+    build). É o que o smoke pós-deploy compara com o SHA do run — deploy-fantasma
+    (o ar servindo build antigo) vira falha alta e clara no CI."""
+    assert client.get("/healthz").json()["sha"] == "dev"  # sem GIT_SHA → default
+
+    monkeypatch.setenv("GIT_SHA", "abc1234")
+    assert client.get("/healthz").json()["sha"] == "abc1234"
 
 
 def test_M0_A2(client: TestClient) -> None:

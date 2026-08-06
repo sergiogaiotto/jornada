@@ -32,6 +32,7 @@ from application.ports.publicacoes import PublicacoesPort
 from application.ports.read_model_audiencia import ReadModelAudienciaPort
 from application.ports.repositorio_audiencia import RepositorioAudiencia
 from application.services.os_service import ServicoOs
+from application.services.retriever_service import RetrieverService, evidencias_para_contexto
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.audiencia import waterfall as regras
 from domain.audiencia.erros import (
@@ -60,6 +61,7 @@ class ServicoAudiencia:
         datacloud: DataCloudPort,
         read_model: ReadModelAudienciaPort,
         publicacoes: PublicacoesPort,
+        retriever: RetrieverService | None = None,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
@@ -69,6 +71,7 @@ class ServicoAudiencia:
         self._datacloud = datacloud
         self._read_model = read_model
         self._publicacoes = publicacoes
+        self._retriever = retriever  # A11: preparar_contexto RAG (§7.3); None → sem RAG
 
     # ------------------------------------------------------------ Estúdio SQL
     def gerar_sql(
@@ -77,7 +80,17 @@ class ServicoAudiencia:
         """POST /os/{id}/segmento/gerar-sql — engineer via LLMPort (§8-M5)."""
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         skill = agente_engineer.carregar()
-        mensagens = agente_engineer.montar_mensagens(skill, os_.briefing, instrucoes)
+        # A11 (§7.3): preparar_contexto — top-k=8 nas bases autorizadas da skill;
+        # hub de embeddings fora → [] (degrade suave, o guarda-corpo exige_evidencia
+        # continua valendo sobre o que o modelo citar).
+        evidencias_rag = (
+            self._retriever.buscar(tenant_id, instrucoes, bases=skill.bases_rag)
+            if self._retriever is not None
+            else []
+        )
+        mensagens = agente_engineer.montar_mensagens(
+            skill, os_.briefing, instrucoes, evidencias_rag=evidencias_para_contexto(evidencias_rag)
+        )
         inicio = self._relogio.agora()
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
         fim = self._relogio.agora()
@@ -115,7 +128,10 @@ class ServicoAudiencia:
                 "skill_versao": skill.versao,
                 "modelo_perfil": skill.modelo_perfil,
             },
-            spans=[{"nome": "generate", "latencia_ms": invocacao.latencia_ms}],
+            spans=[
+                {"nome": "rag_retrieve", "evidencias": len(evidencias_rag)},  # §10.8
+                {"nome": "generate", "latencia_ms": invocacao.latencia_ms},
+            ],
         )
         return segmento, saida, avisos, invocacao
 

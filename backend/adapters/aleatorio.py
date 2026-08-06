@@ -10,9 +10,11 @@ entre si — o aceite M8-A1 (mesma seed ⇒ mesmos P50s) vale dentro de uma inst
 
 import math
 import random
+from types import ModuleType
 
 from domain.simulacao.tipos import GeradorAleatorio
 
+_np: ModuleType | None
 try:  # numpy é opcional (§6: "vetorizar com numpy" quando disponível)
     import numpy as _np
 except ImportError:  # pragma: no cover - depende do ambiente
@@ -57,6 +59,7 @@ class _GeradorNumpy:  # pragma: no cover - exercido só com numpy instalado
     """`numpy.random.default_rng(seed)` — binomial exata vetorizada em C."""
 
     def __init__(self, seed: int) -> None:
+        assert _np is not None  # instanciado apenas via rng_disponivel() com numpy
         self._rng = _np.random.default_rng(seed)
 
     def uniforme(self) -> float:

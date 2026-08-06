@@ -347,7 +347,9 @@ def test_M11_A3(client: TestClient, app: FastAPI) -> None:
     evidencias = repo.listar_evidencias(TENANT, "resultados")  # A3: base RAG `resultados`
     assert len(evidencias) == 1
     assert "lift" in evidencias[0].chunk and evidencias[0].ref.startswith("aprendizado:")
-    assert evidencias[0].embedding is None  # STUB de ingestão (§7.4: embed no reindex)
+    # A11: ingestão REAL — a promoção embeda melhor-esforço via EmbeddingPort (fake
+    # em teste §1.3.5); vetor na dimensão do DDL §4.1 (EMBED_DIM=1024).
+    assert evidencias[0].embedding is not None and len(evidencias[0].embedding) == 1024
 
     # ------- propostas do optimize: diff + impacto pré-simulado + ranking (§8-M11)
     app.state.llm = LLMFake(resposta=_resposta_optimize(codigo_origem))

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     embed_base_url: str = "https://hub-gpus.claro.com.br/embed06b/v1"
     embed_model: str = "Qwen/Qwen3-Embedding-0.6B"
     embed_dim: int = 1024
+    embed_timeout_s: int = 30
     rag_collection: str = "agente_evidence"
 
     # --- SFMC (dev aponta para o mock) ---

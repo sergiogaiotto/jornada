@@ -329,6 +329,19 @@ export interface KvMasterOut {
   avisos: string[];
 }
 
+/**
+ * KV master de PARTIDA do Estúdio (GET /os/{id}/criativos/kv-padrao) — derivado do
+ * briefing da OS por código determinístico (`via_ai:false`). `suficiente:false` → veio
+ * com placeholders "(defina …)"; nunca copy de outra campanha (§8-M6, achado A8).
+ */
+export interface KvPadraoOut {
+  os_id: string;
+  kv_master: Record<string, string>;
+  derivado_de: string[];
+  suficiente: boolean;
+  via_ai: boolean;
+}
+
 // --------------------------------------------------------- M7 · Twin Canvas
 /** Nó do JGC (§5.2 — tipos fechados; o validador rejeita fora da lista). */
 export interface NoJgc {

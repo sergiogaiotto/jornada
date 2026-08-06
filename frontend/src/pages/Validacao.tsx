@@ -3,21 +3,152 @@
  * checado automaticamente contra a fonte (POST /os/{id}/validacoes/{campo} → checagens
  * + evidência) com duas ações por campo: Validar ou Abrir pendência (bloqueante trava
  * o GO). Painel direito mostra a evidência da verificação selecionada.
+ *
+ * A9 (UAT): "Abrir pendência" NÃO dispara mais o POST em 1 clique cego — abre um
+ * diálogo modal que coleta título (obrigatório, prefill citando o campo), descrição
+ * (opcional) e severidade (default `media`) antes de enviar. Esc/clique-fora cancelam.
  */
 import { useMutation } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, BarraProgresso, EstadoVazio, TituloTela } from "../components/ui/basics";
 import { post } from "../lib/api";
-import { useBriefing, usePainelContextual } from "../lib/hooks";
+import { useBriefing, useFecharForaEsc, usePainelContextual } from "../lib/hooks";
 import {
   campoBriefing,
   valorLegivel,
   type PendenciaOut,
   type ValidacaoOut,
 } from "../lib/types";
+
+type Severidade = "baixa" | "media" | "alta";
+
+/** Payload do diálogo (A9) — vira o corpo do POST .../pendencia. */
+interface DadosPendencia {
+  campo: string;
+  titulo: string;
+  descricao: string;
+  severidade: Severidade;
+}
+
+const SEVERIDADES: { valor: Severidade; rotulo: string }[] = [
+  { valor: "baixa", rotulo: "Baixa" },
+  { valor: "media", rotulo: "Média" },
+  { valor: "alta", rotulo: "Alta" },
+];
+
+/** Título sugerido — cita o campo para a pendência nascer com contexto (A9). */
+const tituloSugerido = (campo: string) => `Validar ${campo} com o dono do dado`;
+
+/**
+ * Diálogo modal de abertura de pendência (A9). Fecha com Esc ou clique fora do painel
+ * via `useFecharForaEsc` (o ref vai no painel — o backdrop conta como "fora").
+ * Remontado a cada campo (`key={campo}` no chamador) para o prefill acompanhar a linha.
+ */
+function DialogoPendencia({
+  campo,
+  enviando,
+  onCancelar,
+  onEnviar,
+}: {
+  campo: string;
+  enviando: boolean;
+  onCancelar: () => void;
+  onEnviar: (dados: DadosPendencia) => void;
+}) {
+  const [titulo, setTitulo] = useState(() => tituloSugerido(campo));
+  const [descricao, setDescricao] = useState("");
+  const [severidade, setSeveridade] = useState<Severidade>("media");
+  const painel = useFecharForaEsc(true, onCancelar);
+  const valido = titulo.trim().length > 0;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/40 p-4">
+      <div
+        ref={painel}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Abrir pendência no campo ${campo}`}
+        className="w-[min(520px,100%)] rounded-2xl border border-line bg-white p-5 shadow-card"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-[16px] font-bold text-ink2">Abrir pendência</h2>
+            <p className="mt-0.5 text-[12px] text-muted">
+              Ancorada no campo <b className="break-words">{campo}</b> · bloqueante — trava o
+              GO até resolução ou aceite do Accountable.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelar}
+            aria-label="Cancelar"
+            className="grid h-7 w-7 flex-none place-items-center rounded-md text-[16px] text-muted hover:bg-surface2 hover:text-ink"
+          >
+            ×
+          </button>
+        </div>
+
+        <form
+          className="mt-4"
+          onSubmit={(ev) => {
+            ev.preventDefault();
+            if (!valido || enviando) return;
+            onEnviar({ campo, titulo: titulo.trim(), descricao: descricao.trim(), severidade });
+          }}
+        >
+          <label className="block text-[11px] font-bold uppercase tracking-[.06em] text-faint">
+            Título <span className="text-crit">*</span>
+          </label>
+          <input
+            autoFocus
+            value={titulo}
+            onChange={(ev) => setTitulo(ev.target.value)}
+            placeholder={tituloSugerido(campo)}
+            className="mt-1 w-full rounded-md border border-line px-3 py-2 text-[13px] outline-none focus:border-blue"
+          />
+
+          <label className="mt-3 block text-[11px] font-bold uppercase tracking-[.06em] text-faint">
+            Descrição <span className="font-normal normal-case tracking-normal">(opcional)</span>
+          </label>
+          <textarea
+            value={descricao}
+            onChange={(ev) => setDescricao(ev.target.value)}
+            rows={3}
+            placeholder="O que precisa ser checado, com quem, e o que destrava."
+            className="mt-1 w-full resize-y rounded-md border border-line px-3 py-2 text-[13px] leading-snug outline-none focus:border-blue"
+          />
+
+          <label className="mt-3 block text-[11px] font-bold uppercase tracking-[.06em] text-faint">
+            Severidade
+          </label>
+          <select
+            value={severidade}
+            onChange={(ev) => setSeveridade(ev.target.value as Severidade)}
+            className="mt-1 rounded-md border border-line bg-white px-2 py-2 text-[13px] outline-none focus:border-blue"
+          >
+            {SEVERIDADES.map((s) => (
+              <option key={s.valor} value={s.valor}>
+                {s.rotulo}
+              </option>
+            ))}
+          </select>
+
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button type="button" className="mbtn-gh" onClick={onCancelar}>
+              Cancelar
+            </button>
+            <button type="submit" className="mbtn" disabled={!valido || enviando}>
+              {enviando ? "Abrindo…" : "Abrir pendência"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 export function Validacao() {
   const { id } = useParams<{ id: string }>();
@@ -26,6 +157,9 @@ export function Validacao() {
   const [resultados, setResultados] = useState<Record<string, ValidacaoOut>>({});
   const [pendencias, setPendencias] = useState<Record<string, PendenciaOut>>({});
   const [selecionado, setSelecionado] = useState<string | null>(null);
+  // A9: campo cujo diálogo de pendência está aberto (null = fechado)
+  const [campoDialogo, setCampoDialogo] = useState<string | null>(null);
+  const fecharDialogo = useCallback(() => setCampoDialogo(null), []);
 
   const campos = useMemo(() => Object.entries(briefing?.briefing ?? {}), [briefing]);
   const decididos = campos.filter(([campo]) => resultados[campo] || pendencias[campo]).length;
@@ -40,12 +174,21 @@ export function Validacao() {
     },
   });
 
+  // A9: o POST leva o contexto coletado no diálogo (título/descrição/severidade).
   const abrirPendencia = useMutation({
-    mutationFn: (campo: string) =>
-      post<PendenciaOut>(`/os/${id}/validacoes/${encodeURIComponent(campo)}/pendencia`, {}),
-    onSuccess: (p, campo) => {
-      setPendencias((m) => ({ ...m, [campo]: p }));
-      setSelecionado(campo);
+    mutationFn: (dados: DadosPendencia) =>
+      post<PendenciaOut>(
+        `/os/${id}/validacoes/${encodeURIComponent(dados.campo)}/pendencia`,
+        {
+          titulo: dados.titulo,
+          descricao: dados.descricao || null,
+          severidade: dados.severidade,
+        },
+      ),
+    onSuccess: (p, dados) => {
+      setPendencias((m) => ({ ...m, [dados.campo]: p }));
+      setSelecionado(dados.campo);
+      setCampoDialogo(null);
     },
   });
 
@@ -135,7 +278,7 @@ export function Validacao() {
           // A10 (UAT): estado de envio POR LINHA — `variables` é o campo da linha
           // clicada, então cada botão reflete (e dispara) somente o próprio campo.
           const validando = validar.isPending && validar.variables === campo;
-          const abrindo = abrirPendencia.isPending && abrirPendencia.variables === campo;
+          const abrindo = abrirPendencia.isPending && abrirPendencia.variables?.campo === campo;
           return (
             <div
               key={campo}
@@ -190,16 +333,27 @@ export function Validacao() {
                   disabled={abrindo || comPendencia}
                   onClick={(ev) => {
                     ev.stopPropagation();
-                    abrirPendencia.mutate(campo);
+                    setSelecionado(campo);
+                    setCampoDialogo(campo); // A9: coleta contexto antes do POST
                   }}
                 >
-                  {abrindo ? "Abrindo…" : "Abrir pendência"}
+                  {abrindo ? "Abrindo…" : "Abrir pendência…"}
                 </button>
               </span>
             </div>
           );
         })}
       </div>
+
+      {campoDialogo !== null && (
+        <DialogoPendencia
+          key={campoDialogo}
+          campo={campoDialogo}
+          enviando={abrirPendencia.isPending}
+          onCancelar={fecharDialogo}
+          onEnviar={(dados) => abrirPendencia.mutate(dados)}
+        />
+      )}
     </div>
   );
 }

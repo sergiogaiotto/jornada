@@ -60,6 +60,7 @@ class RepositorioDemo(Protocol):
     def obter_os_por_codigo(self, codigo: str) -> Any: ...
     def adicionar_os(self, os_: Any) -> None: ...
     def adicionar_etapa(self, etapa: Any) -> None: ...
+    def listar_jornadas(self, os_id: uuid.UUID) -> list[Any]: ...
     def adicionar_segmento(self, segmento: Any) -> None: ...
     def adicionar_certificado(self, certificado: Any) -> None: ...
     def adicionar_jornada(self, jornada: Any) -> None: ...
@@ -445,8 +446,15 @@ def _propostas_demo(os_: OS, jornada: JornadaVersao, agora: datetime) -> list[Pr
 
 
 def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime) -> None:
-    """Semeia a OS-2026-0457 ponta a ponta (§11.4); no-op se já semeada."""
-    if repositorio.obter_os_por_codigo(OS_CODIGO_DEMO) is not None:
+    """Semeia a OS-2026-0457 ponta a ponta (§11.4); no-op se já semeada. Com a
+    persistência SQL completa (A7 parte 2) a guarda OS+jornadas lê o Postgres e um
+    restart vira no-op de verdade; num banco semeado parcialmente (ex.: upgrade da
+    parte 1, que persistia só o núcleo), re-semear é seguro porque TODOS os ids são
+    uuid5 determinísticos (A15) e os `adicionar_*` SQL fazem upsert por id (nada
+    duplica; telemetria/eventos só entram na primeira semeadura)."""
+    if repositorio.obter_os_por_codigo(OS_CODIGO_DEMO) is not None and repositorio.listar_jornadas(
+        _uuid_demo(f"os/{OS_CODIGO_DEMO}")
+    ):
         return
 
     os_ = OS(

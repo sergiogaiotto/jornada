@@ -25,7 +25,7 @@ from adapters.datacloud.fixtures import DataCloudFixtures
 from adapters.fontes.read_model import ReadModelFixtures
 from adapters.publicacoes import PublicacoesLocais
 from adapters.relogio import RelogioSistema
-from api.v1.intake import get_llm, get_tracer
+from api.v1.intake import get_llm, get_retriever, get_tracer
 from api.v1.os_governanca import (
     Escritor,
     Tenant,
@@ -124,6 +124,7 @@ def get_servico_audiencia(
         get_datacloud(request),
         get_read_model(request),
         _publicacoes,
+        retriever=get_retriever(request),  # A11: preparar_contexto RAG (§7.3/§7.4)
     )
 
 

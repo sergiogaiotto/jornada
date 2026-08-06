@@ -28,6 +28,7 @@ from application.ports.observabilidade import TracerPort
 from application.ports.repositorio_intake import RepositorioIntake
 from application.ports.repositorio_os import RepositorioOs
 from application.services.os_service import ServicoOs
+from application.services.retriever_service import RetrieverService, evidencias_para_contexto
 from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
@@ -52,6 +53,7 @@ class ServicoConsultor:
         servico_os: ServicoOs,
         llm: LLMPort,
         tracer: TracerPort,
+        retriever: RetrieverService | None = None,
     ) -> None:
         self._repo = repositorio
         self._repo_os = repositorio_os
@@ -59,6 +61,7 @@ class ServicoConsultor:
         self._servico_os = servico_os
         self._llm = llm
         self._tracer = tracer
+        self._retriever = retriever  # A11: precedentes (§7.4); None → sem RAG
 
     # ---------------------------------------------------------------- Pedido
     def criar_pedido(
@@ -92,8 +95,20 @@ class ServicoConsultor:
             )
         self._exigir_nao_arquivado(pedido)
         skill = agente_consultor.carregar_skill()
+        # A11 (§7.4): precedentes citáveis das bases da skill (historico_campanhas/
+        # ofertas) — evidência ADICIONAL (a fala do solicitante continua bastando);
+        # hub de embeddings fora → [] (degrade suave).
+        precedentes = (
+            self._retriever.buscar(tenant_id, mensagem, bases=skill.bases_rag)
+            if self._retriever is not None
+            else []
+        )
         mensagens = agente_consultor.montar_mensagens(
-            skill, pedido.conteudo, pedido.faltantes, mensagem
+            skill,
+            pedido.conteudo,
+            pedido.faltantes,
+            mensagem,
+            precedentes=evidencias_para_contexto(precedentes),
         )
         inicio = self._relogio.agora()
         texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
@@ -155,7 +170,10 @@ class ServicoConsultor:
                 "skill_versao": skill.versao,
                 "modelo_perfil": skill.modelo_perfil,
             },
-            spans=[{"nome": "generate", "latencia_ms": invocacao.latencia_ms}],
+            spans=[
+                {"nome": "rag_retrieve", "evidencias": len(precedentes)},  # §10.8
+                {"nome": "generate", "latencia_ms": invocacao.latencia_ms},
+            ],
         )
         return pedido, saida.resposta
 

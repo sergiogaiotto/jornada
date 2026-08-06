@@ -28,7 +28,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
 from adapters.relogio import RelogioSistema
-from api.v1.intake import get_llm, get_tracer
+from api.v1.intake import get_embedding, get_llm, get_tracer
 from api.v1.os_governanca import (
     Autenticado,
     Escritor,
@@ -112,6 +112,7 @@ def get_servico_otimizacao(request: Request) -> ServicoOtimizacao:
         get_llm(request),
         get_tracer(request),
         get_servico_simulador(request),  # impacto pré-simulado (§8-M11)
+        embedding=get_embedding(request),  # A11: embed melhor-esforço na promoção (A3)
     )
 
 

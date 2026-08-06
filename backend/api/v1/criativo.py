@@ -3,7 +3,9 @@
 `POST /os/{id}/criativos/gerar` (matriz canal×variante a partir do KV master —
 pipeline visual/copy/content via LLMPort) · `PATCH /criativos/{id}/celula`
 (aprovar/revisar por célula — A3: só usuário analista+) · `PUT /criativos/{id}/kv-master`
-(edita o KV master; células derivadas → `adaptado_revisar` — A2). Validadores
+(edita o KV master; células derivadas → `adaptado_revisar` — A2) ·
+`GET /os/{id}/criativos/kv-padrao` (KV de partida DERIVADO do briefing — determinístico,
+ZERO LLM; A8 do UAT 2026-08-05). Validadores
 DETERMINÍSTICOS: SMS≤160 (A1), template WhatsApp aprovado, termos proibidos de
 linguagem; o LLM 20b só ACRESCENTA warnings ("regras + warn LLM").
 
@@ -25,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_llm, get_tracer
 from api.v1.os_governanca import (
+    Autenticado,
     Escritor,
     Tenant,
     _problema_de_dominio,
@@ -159,8 +162,36 @@ class KvMasterOut(BaseModel):
     avisos: list[str]  # warn LLM (best-effort — vazio com hub fora, §10.6)
 
 
+class KvPadraoOut(BaseModel):
+    """KV de PARTIDA do Estúdio (A8) — derivado do briefing por CÓDIGO (`via_ai:false`).
+
+    `derivado_de` = campos do briefing que alimentaram o default (rastro honesto);
+    `suficiente:false` → o KV veio com placeholders "(defina …)" para o humano preencher.
+    """
+
+    os_id: uuid.UUID
+    kv_master: dict[str, str]
+    derivado_de: list[str]
+    suficiente: bool
+    via_ai: bool = False  # determinístico: nada de LLM aqui (§1.1.3)
+
+
 # ------------------------------------------------------------------------- Rotas
 router = APIRouter(route_class=RotaCriativo, tags=["criativo"])
+
+
+@router.get("/os/{os_id}/criativos/kv-padrao", response_model=KvPadraoOut)
+async def kv_padrao(
+    os_id: uuid.UUID, tenant: Tenant, servico: Servico, _user: Autenticado
+) -> KvPadraoOut:
+    """KV master de partida DERIVADO do briefing da OS — determinístico, ZERO LLM e sem
+    persistir nada (A8 do UAT 2026-08-05: o Estúdio abria com copy fixa da campanha de
+    franquia, que vazava para OS de outro tema). Briefing insuficiente → placeholders
+    "(defina o Key Visual)" — nunca copy de outra campanha (§1.3.5)."""
+    kv_master, derivado_de, tem_briefing = servico.kv_master_padrao(tenant, os_id)
+    return KvPadraoOut(
+        os_id=os_id, kv_master=kv_master, derivado_de=derivado_de, suficiente=tem_briefing
+    )
 
 
 @router.post("/os/{os_id}/criativos/gerar", status_code=201, response_model=GerarCriativosOut)

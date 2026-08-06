@@ -14,5 +14,10 @@ COPY backend/ ./
 # de audiência): o código resolve <raiz>/mocks/seeds — na imagem, isso é /mocks/seeds.
 COPY mocks/seeds/ /mocks/seeds/
 
+# A22 · version-stamp: o commit viaja DENTRO da imagem e sai em GET /healthz.sha —
+# é o que permite ao smoke pós-deploy provar que o que subiu é o que foi buildado.
+ARG GIT_SHA=dev
+ENV GIT_SHA=${GIT_SHA}
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

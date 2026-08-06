@@ -12,6 +12,7 @@ PII: o prompt recebe apenas conteúdo do briefing/faltantes/mensagem — jamais 
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -37,6 +38,7 @@ class Skill:
     exige_evidencia: bool
     corpo: str
     meta: dict[str, str] = field(default_factory=dict)  # front-matter cru restante
+    bases_rag: tuple[str, ...] = ()  # bases autorizadas ao retriever (§7.1/§7.4 — A11)
 
 
 @dataclass(frozen=True)
@@ -66,17 +68,27 @@ def carregar_skill(caminho: Path = SKILL_PATH) -> Skill:
         exige_evidencia=parseada.exige_evidencia,
         corpo=parseada.corpo,
         meta=parseada.meta,
+        bases_rag=parseada.bases_rag,
     )
 
 
 def montar_mensagens(
-    skill: Skill, conteudo: dict[str, Any], faltantes: list[str], mensagem: str
+    skill: Skill,
+    conteudo: dict[str, Any],
+    faltantes: list[str],
+    mensagem: str,
+    precedentes: Sequence[dict[str, str]] = (),
 ) -> list[dict[str, str]]:
     """Mensagens OpenAI-style. SEM PII: nunca inclui o `solicitante` do pedido (§1.3.5).
 
     A2 (UAT real): com `faltantes` vazio (conversa de OS com briefing completo — rota
     de briefing da OS), o contexto DIZ isso ao modelo — consultoria estratégica, sem
-    inventar pendência nem repetir pergunta de campo já preenchido."""
+    inventar pendência nem repetir pergunta de campo já preenchido.
+
+    `precedentes` (A11 — §7.4): evidências do retriever (bases_rag da skill: campanhas
+    históricas/ofertas) no formato citável que a skill já espera — "Precedentes
+    citáveis ... são evidência adicional". Vazio → chave fora do contexto (prompt
+    idêntico ao pré-A11)."""
     resumo = {
         campo: valor_do_campo(conteudo, campo)
         for campo in CAMPOS_OBRIGATORIOS
@@ -88,6 +100,8 @@ def montar_mensagens(
         "faltantes": faltantes,
         "mensagem_do_solicitante": mensagem,
     }
+    if precedentes:
+        contexto["precedentes"] = list(precedentes)
     if not faltantes:
         contexto["briefing_completo"] = True
         contexto["instrucao"] = (

@@ -95,6 +95,7 @@ LLM_DEGRADED_MODE=auto           # auto|forced_off — §10.6 (fila + modo manua
 EMBED_BASE_URL=https://hub-gpus.claro.com.br/embed06b/v1
 EMBED_MODEL=Qwen/Qwen3-Embedding-0.6B
 EMBED_DIM=1024                   # padrão do modelo; mudar exige re-embed da collection (§10.4)
+EMBED_TIMEOUT_S=30               # emenda A11: timeout próprio (curto) do POST /embeddings
 RAG_COLLECTION=agente_evidence   # pgvector
 
 # --- SFMC (dev aponta para o mock) ---
@@ -123,13 +124,13 @@ LANGFUSE_ENABLED=true            # false → no-op (app nunca depende do Langfus
 ### 3.2 `requirements.txt` inicial (backend)
 ```
 fastapi~=0.115  uvicorn[standard]~=0.30  pydantic~=2.9  pydantic-settings~=2.5
-sqlalchemy[asyncio]~=2.0  alembic~=1.13  asyncpg~=0.29  pgvector~=0.3
+sqlalchemy[asyncio]~=2.0  alembic~=1.13  asyncpg~=0.29  psycopg2-binary~=2.9  pgvector~=0.3
 langgraph~=0.2  langgraph-checkpoint-postgres~=2.0  deepagents
 openai~=1.50  httpx~=0.27  tenacity~=9.0  zeep~=4.2  langfuse~=2.53
 python-jose[cryptography]~=3.3  structlog~=24.4  python-docx~=1.1  orjson~=3.10
 pytest~=8.3  pytest-asyncio~=0.24  respx~=0.21  ruff~=0.6  mypy~=1.11
 ```
-(Formato real: uma dependência por linha. `zeep` = SOAP SFMC; `deepagents` = Deep-Agent Harness; `python-docx` = documentos executivos dos portões.)
+(Formato real: uma dependência por linha. `zeep` = SOAP SFMC; `deepagents` = Deep-Agent Harness; `python-docx` = documentos executivos dos portões; `psycopg2-binary` = driver síncrono dos repositórios SQL — emenda A7, §4.)
 
 ### 3.3 Seleção de ferramentas (critério GitHub: manutenção ativa, adoção, licença permissiva)
 | Necessidade | Escolha | Por quê (GitHub) |
@@ -150,6 +151,8 @@ pytest~=8.3  pytest-asyncio~=0.24  respx~=0.21  ruff~=0.6  mypy~=1.11
 ## 4. Modelo de dados (PostgreSQL — migração Alembic `0001_core`)
 
 Convenções: PK `id UUID default gen_random_uuid()`; todas as tabelas de negócio têm `tenant_id text not null` + índice; `created_at/updated_at timestamptz`; soft-delete não — histórico via event sourcing/versões. Extensões: `pgcrypto`, `vector`.
+
+**Persistência SQL ativa (emenda A7 partes 1 e 2, 2026-08-05 — ver CHANGELOG-SDD.md):** TODOS os agregados do DDL §4.1 são persistidos em Postgres pelo adapter `adapters/persistence/sql.py` (`RepositorioSql`, engine **síncrono** psycopg2; as portas de repositório §2.1 são síncronas) sobre o schema aplicado pelas migrações alembic (nunca `create_all`): núcleo OS/governança, intake, esteira, twin (`jornada_versao` com simulação/Previsto), `snapshot`/`aprovacao`, audiência (`segmento`/`certificado_elegibilidade`/`dc_segment_cache`), `criativo`, `experimento`, compilador (`sync_run`/`resource_registry`/`drift_check`/`preflight_run`), lançamento (`launch`/`telemetry_event`/`incidente`), otimização (`proposta_otimizacao`/`aprendizado`/`calibracao_prior`), Ateliê (`agente`/`skill_versao`/`harness_*`/`policy_versao`), o ledger `invocacao` e o outbox `domain_event` (§2.3). **`agente_evidence` (emenda A11, 2026-08-05):** também persistida — o adapter grava `embedding vector(1024)` (via EmbeddingPort §3/§7.4) e busca top-k por cosseno (`cosine_distance`, índice HNSW da migração 0001) filtrada por tenant + bases; evidência promovida SEM vetor (apuração M11 — caminho determinístico §10.6 que nunca depende do hub) cai no fallback em memória do processo até o `rag reindex` (§7.4). Seleção por config no startup: `DATABASE_URL` setado no ambiente **e** alcançável → repos SQL; senão repositório em memória (fallback dev sem docker). Escritas `adicionar_*`/`salvar_*` são **upsert por `id`** (identity do banco em `domain_event`/`telemetry_event`) — com os ids uuid5 determinísticos das seeds (§11.4/A15), restart re-semeia sem duplicar. Listas com contrato "o último é o corrente" (`segmentos[-1]`, `aprovacoes[-1]`, `experimento_da_os`, launch de referência) ordenam pela coluna `created_at` de ordem de inserção (migração `0012_a7_ordem_estavel` — escrita SÓ pelo default `now()` do banco e preservada no upsert; as dataclasses de domínio não mudam). Com SQL ativo o boot semeia roster+política v1 do Ateliê (idempotente — a FK `invocacao.agente_id → agente` exige as linhas antes do primeiro ledger; em memória segue a semeadura tardia das rotas). Mutação pós-leitura exige `salvar_*` explícito — por isso a porta ganhou `salvar_certificado` (re-varredura last-mile do pré-voo).
 
 ### 4.1 DDL núcleo (integral)
 ```sql
@@ -213,7 +216,8 @@ create table aprovacao (                      -- link mágico
   decisao text check (decisao in ('aprovado','aprovado_ressalvas','reprovado')),
   decidido_em timestamptz, decidido_meta jsonb,                 -- ip, device, otp?
   ressalvas jsonb default '[]',                                 -- viram pendências automaticamente
-  invalidada_em timestamptz, invalidada_motivo text             -- A4: custo >10% pós-aprovação (emenda M8 parte 2, migração 0006)
+  invalidada_em timestamptz, invalidada_motivo text,            -- A4: custo >10% pós-aprovação (emenda M8 parte 2, migração 0006)
+  created_at timestamptz default now()        -- ordem de inserção durável (emenda A7 parte 2, migração 0012)
 );
 
 create table segmento (
@@ -222,7 +226,8 @@ create table segmento (
   dc_segment_id text, sql_publico text, criterios_resumo text,
   contagem_bruta int, contagem_liquida int, waterfall jsonb,    -- [{etapa, corte, restante, motivo}]
   volume_abordagem jsonb,                                        -- {email:{n,pct},sms:{...},push:{...},whatsapp:{...}}
-  holdout_pct numeric(4,1) default 10.0, frescor jsonb           -- {fonte: ultima_atualizacao}
+  holdout_pct numeric(4,1) default 10.0, frescor jsonb,          -- {fonte: ultima_atualizacao}
+  created_at timestamptz default now()        -- ordem de inserção durável (emenda A7 parte 2, migração 0012)
 );
 
 create table experimento (
@@ -230,7 +235,8 @@ create table experimento (
   holdout_pct numeric(4,1) not null, n_minimo int not null, mde_pp numeric(5,2) not null,
   janela_dias int not null, metricas jsonb not null, travado_em timestamptz,
   estado text default 'pre_registrado' check (estado in ('pre_registrado','em_apuracao','apurado')),
-  resultado jsonb                                                -- {lift, ic95:[a,b], significativo, roas}
+  resultado jsonb,                                               -- {lift, ic95:[a,b], significativo, roas}
+  created_at timestamptz default now()        -- ordem de inserção durável (emenda A7 parte 2, migração 0012)
 );
 
 create table etapa_workflow (                 -- T4a: esteira ex-Hike
@@ -270,7 +276,8 @@ create table launch (                         -- T12
   ondas jsonb not null default '[{"pct":1},{"pct":10},{"pct":100}]', onda_atual int default 0,
   estado text default 'armado' check (estado in ('armado','em_rampa','pausado_breaker','morto','concluido')),
   breakers jsonb not null,                    -- limites da política congelada
-  eventos jsonb default '[]'
+  eventos jsonb default '[]',
+  created_at timestamptz default now()        -- ordem de inserção durável (emenda A7 parte 2, migração 0012)
 );
 
 create table telemetry_event (
@@ -455,7 +462,9 @@ Parser valida front-matter; publicar versão exige `harness_run.passou=true` (sc
 Supergrafo por OS (checkpointer `langgraph-checkpoint-postgres`): nós = células IPO; `interrupt()` humano em TODOS os portões (pendência bloqueante, aprovação link mágico, simulação, publish). Subgrafo padrão do especialista: `preparar_contexto(RAG top-k=8 filtrado por bases autorizadas)` → `gerar` → `judge` (120B, dimensões correção/evidência/compliance/formato) → `retry≤2` → `entregar prévia` (Aplicar/Rejeitar na UI). Toda invocação grava `invocacao` (via_ai) com evidências citadas.
 
 ### 7.4 RAG
-Uma collection `agente_evidence` (vector 1024, cosine, HNSW), filtro por `base` + `tenant_id`. Ingestão por base com CLI `python -m app.rag ingest <base> <path>`; chunk ~700 tokens, overlap 80. **Mudar `EMBED_DIM` exige re-embed completo** (comando `rag reindex`; busca fica indisponível até concluir — exibir aviso na UI T16/Bases).
+Uma collection `agente_evidence` (vector 1024, cosine, HNSW), filtro por `base` + `tenant_id`. Ingestão por base com CLI `python -m app.rag ingest <base> <path>`; chunk ~700 tokens, overlap 80. **Mudar `EMBED_DIM` exige re-embed completo** (comando `python -m app.rag reindex`; busca fica indisponível até concluir — exibir aviso na UI T16/Bases).
+
+**Implementado (emenda A11, 2026-08-05 — ver CHANGELOG-SDD.md):** `EmbeddingPort` (§2.1) com adapter real OpenAI-compatible (`POST {EMBED_BASE_URL}/embeddings`, modelo `EMBED_MODEL`, dim `EMBED_DIM`, timeout `EMBED_TIMEOUT_S`; timeout/erros → `EmbeddingIndisponivel`, que HERDA de `LLMIndisponivel` — os handlers 503 `degraded` §10.6 cobrem sem código novo) e fake determinístico para teste (§1.3.5). `RetrieverService` (`preparar_contexto` §7.3): top-k=8 por cosseno filtrado por `tenant_id` + bases autorizadas no front-matter `bases_rag` da skill (§7.1), com **degrade suave** — hub de embeddings fora → contexto SEM evidências (o `exige_evidencia` da skill segue valendo: sem evidência, o agente não inventa). Persistência: pgvector no `RepositorioSql` (§4); fallback dev sem DB = busca ingênua em memória (mesmo contrato). Ingestão: JSONL (`{texto|chunk, ref?, meta?}` por linha), chunking ~700 tokens/overlap 80 (token≈palavra, determinístico), embeddings em LOTE e upsert por uuid5 (re-ingestão idempotente, padrão §11.4/A15); `reindex` re-embeda preservando chunk/meta/id. Seed DEMO (§11.4): `mocks/seeds/dicionario_dados.jsonl` (~17 entradas do read model de ativação — contato_hash, consumo_pct, qtd_pacotes_avulsos_3m, opt-in por canal, 7 listas de supressão etc.) ingerida no boot `DEMO_MODE`; **sem hub a seed é PULADA com log, sem quebrar o boot**. Wire: engineer recebe `evidencias_rag` e consultor `precedentes` no contexto do prompt (formato citável `{id, base, ref, trecho}` — os ids citados fecham o ciclo no ledger `invocacao.evidencias`); o trace §10.8 ganha o span `rag_retrieve`; a promoção de aprendizado do M11 embeda melhor-esforço (sem hub → linha sem vetor no fallback, apuração jamais falha por RAG).
 
 ---
 
@@ -465,7 +474,7 @@ Convenções API: prefixo `/api/v1`; auth Bearer (dev: token estático de `usuar
 
 ### M0 · Fundação
 Repo, docker-compose (db+api+web+mocks+mailpit), config, migração 0001, auth dev, RBAC (papéis: solicitante, analista, lider, aprovador, dpo, admin — decorator `require_role`), `/healthz`, CI (§13).
-**A1** dado compose up, quando `GET /healthz`, então `{db:ok, llm:skip|ok}` em <2s. **A2** requisição sem `X-Tenant` → 400.
+**A1** dado compose up, quando `GET /healthz`, então `{db:ok, llm:skip|ok, sha:<commit>}` em <2s. **A2** requisição sem `X-Tenant` → 400. **A3** (emenda A22, 2026-08-06 — ver CHANGELOG-SDD.md) `sha` é o commit **embutido na imagem** (`ARG/ENV GIT_SHA`, default `dev` fora do docker), nunca lido de git em runtime: é a prova de versão que o smoke pós-deploy compara (§13).
 
 ### M1 · Núcleo OS/governança
 `POST/GET /os` · `GET /os/{id}` · `POST /os/{id}/fase` (só transições legais; portões checados) · `POST /os/{id}/pendencias` · `POST /pendencias/{id}/resolver|aceitar` · `GET /os/{id}/saude` · SLA service (congela prazos no GO; estados correndo/pausado_cliente/bloqueado_pendencia).
@@ -489,7 +498,8 @@ Repo, docker-compose (db+api+web+mocks+mailpit), config, migração 0001, auth d
 
 ### M6 · Criativo (T6)
 `POST /os/{id}/criativos/gerar` (matriz canal×variante a partir do KV master) · `PATCH /criativos/{id}/celula` (aprovar/revisar por célula) · validadores: SMS≤160, template WhatsApp status, compliance de linguagem (regras + LLM warn).
-**A1** SMS 161 chars → 422. **A2** edição do KV master marca células derivadas `adaptado_revisar`. **A3** nenhuma célula vai a `aprovado` via agente — só usuário com papel analista+.
+KV de partida (emenda 2026-08-06 — determinístico, ZERO LLM §10.6): `GET /os/{id}/criativos/kv-padrao` devolve o KV master DEFAULT **derivado do briefing da própria OS** (`domain/criativo/kv_padrao.py`): `headline` ← 1ª frase do `objetivo`, `oferta` ← `oferta`, `cta` ← verbo da intenção do objetivo + forma do canal real (`canais` só sms/whatsapp → "Responda SIM"), `tom` ← `tom_de_marca`; resposta `{kv_master, derivado_de, suficiente, via_ai:false}`. Campo sem fonte no briefing → placeholder neutro `(defina o Key Visual)` — o Estúdio NUNCA abre com copy fixa de outra campanha (§1.3.5). Não persiste nada; leitura escopada por tenant (OS inexistente → 404).
+**A1** SMS 161 chars → 422. **A2** edição do KV master marca células derivadas `adaptado_revisar`. **A3** nenhuma célula vai a `aprovado` via agente — só usuário com papel analista+. **A4** KV default de uma OS de recarga sai do briefing dela (sem nenhum termo da campanha de franquia) e OS sem briefing recebe `(defina o Key Visual)`.
 
 ### M7 · Twin Canvas (T7)
 `POST /os/{id}/jornada/gerar` (flow → JGC) · `GET /os/{id}/jornada` (última versão do twin da OS; 404 quando não há versão — leitura determinística do canvas, emenda 2026-08-05) · `PUT /jornadas/{id}/grafo` (valida §5.3; recalcula taxímetro) · `POST /jornadas/{id}/ajustar` (texto livre → diff proposto, nunca aplica direto) · `GET /jornadas/{id}/no/{noId}/sfmc-preview` (JSON que o compilador gerará).
@@ -547,18 +557,22 @@ Front pode avançar em paralelo a partir do MS3 (contratos estáveis por módulo
 6. **Modo degradado**: se hub LLM indisponível (healthcheck), agentes retornam 503 `degraded` e a UI oferece modo manual; caminho crítico (guard, compilador, governor, breakers, kill) NUNCA depende de LLM — teste e2e com `LLM_DEGRADED_MODE=forced_off` deve completar M9/M10.
 7. Timeout LLM 300s; retries 2 com jitter; circuit breaker por 60s após 3 falhas.
 8. **Observabilidade via Langfuse (self-hosted)** — serviço `langfuse` no docker-compose (imagem `langfuse/langfuse:2` + Postgres próprio `db-langfuse`). Contrato de instrumentação: toda chamada via `LLMPort`/`EmbeddingPort` gera um **trace Langfuse com `trace_id = invocacao.id`** (metadados: tenant, os_id, agente, skill_versao, modelo_perfil) e spans `rag_retrieve` → `generate` → `judge`; tokens/latência espelhados na tabela `invocacao` (o ledger `via_ai` continua a fonte de auditoria LGPD; Langfuse é a lente operacional). Envio assíncrono fire-and-forget: queda do Langfuse **nunca** bloqueia a aplicação (`LANGFUSE_ENABLED=false` → no-op). A tela T16/Observabilidade linka para o dashboard Langfuse (custo de IA por OS, latência por agente, taxa de retry/judge-fail); harness runs também são traceados (tag `harness`).
+9. **Durabilidade dos agregados** (emenda A7 partes 1 e 2 — §4): com `DATABASE_URL` alcançável, TODOS os agregados do §4.1 (núcleo, twin/versões, snapshot/aprovação, audiência, criativos, experimento, compilador, launch/telemetria/incidentes, otimização/calibração, Ateliê/política, ledger `invocacao` e outbox) sobrevivem a restart do processo — verificado por testes `@pytest.mark.integration` com Postgres real (`pgvector/pgvector:pg16` + `alembic upgrade head`) no CI e localmente via container efêmero (inclui twin+restaurar, ledger com FK de roster e launch+telemetria). `agente_evidence` incluída desde o A11 (RAG pgvector §7.4; o teste de integração cobre ingest+retrieve+reindex — evidência promovida sem vetor fica em memória até o `rag reindex`). Sem banco alcançável a aplicação permanece 100% funcional em memória (fallback dev) — nenhum caminho depende do Postgres para subir. O `docker-compose.prod.yml` (VPS demo) sobe `db` pgvector com volume nomeado + healthcheck e a api com `alembic upgrade head` no start, como o compose dev.
 
 ## 11. Mocks e seeds (obrigatórios para dev/CI)
 1. **mock-sfmc** (FastAPI): token OAuth, REST (eventDefinitions, interactions, assets) e SOAP (DataExtension, Automation) com validação de schema + estado em memória; endpoints de injeção de falha (`/chaos/rate-limit`, `/chaos/drift`).
 2. **mock-datacloud**: token + `GET /segments` (4 segmentos das fixtures do plano) + query count.
 3. **mailpit** para e-mails de notificação/link mágico em dev.
 4. **Seeds DEMO_MODE**: OS-2026-0457 completa (briefing 14 campos, segmento 847.312, JGC do mock T7, previsto, telemetria 20 dias com lift +24,1%/ROAS 18,5x), tarifário (email 0,0018; push 0,0005; sms 0; whatsapp 0,3597), 7 listas com contagens, políticas v1, agentes+skills v1, 3 casos golden por agente, `hike_export.json`.
+   **Emenda A18 (2026-08-06 — ver CHANGELOG-SDD.md):** o roster semeado passa a incluir as **5 triagens do §7.2** (`triagem_intake|audiencia|criativo|jornada|operacao` — camada triagem, 20b, skill v1.0 canônica §7.1 com roteamento + checklist da célula IPO) e **1 `harness_run` verde de vitrine por agente-chave** com golden dataset (`origem: "seed"`, score 90–97 por dimensão, `skill_md_hash` do texto semeado — nenhum LLM roda na seed), o que também preenche o `harness_score` da v1.0 exibido no T16. A semeadura deixa de ser "no-op se houver qualquer agente" e passa a **convergir por entidade** (ids uuid5 §11.4/A15 + upsert por id): banco de deploy anterior recebe roster novo sem duplicar nada.
 
 ## 12. Frontend (SPA — fidelidade aos mocks é critério de aceite)
 Vite+React+TS; Tailwind com tokens do artifact (chrome **vermelho Claro #D0271C/#A81E14**, layout 3 zonas: rail esquerdo colapsável / centro / painel direito contextual = casa do copiloto); React Flow com a paleta Journey Builder (entry verde #2E844A, mensagens teal #0B827C, flow laranja #DD7A01, otimização roxa #9050E9, updates azul #0176D3); Recharts para previsto×realizado (barra fantasma + sólida). Rotas: `/` T1 · `/os/:id/(briefing|validacao|warroom|workflow|audiencia|datacloud|criativo|twin|simulacao|portoes|prevoo|lancamento|monitor|perguntas|retro)` · `/aprovacao/:token` (standalone, sem shell) · `/atelie/*`. Contrato de UX da IA em toda tela: prévia/diff + Aplicar/Rejeitar + chips de premissas + badge `via_ai` clicável. i18n pt-BR; teclas ⌘K busca. E2E (Playwright): jornada feliz completa da OS demo pelas 18 telas.
 
 ## 13. Qualidade & CI (GitHub Actions)
-`ci.yml`: ruff + mypy + pytest (unit/contract) + build front + e2e compose em PR para main; cobertura mínima backend 80% (gate). `pre-commit` com ruff/format. Branches: `main` protegida; `feat/msN-*`. Releases por tag `vMS{n}`.
+`ci.yml`: ruff + mypy + pytest (unit/contract) + build front + e2e compose em PR para main; cobertura mínima backend 80% (gate). Job backend com service Postgres (`pgvector/pgvector:pg16`) e step dedicado `pytest -m integration` (persistência A7 — §4/§10.9; o step de unit/aceite roda SEM `DATABASE_URL`, sempre em memória). `pre-commit` com ruff/format. Branches: `main` protegida; `feat/msN-*`. Releases por tag `vMS{n}`.
+
+**Version-stamp de deploy (emenda A22, 2026-08-06 — ver CHANGELOG-SDD.md).** O commit viaja DENTRO das imagens e o smoke pós-deploy **falha o job** se o ar responder outro SHA — fim do "deploy-fantasma" (2026-08-05: o smoke dizia verde validando uma imagem antiga, porque só checava HTTP 200). Cadeia completa, cada elo obrigatório: `deploy/deploy.sh` e o job `deploy` exportam `GIT_SHA=$(git rev-parse --short HEAD)` → `docker-compose.prod.yml` repassa como **build arg** para `api` e `web` → `backend/Dockerfile` (`ARG GIT_SHA=dev` + `ENV GIT_SHA`) e `frontend/Dockerfile` (`ARG GIT_SHA` + `ENV VITE_GIT_SHA`, antes do `npm run build`, para o SHA entrar no bundle) → `GET /healthz.sha` (§8-M0-A3) e rodapé do rail (`build <sha>`). O smoke bate no host público via `location = /healthz` do nginx (`frontend/nginx.conf`, proxy para `api:8000` — mesma origem da SPA, senão não há como comparar de fora) e compara com o SHA do run: divergiu → `::error::deploy-fantasma` e exit 1. Fora do docker o default é `dev` (nenhum comando git roda em runtime).
 
 ## 14. Glossário mínimo
 OS (campanha/ordem de serviço) · JGC (grafo canônico) · Snapshot (pacote imutável por hash) · Portão / QA (gate bloqueante — na UI o termo visível é "QA") · Pendência (item bloqueante herdado do Hike; equivale ao “RAID” da referência IBM) · Guard (validador determinístico de elegibilidade) · Governor (árbitro de pressão de contato cross-campanha) · via_ai (ledger de ação de agente) · Previsto (baseline congelado da simulação) · Drift (divergência twin↔SFMC).

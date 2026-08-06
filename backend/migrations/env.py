@@ -19,7 +19,10 @@ target_metadata = None
 
 
 def get_url() -> str:
-    return get_settings().database_url
+    # Testes de integração (A7) injetam a URL via config ("sqlalchemy.url");
+    # execução normal segue app.config/DATABASE_URL.
+    url = config.get_main_option("sqlalchemy.url")
+    return url if url else get_settings().database_url
 
 
 def run_migrations_offline() -> None:

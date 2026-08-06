@@ -4,14 +4,14 @@
  * CÉLULA (A3 — só humano analista+ aprova, nunca o agente); editar o KV master marca as
  * derivadas `adaptado_revisar` (A2); validadores por canal (SMS≤160, template Meta).
  */
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { BadgeViaAi } from "../components/ai/BadgeViaAi";
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, EstadoVazio, TituloTela } from "../components/ui/basics";
-import { patch, post, put } from "../lib/api";
+import { get, patch, post, put } from "../lib/api";
 import { usePainelContextual } from "../lib/hooks";
 import type {
   CanalCriativo,
@@ -19,6 +19,7 @@ import type {
   CriativoOut,
   GerarCriativosOut,
   KvMasterOut,
+  KvPadraoOut,
 } from "../lib/types";
 import { useProducao } from "../stores/producao";
 
@@ -31,11 +32,16 @@ const CANAL_ROTULO: Record<CanalCriativo, string> = {
 };
 const LIMITE_CANAL: Partial<Record<CanalCriativo, number>> = { sms: 160, push: 120 };
 
-const KV_PADRAO = {
-  headline: "Chega de estourar a franquia",
-  oferta: "2× de dados pelo mesmo valor dos pacotes avulsos",
-  cta: "claro.com/up",
-  tom: "sem sustos, direto, sem promessa proibida",
+/**
+ * KV de partida enquanto o servidor não responde. O default REAL vem de
+ * `GET /os/{id}/criativos/kv-padrao`, derivado do briefing da OS (§8-M6, achado A8):
+ * copy fixa de uma campanha aqui vazava para OS de outro tema.
+ */
+const KV_PLACEHOLDER: Record<string, string> = {
+  headline: "(defina o Key Visual)",
+  oferta: "(defina a oferta)",
+  cta: "(defina o CTA)",
+  tom: "(defina o tom de marca)",
 };
 
 function ChipEstado({ estado }: { estado: CelulaOut["estado"] }) {
@@ -111,9 +117,27 @@ export function Criativo() {
   const criativo = useProducao((s) => s.criativos[osId]);
   const setCriativo = useProducao((s) => s.setCriativo);
 
-  const [kv, setKv] = useState<Record<string, string>>(KV_PADRAO);
+  // Default DERIVADO do briefing desta OS (determinístico, via_ai:false — A8).
+  const kvPadrao = useQuery({
+    queryKey: ["os", osId, "criativos", "kv-padrao"],
+    queryFn: ({ signal }) => get<KvPadraoOut>(`/os/${osId}/criativos/kv-padrao`, signal),
+    enabled: Boolean(osId),
+  });
+
+  // Edição fica presa à OS que a originou (trocar de OS não carrega KV da anterior).
+  const [edicao, setEdicao] = useState<{ os: string; kv: Record<string, string> } | null>(null);
   const [kvAberto, setKvAberto] = useState(false);
   const [avisos, setAvisos] = useState<string[]>([]);
+
+  // Precedência: edição do usuário > KV que gerou a matriz > default do briefing.
+  const kvEditado = edicao?.os === osId ? edicao.kv : null;
+  const kvDaMatriz = criativo
+    ? Object.fromEntries(Object.entries(criativo.kv_master).map(([k, v]) => [k, textoDe(v)]))
+    : null;
+  const kv: Record<string, string> =
+    kvEditado ?? kvDaMatriz ?? kvPadrao.data?.kv_master ?? KV_PLACEHOLDER;
+  const setKv = (campo: string, valor: string) =>
+    setEdicao({ os: osId, kv: { ...kv, [campo]: valor } });
 
   const gerar = useMutation({
     mutationFn: (instrucoes?: string) =>
@@ -220,6 +244,9 @@ export function Criativo() {
         <BannerErro erro={decidirCelula.error} contexto="Decisão da célula" />
       )}
       {editarKv.error != null && <BannerErro erro={editarKv.error} contexto="KV master" />}
+      {kvPadrao.error != null && (
+        <BannerErro erro={kvPadrao.error} contexto="KV de partida (briefing da OS)" />
+      )}
 
       {/* ------------------------------------------------------- KV master */}
       <div className="mcard mb-3">
@@ -254,13 +281,30 @@ export function Criativo() {
         </div>
 
         {!kvAberto ? (
-          <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11.5px]">
-            {Object.entries(kv).map(([campo, valor]) => (
-              <span key={campo} className="mchip-n">
-                <b>{campo}:</b> {valor}
-              </span>
-            ))}
-          </div>
+          <>
+            <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11.5px]">
+              {Object.entries(kv).map(([campo, valor]) => (
+                <span key={campo} className="mchip-n">
+                  <b>{campo}:</b> {valor}
+                </span>
+              ))}
+            </div>
+            {!kvEditado && !criativo && kvPadrao.data && (
+              <div className="mt-1 text-[11px] text-slatex">
+                {kvPadrao.data.suficiente ? (
+                  <>
+                    Partida derivada do briefing desta OS ({kvPadrao.data.derivado_de.join(" · ")})
+                    — edite antes de gerar.
+                  </>
+                ) : (
+                  <span className="text-warn">
+                    Briefing sem objetivo/oferta — preencha o Key Visual (ou volte ao briefing);
+                    o Estúdio não inventa copy de outra campanha.
+                  </span>
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <div className="mt-2 grid gap-1.5">
             {Object.entries(kv).map(([campo, valor]) => (
@@ -268,7 +312,7 @@ export function Criativo() {
                 <span className="w-20 flex-none font-bold text-steel">{campo}</span>
                 <input
                   value={valor}
-                  onChange={(e) => setKv((k) => ({ ...k, [campo]: e.target.value }))}
+                  onChange={(e) => setKv(campo, e.target.value)}
                   className="min-w-0 flex-1 rounded-md border border-line2 px-2.5 py-1.5 text-[12.5px] outline-none focus:border-blue"
                 />
               </label>

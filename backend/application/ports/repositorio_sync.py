@@ -39,6 +39,11 @@ class RepositorioSync(Protocol):
 
     def listar_certificados(self, os_id: uuid.UUID) -> list[CertificadoElegibilidade]: ...
 
+    def salvar_certificado(self, certificado: CertificadoElegibilidade) -> None:
+        """Persiste a re-varredura last-mile no certificado (§4.1 — A7 parte 2: com
+        SQL a mutação do objeto hidratado não persiste sozinha)."""
+        ...
+
     # --- Twin (grafo compilado + estado `publicado` §4.1) ---
     def listar_jornadas(self, os_id: uuid.UUID) -> list[JornadaVersao]: ...
 

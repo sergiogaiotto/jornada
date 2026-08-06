@@ -21,11 +21,12 @@ def agente_uuid(nome: str) -> uuid.UUID:
 
 @dataclass
 class AgenteEvidence:
-    """Linha da collection RAG `agente_evidence` §4.1 (base + chunk + meta).
+    """Linha da collection RAG `agente_evidence` §4.1 (base + chunk + meta + vetor).
 
-    STUB de ingestão (M11 §8-M11-A3: aprendizados promovidos entram na base
-    `resultados`): `embedding` fica None até o adapter pgvector real — o re-embed
-    acontece no `rag reindex` (§7.4); o chunk/meta já ficam íntegros e auditáveis.
+    Desde o A11 (§7.4) a ingestão (`python -m app.rag ingest`) preenche `embedding`
+    via EmbeddingPort e o adapter pgvector persiste/busca por cosseno; `None` só
+    sobrevive no fallback em memória para linhas legadas do stub M11 (ficam fora do
+    ranking — o `rag reindex` as re-embeda §7.4/§10.4).
     """
 
     id: uuid.UUID
@@ -34,7 +35,7 @@ class AgenteEvidence:
     ref: str | None
     chunk: str
     meta: dict[str, Any] = field(default_factory=dict)
-    embedding: list[float] | None = None  # vector(1024) — None no stub (§7.4)
+    embedding: list[float] | None = None  # vector(1024) — EMBED_DIM §3.1
 
 
 @dataclass

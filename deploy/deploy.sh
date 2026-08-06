@@ -24,10 +24,16 @@ local_main() {
     echo "APP_SECRET=$(openssl rand -hex 32)" > .env
     chmod 600 .env
   fi
+  # A22 · version-stamp: o commit que está sendo deployado viaja para dentro das
+  # imagens (ARG GIT_SHA) e reaparece em /healthz.sha — é assim que o smoke prova
+  # que o que subiu é o que foi buildado.
+  export GIT_SHA="$(git rev-parse --short HEAD)"
+  echo "deployando GIT_SHA=$GIT_SHA"
   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
   docker compose -f docker-compose.prod.yml ps
   sleep 3
   curl -fsS -o /dev/null -w "smoke local (web): HTTP %{http_code}\n" http://localhost:8050/ || true
+  echo "healthz: $(curl -fsS http://localhost:8000/healthz 2>/dev/null || docker compose -f docker-compose.prod.yml exec -T api curl -fsS http://localhost:8000/healthz 2>/dev/null || echo '(indisponível)')"
 }
 
 if [ "${1:-}" = "--local" ]; then local_main; else remote_main "$@"; fi

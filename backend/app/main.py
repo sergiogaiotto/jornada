@@ -5,6 +5,7 @@ erros RFC-7807, auth Bearer dev. `GET /healthz` fora do prefixo (ops).
 """
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated
@@ -14,9 +15,11 @@ from fastapi import Depends, FastAPI, Request, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from adapters.persistence.sql import RepositorioSql, criar_repositorio
 from api.v1 import api_router
 from app.config import get_settings
 from app.errors import problem_response, register_error_handlers
+from application.ports.embedding import EmbeddingPort
 
 TENANT_HEADER = "X-Tenant"
 API_PREFIX = "/api/v1"
@@ -54,10 +57,14 @@ async def ping_llm() -> str:
         return "skip"
 
 
-def create_app(*, demo: bool | None = None) -> FastAPI:
+def create_app(*, demo: bool | None = None, embedding: EmbeddingPort | None = None) -> FastAPI:
     """`demo` (§11.4): None = automático (DEMO_MODE=true e APP_ENV=dev carregam as
     seeds da OS-2026-0457); os testes de aceite criam o app com `demo=False` — os
-    aceites M0–M12 valem com e sem seeds (as seeds só ADICIONAM dados demo)."""
+    aceites M0–M12 valem com e sem seeds (as seeds só ADICIONAM dados demo).
+
+    `embedding` (A11 — §1.3.5): port de embeddings usado pela seed RAG do demo e
+    stashado em `app.state.embedding` (rotas). None = adapter real HubGPU; testes
+    com demo=True DEVEM injetar o fake (o hub real jamais é tocado em teste)."""
     settings = get_settings()  # valida config no startup (ex.: APP_SECRET em prod — §10.3)
     app = FastAPI(
         title="Jornada",
@@ -93,18 +100,52 @@ def create_app(*, demo: bool | None = None) -> FastAPI:
         db: Annotated[str, Depends(ping_db)],
         llm: Annotated[str, Depends(ping_llm)],
     ) -> dict[str, str]:
-        """M0-A1: `{db: ok, llm: skip|ok}` em <2s com o compose de pé."""
-        return {"db": db, "llm": llm}
+        """M0-A1: `{db: ok, llm: skip|ok}` em <2s com o compose de pé.
+
+        `sha` (A22 — version-stamp): commit embutido na imagem via ARG/ENV GIT_SHA.
+        O smoke pós-deploy do CI compara este valor com o SHA do run: divergiu, o
+        deploy não chegou (o "deploy-fantasma" que enganou a validação em 2026-08-05).
+        """
+        return {"db": db, "llm": llm, "sha": os.environ.get("GIT_SHA", "dev")}
+
+    # Persistência (A7 — §4/§10.9): DATABASE_URL setado no ambiente E alcançável
+    # → repos SQL (TODOS os agregados §4.1 em Postgres); senão memória (dev sem
+    # docker). Uma instância por app implementa todas as portas (§2.1).
+    repositorio = criar_repositorio(os.environ.get("DATABASE_URL"))
+    app.state.repositorio_os = repositorio
+    if embedding is not None:  # A11: rotas e seed RAG usam o port injetado (§1.3.5)
+        app.state.embedding = embedding
+
+    if isinstance(repositorio, RepositorioSql):
+        # A7 parte 2: com SQL o ledger `invocacao` tem FK para `agente` (§4.1) — o
+        # roster/política v1 (idempotentes, ids uuid5 §11.4) entram já no boot para
+        # nenhuma invocação chegar antes das linhas referenciadas. Em memória segue
+        # a semeadura tardia das rotas do Ateliê (comportamento dos testes intacto).
+        from adapters.atelie_seeds import semear_atelie, semear_politicas
+
+        agora_boot = datetime.now(UTC)
+        semear_atelie(repositorio, tenant_id=settings.default_tenant, agora=agora_boot)
+        semear_politicas(repositorio, tenant_id=settings.default_tenant, agora=agora_boot)
 
     if demo if demo is not None else (settings.demo_mode and settings.app_env == "dev"):
-        # Seeds DEMO_MODE (§11.4): repo em memória já semeado com a OS-2026-0457
-        # ponta a ponta — imports tardios evitam custo quando demo está desligado.
+        # Seeds DEMO_MODE (§11.4): OS-2026-0457 ponta a ponta. Idempotentes com
+        # persistência SQL: ids uuid5 determinísticos + upsert por id (restart não
+        # duplica) — import tardio evita custo quando demo está desligado.
         from adapters.demo_seeds import semear_demo
-        from adapters.persistence.memoria import RepositorioOsMemoria
 
-        repositorio = RepositorioOsMemoria()
         semear_demo(repositorio, tenant_id=settings.default_tenant, agora=datetime.now(UTC))
-        app.state.repositorio_os = repositorio
+
+        # A11 (§7.4/§11.4): base RAG `dicionario_dados` no boot demo. Embeddings via
+        # EmbeddingPort (real por default; teste injeta fake); sem hub → a própria
+        # seed PULA com log, sem quebrar o boot.
+        from adapters.embedding.hubgpu import EmbeddingHubGPU
+        from app.rag import semear_rag_demo
+
+        semear_rag_demo(
+            repositorio,
+            embedding if embedding is not None else EmbeddingHubGPU(settings),
+            tenant_id=settings.default_tenant,
+        )
 
     return app
 

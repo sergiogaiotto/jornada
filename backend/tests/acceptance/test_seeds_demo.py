@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from adapters.atelie_seeds import semear_atelie
 from adapters.demo_seeds import semear_demo
+from adapters.embedding.fake import EmbeddingFake
 from adapters.llm.fake import LLMFake
 from adapters.observabilidade.langfuse import TracerLangfuse
 from adapters.persistence.memoria import RepositorioOsMemoria
@@ -30,7 +31,9 @@ HEADERS = {"X-Tenant": TENANT, "Authorization": "Bearer dev-analista"}
 
 @pytest.fixture()
 def app_demo() -> FastAPI:
-    application = create_app(demo=True)
+    # A11: embedding fake INJETADO no create_app — a seed RAG do demo roda no boot
+    # e o hub real jamais é tocado em teste (§1.3.5).
+    application = create_app(demo=True, embedding=EmbeddingFake())
     application.dependency_overrides[ping_db] = lambda: "ok"
     application.state.llm = LLMFake()  # §1.3.5 — hub real jamais em teste
     application.state.tracer = TracerLangfuse(Settings(_env_file=None, langfuse_enabled=False))

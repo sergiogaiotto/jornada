@@ -3,7 +3,8 @@
  * DERIVADA (GET /os/{id}/saude — nunca editável), painel direito com a OS selecionada
  * e o digest do copiloto. "+ Nova Campanha" cria um pedido rascunho (POST /pedidos)
  * e abre a Sala de Ideação em modo pedido; "Pedidos em aberto" é a fila do intake
- * (GET /pedidos — §8-M3) acima do kanban, com abrir/arquivar (soft).
+ * (GET /pedidos — §8-M3) acima do kanban, com abrir/arquivar (soft) — SEMPRE visível,
+ * com estado vazio acionável ("+ Nova Campanha" ali dentro também) — A23.
  */
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
@@ -66,9 +67,32 @@ function CartaoOs({
   );
 }
 
+/** "+ Nova Campanha" — mesmo botão no cabeçalho e dentro do estado vazio da fila (A23). */
+function BotaoNovaCampanha({
+  onClick,
+  pendente,
+  className = "",
+}: {
+  onClick: () => void;
+  pendente: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`mbtn ${className}`}
+      title="Cria um pedido rascunho e abre a Sala de Ideação"
+      onClick={onClick}
+      disabled={pendente}
+    >
+      {pendente ? "Criando…" : "+ Nova Campanha"}
+    </button>
+  );
+}
+
 export function Cockpit() {
   const { data: oss, isLoading, error } = useOsLista();
-  const { data: pedidos, error: erroPedidos } = usePedidos();
+  const { data: pedidos, isLoading: carregandoPedidos, error: erroPedidos } = usePedidos();
   const [selecionadaId, setSelecionadaId] = useState<string | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -176,15 +200,11 @@ export function Cockpit() {
           titulo="Cockpit"
           subtitulo={`Portfólio · ${oss?.length ?? "…"} campanha(s) no ciclo · saúde derivada, nunca editável`}
         />
-        <button
-          type="button"
-          className="mbtn flex-none"
-          title="Cria um pedido rascunho e abre a Sala de Ideação"
+        <BotaoNovaCampanha
+          className="flex-none"
           onClick={() => novaCampanha.mutate()}
-          disabled={novaCampanha.isPending}
-        >
-          {novaCampanha.isPending ? "Criando…" : "+ Nova Campanha"}
-        </button>
+          pendente={novaCampanha.isPending}
+        />
       </div>
       {error != null && <BannerErro erro={error} contexto="Falha ao listar OSs" />}
       {erroPedidos != null && <BannerErro erro={erroPedidos} contexto="Falha ao listar pedidos" />}
@@ -205,62 +225,74 @@ export function Cockpit() {
         <Kpi rotulo="No ciclo" valor={oss?.length ?? 0} tom="blue" detalhe="todas as fases" />
       </div>
 
-      {/* Pedidos em aberto (fila do intake §8-M3) — acima do kanban */}
-      {pedidos && pedidos.length > 0 && (
-        <div className="mcard mb-4">
-          <div className="mb-2 text-[10px] font-bold uppercase tracking-[.06em] text-faint">
-            Pedidos em aberto · {pedidos.length}
+      {/* Pedidos em aberto (fila do intake §8-M3) — acima do kanban. SEMPRE visível:
+          escondê-lo quando vazio dava a impressão de que a fila não existe (A23). */}
+      <div className="mcard mb-4">
+        <div className="mb-2 text-[10px] font-bold uppercase tracking-[.06em] text-faint">
+          Pedidos em aberto · {pedidos ? pedidos.length : carregandoPedidos ? "…" : "—"}
+        </div>
+        {carregandoPedidos && (
+          <div className="py-2 text-center text-[11.5px] text-ghost">
+            Carregando fila do intake…
           </div>
-          {pedidos.map((p) => (
-            <div key={p.id} className="mfield items-center">
-              <span className="min-w-0 flex-1">
-                <span className="block text-[12.5px] font-bold text-ink2">
-                  {String(p.solicitante?.["nome"] ?? "Pedido")}{" "}
-                  <ChipEstadoPedido estado={p.estado} />
-                </span>
-                <span className="mt-1 flex items-center gap-2">
-                  <span className="w-28 flex-none">
-                    <BarraProgresso
-                      pct={p.completude}
-                      tom={p.completude === 100 ? "good" : "blue"}
-                    />
-                  </span>
-                  <span className="text-[11.5px] tabular-nums text-slatex">
-                    {p.completude.toFixed(0)}%
-                  </span>
-                  {p.faltantes.length > 0 && (
-                    <span className="truncate text-[11.5px] text-warn">
-                      falta: {p.faltantes.join(" · ")}
-                    </span>
-                  )}
-                </span>
+        )}
+        {pedidos?.length === 0 && (
+          <div className="flex flex-col items-center gap-2.5 py-4 text-center">
+            <span className="text-[13px] text-muted">
+              Nenhum pedido em aberto — comece por <b>+ Nova Campanha</b>
+            </span>
+            <BotaoNovaCampanha
+              onClick={() => novaCampanha.mutate()}
+              pendente={novaCampanha.isPending}
+            />
+          </div>
+        )}
+        {(pedidos ?? []).map((p) => (
+          <div key={p.id} className="mfield items-center">
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12.5px] font-bold text-ink2">
+                {String(p.solicitante?.["nome"] ?? "Pedido")}{" "}
+                <ChipEstadoPedido estado={p.estado} />
               </span>
-              <span className="flex flex-none items-center gap-1.5">
-                {p.estado === "convertido" && p.os_id ? (
-                  <Link to={`/os/${p.os_id}/briefing`} className="mbtn-gh !px-2 !py-1 !text-[11px]">
-                    Abrir OS →
-                  </Link>
-                ) : (
-                  <>
-                    <Link to={`/pedidos/${p.id}`} className="mbtn-gh !px-2 !py-1 !text-[11px]">
-                      Abrir
-                    </Link>
-                    <button
-                      type="button"
-                      className="mbtn-gh !px-2 !py-1 !text-[11px]"
-                      title="Arquivamento soft — o pedido some da fila mas segue legível"
-                      onClick={() => arquivar.mutate(p.id)}
-                      disabled={arquivar.isPending}
-                    >
-                      Arquivar
-                    </button>
-                  </>
+              <span className="mt-1 flex items-center gap-2">
+                <span className="w-28 flex-none">
+                  <BarraProgresso pct={p.completude} tom={p.completude === 100 ? "good" : "blue"} />
+                </span>
+                <span className="text-[11.5px] tabular-nums text-slatex">
+                  {p.completude.toFixed(0)}%
+                </span>
+                {p.faltantes.length > 0 && (
+                  <span className="truncate text-[11.5px] text-warn">
+                    falta: {p.faltantes.join(" · ")}
+                  </span>
                 )}
               </span>
-            </div>
-          ))}
-        </div>
-      )}
+            </span>
+            <span className="flex flex-none items-center gap-1.5">
+              {p.estado === "convertido" && p.os_id ? (
+                <Link to={`/os/${p.os_id}/briefing`} className="mbtn-gh !px-2 !py-1 !text-[11px]">
+                  Abrir OS →
+                </Link>
+              ) : (
+                <>
+                  <Link to={`/pedidos/${p.id}`} className="mbtn-gh !px-2 !py-1 !text-[11px]">
+                    Abrir
+                  </Link>
+                  <button
+                    type="button"
+                    className="mbtn-gh !px-2 !py-1 !text-[11px]"
+                    title="Arquivamento soft — o pedido some da fila mas segue legível"
+                    onClick={() => arquivar.mutate(p.id)}
+                    disabled={arquivar.isPending}
+                  >
+                    Arquivar
+                  </button>
+                </>
+              )}
+            </span>
+          </div>
+        ))}
+      </div>
 
       {isLoading && <EstadoVazio>Carregando portfólio…</EstadoVazio>}
       {oss && oss.length === 0 && (

@@ -145,6 +145,12 @@ export function Rail() {
           {!colapsado && <span>Colapsar</span>}
           <span className="ml-auto pr-1">{colapsado ? "»" : "«"}</span>
         </button>
+        {/* A22 · version-stamp: a versão da SPA no ar, sem abrir o DevTools. */}
+        {!colapsado && (
+          <div className="px-3 pb-2 pt-1 text-[10px] text-white/45" title="versão da build (A22)">
+            build {import.meta.env.VITE_GIT_SHA ?? "dev"}
+          </div>
+        )}
       </div>
     </nav>
   );
