@@ -3,6 +3,37 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — F01 · O backend de RNG era acidental — a simulação não reproduzia entre ambientes
+Descoberto ao integrar a onda 1: quatro testes passavam no Windows e falhavam no CI. A causa não era
+o SO — era `numpy` **não constar do `requirements.txt`**. `adapters/aleatorio.rng_disponivel()`
+escolhe entre `RngNumpy` (binomial exata vetorizada) e `RngPadrao` (stdlib) conforme o numpy esteja
+instalado, então a máquina de dev (com numpy, por arrasto de outra instalação) rodava um algoritmo
+de amostragem e o CI/VPS rodavam outro. O mesmo grafo com a MESMA seed dava conversões P50 **1625,0
+num lado e 1736,5 no outro**.
+
+Isso contradiz o §6/M8-A1 ("a mesma seed reproduz os mesmos P10/P50/P90") no ponto onde mais custa: o
+**Previsto congelado** (§1.1.2) é a régua contra a qual o realizado é medido depois do lançamento, e
+o número aprovado em homologação não se reproduzia em produção. Nenhum teste pegava porque todos
+rodavam num ambiente só de cada vez — a promessa era verificada *dentro* de um backend, nunca *entre*
+backends.
+
+- **`numpy~=1.26` passa a ser dependência declarada** (§3.2), fixando o caminho recomendado do §6.
+- **Aceite `test_F01_rng_canonico.py`**: o backend em uso É o numpy (falha alto se sumir das
+  dependências, em vez de trocar de algoritmo em silêncio); mesma seed reproduz todos os campos;
+  seeds distintas divergem.
+- Nota de método: a primeira versão do teste de divergência passava por engano — eu chamava o motor
+  com `personas={}`, e sem personas ele não amostra nada (o volume atravessa o grafo, conversões
+  zero), então a seed não tinha o que influenciar. O aceite agora monta as personas pelo mesmo
+  gerador que o `SimuladorService` usa.
+
+**Achado colateral, não corrigido:** os pins do `requirements.txt` usam `~=X.Y` com um nível só, o
+que é mais frouxo do que parece — `fastapi~=0.115` aceitou **0.141** no container. Dev, CI e VPS
+podem estar rodando versões diferentes umas das outras hoje. Foi o que quebrou o aceite `E05_A7`: a
+partir do FastAPI 0.12x o `include_router` deixa de achatar as rotas em `app.routes`, a varredura
+devolvia lista **vazia**, e um aceite de segurança que passa por não enxergar nada é pior que aceite
+nenhum (agora ele varre os paths do OpenAPI, que são o contrato). A correção de fundo — arquivo de
+lock com versões exatas — fica para a onda de produção.
+
 ## 2026-08-06 — UAT #5 onda 1 · Os cinco achados críticos (E01–E05) + smoke funcional
 Achados do `docs/UAT5-2026-08-06-cacada.md`. Cada correção foi escrita por um agente e depois
 **reprovada ou aprovada por um auditor cético** que reproduziu o ataque original, tentou variações

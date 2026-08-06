@@ -15,6 +15,14 @@ openai~=1.50
 httpx~=0.27
 tenacity~=9.0
 zeep~=4.2
+# numpy NÃO é opcional (emenda F01 — UAT #5 onda 1). O §6/M8-A1 promete que a mesma
+# seed reproduz os mesmos P10/P50/P90, mas `adapters/aleatorio.rng_disponivel()` troca
+# de ALGORITMO conforme o numpy esteja instalado ou não — e ele não constava daqui. Na
+# prática o mesmo grafo com a mesma seed dava conversões P50 1625,0 numa máquina com
+# numpy e 1736,5 no CI/VPS sem ele: o "Previsto congelado" que serve de régua pós-
+# lançamento (§1.1.2) dependia de uma dependência acidental. Fixado no caminho
+# recomendado do §6 (binomial exata vetorizada), igual em dev, CI e produção.
+numpy~=1.26
 langfuse~=2.53
 python-jose[cryptography]~=3.3
 structlog~=24.4

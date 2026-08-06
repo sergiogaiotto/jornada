@@ -133,10 +133,13 @@ def test_E05_A7_nenhuma_rota_privada_mora_sob_o_prefixo_publico(app: FastAPI) ->
     Com barra no fim (`/api/v1/aprovacao/`), `/api/v1/aprovacaoX` não entra; e o único
     conteúdo do prefixo são as duas rotas do link mágico. Se alguém pendurar rota nova
     aí, este aceite quebra ANTES de virar um bypass silencioso de tenant."""
+    # Varre o CONTRATO (paths do OpenAPI), não `app.routes`: a partir do FastAPI 0.12x
+    # o `include_router` deixa de achatar as rotas em `app.routes`, e a varredura ingênua
+    # devolvia lista VAZIA — um aceite de segurança que passa por não enxergar nada é
+    # pior que aceite nenhum. O `~=` do requirements permitia 0.115 no dev e 0.141 no CI,
+    # então o teste passava aqui e quebrava lá (emenda F01).
     publicas = sorted(
-        rota.path  # type: ignore[attr-defined]
-        for rota in app.routes
-        if getattr(rota, "path", "").startswith(ROTAS_PUBLICAS)
+        caminho for caminho in app.openapi()["paths"] if caminho.startswith(ROTAS_PUBLICAS)
     )
     assert publicas == ["/api/v1/aprovacao/{token}", "/api/v1/aprovacao/{token}/decidir"], publicas
     assert all(prefixo.endswith("/") for prefixo in ROTAS_PUBLICAS), ROTAS_PUBLICAS
