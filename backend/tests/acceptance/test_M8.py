@@ -639,6 +639,48 @@ def test_M8_A6_evasoes_da_segregacao(client: TestClient, app: FastAPI) -> None:
     assert outro.json()["aprovador_email"] == "aprovador+jornada@claro.com.br"
 
 
+def test_M8_A6b_quem_emite_nao_endereca_o_link_a_si_mesmo(client: TestClient, app: FastAPI) -> None:
+    """E02b (UAT #5 pós-onda 1): a primeira guarda comparava o aprovador só com o
+    `criado_por` do SNAPSHOT — mas montar o pacote é um clique disponível a qualquer
+    Escritor. O líder que desenhou a jornada pedia ao analista para empacotar e depois
+    emitia o link para si mesmo: 201 na emissão, 200 na decisão, §10.5 evaporada com o
+    controle constando como "no ar". Quem emite também não aprova.
+    """
+    repo = app.state.repositorio_os
+    # o ANALISTA monta o pacote — então `criado_por` != quem vai emitir
+    _, _, snap = _preparar_snapshot(client, app, token="dev-analista")
+    assert repo.obter_snapshot(uuid.UUID(snap["id"])).conteudo["criado_por"] == (
+        "analista@dev.jornada.local"
+    )
+
+    # o LÍDER emite para si mesmo: passa pela guarda do criador (são pessoas distintas)
+    # e tem a alçada da faixa — só a segregação do EMISSOR pode recusar
+    auto = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "lider@dev.jornada.local"},
+        headers=_h("dev-lider"),
+    )
+    assert auto.status_code == 409, auto.text
+    assert "para si mesmo" in auto.json()["detail"]
+    assert not repo.listar_aprovacoes(uuid.UUID(snap["id"])), "nenhum token pode nascer"
+
+    # subendereçamento do emissor cai na mesma caixa
+    plus = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "Lider+aprova@Dev.Jornada.Local"},
+        headers=_h("dev-lider"),
+    )
+    assert plus.status_code == 409, plus.text
+
+    # emitir para OUTRA pessoa segue funcionando (o caminho legítimo não pode fechar)
+    ok = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador.externo@claro.com.br"},
+        headers=_h("dev-lider"),
+    )
+    assert ok.status_code == 201, ok.text
+
+
 # ------------------------------------------------- Contrato das demais rotas §8-M8 (T9)
 
 

@@ -93,13 +93,37 @@ def _sem_comentarios(sql: str) -> str:
                 j += 1
             saida.append(sql[i : j + 1])
             i = j + 1
+        elif ch == "$":  # dollar-quoting do Postgres: $$…$$ / $tag$…$tag$ é LITERAL
+            # Sem isto, `descricao = $$ … NOT EXISTS(...) $$` é string para o banco e
+            # "supressão" para o Guard (UAT #5 pós-onda 1).
+            fecha = re.match(r"\$[A-Za-z_]\w*\$|\$\$", sql[i:])
+            if fecha:
+                marca = fecha.group(0)
+                fim = sql.find(marca, i + len(marca))
+                saida.append(" ")  # o conteúdo é dado, não código
+                i = n if fim == -1 else fim + len(marca)
+            else:
+                saida.append(ch)
+                i += 1
         elif sql.startswith("--", i):
             while i < n and sql[i] != "\n":
                 i += 1
         elif sql.startswith("/*", i):
-            fim = sql.find("*/", i + 2)
+            # ANINHADO: o Postgres aninha `/* … /* … */ … */`. Fechar no PRIMEIRO `*/`
+            # deixava a cauda visível ao Guard e comentada para o banco — a assimetria
+            # na direção errada (o Guard via supressão que o banco descartava).
+            profundidade, j = 1, i + 2
+            while j < n and profundidade:
+                if sql.startswith("/*", j):
+                    profundidade += 1
+                    j += 2
+                elif sql.startswith("*/", j):
+                    profundidade -= 1
+                    j += 2
+                else:
+                    j += 1
             saida.append(" ")
-            i = n if fim == -1 else fim + 2
+            i = j if profundidade == 0 else n
         else:
             saida.append(ch)
             i += 1
@@ -238,6 +262,70 @@ class _Ramo:
     opt_in_invertido: bool = False
 
 
+_FALSIDADE = re.compile(
+    r"\b(?:false)\b|\b(\d+)\s*=\s*(\d+)\b|\b(\d+)\s*(?:<>|!=)\s*(\d+)\b", re.IGNORECASE
+)
+
+
+def _interior_falso(interior: str) -> bool:
+    """`NOT EXISTS (… AND 1=0)` é sempre verdadeiro: a subconsulta não devolve linha e
+    a "supressão" não remove ninguém. Vale para `false`, `1=0`, `2<>2` (emenda E01b)."""
+    for achado in _FALSIDADE.finditer(interior):
+        if achado.group(0).lower() == "false":
+            return True
+        a, b, c, d = achado.groups()
+        if a is not None and a != b:  # `1 = 0`
+            return True
+        if c is not None and c == d:  # `1 <> 1`
+            return True
+    return False
+
+
+def _cobre_de_verdade(predicado: str) -> bool:
+    """A folha exclui a lista de fato? Só as formas CANÔNICAS do §4.1 contam (E01b).
+
+    Aceita — e nada além disso:
+      · `NOT EXISTS (SELECT … FROM <lista> …)` e `… NOT IN (SELECT … FROM <lista> …)`,
+        com a lista na posição de FONTE (após FROM/JOIN) ou citada em literal dentro da
+        subconsulta (`s.lista IN ('blacklist', …)`, o padrão legítimo do read model);
+      · coluna-bandeira negada: `<lista> = 0 | = false | IS NULL | IS FALSE | <> 1`,
+        com a lista do lado ESQUERDO do operador.
+    Recusa o resto por construção: `NOT (…)` genérico, `NOT LIKE`, e subconsulta cujo
+    interior é falso (não devolve linha, logo não suprime).
+    """
+    texto = " ".join(predicado.split())
+    baixo = texto.lower()
+
+    # (a) exclusão por conjunto — a lista precisa estar DENTRO dos parênteses da negação
+    for achado in re.finditer(r"\bnot\s+(?:exists|in)\s*\(", baixo):
+        inicio = achado.end() - 1
+        profundidade, fim = 0, len(texto)
+        for pos in range(inicio, len(texto)):
+            if texto[pos] == "(":
+                profundidade += 1
+            elif texto[pos] == ")":
+                profundidade -= 1
+                if profundidade == 0:
+                    fim = pos
+                    break
+        interior = baixo[inicio + 1 : fim]
+        if _interior_falso(interior):
+            continue  # subconsulta vazia: não suprime ninguém
+        if any(lista in interior for lista in SETE_LISTAS):
+            return True
+
+    # (b) coluna-bandeira negada — a lista é o LADO ESQUERDO do operador
+    for lista in SETE_LISTAS:
+        padrao = (
+            rf"\b[\w.]*{re.escape(lista)}\w*\s*"
+            r"(?:=\s*(?:0|false)\b|<>\s*(?:1|true)\b|!=\s*(?:1|true)\b"
+            r"|is\s+null\b|is\s+false\b|is\s+not\s+true\b)"
+        )
+        if re.search(padrao, baixo):
+            return True
+    return False
+
+
 def _folha(predicado: str) -> _Ramo:
     """Predicado atômico: a lista só conta se estiver sob EXCLUSÃO (NOT EXISTS/NOT IN…).
 
@@ -255,7 +343,17 @@ def _folha(predicado: str) -> _Ramo:
     estrutura = _estrutura_do_predicado(predicado).lower()
     ramo.citadas = {lista for lista in SETE_LISTAS if lista in texto}
     if ramo.citadas:
-        if _EXCLUSAO.search(estrutura):
+        # E01b (UAT #5 pós-onda 1) — RECONHECER A FORMA, não procurar o mal. A versão
+        # anterior dava a lista por coberta quando a MENÇÃO aparecia no texto e um
+        # `_EXCLUSAO` qualquer aparecia na estrutura. Como `_estrutura_do_predicado`
+        # esvazia o interior dos parênteses mas os preserva, `NOT (tipo = 'blacklist
+        # … optout')` virava `not ( )` — casava `\bnot\s*\(` e passava. `obs NOT LIKE
+        # '%blacklist …%'` idem. Ambos são predicados que não excluem ninguém.
+        #
+        # Denylist de evasão é corrida armamentista: cada rodada fecha as conhecidas e
+        # abre as próximas (foi a terceira volta neste mesmo ponto). Agora a lista só
+        # conta em FORMA CANÔNICA de supressão — o que o parser não reconhece não passa.
+        if _cobre_de_verdade(predicado):
             ramo.cobertas = set(ramo.citadas)
         elif _CONJUNTO.search(estrutura):
             ramo.invertidas = set(ramo.citadas)

@@ -283,3 +283,81 @@ def test_emitir_certificado_recusa_supressao_zero() -> None:
         suprimidos={lista: 10 for lista in SETE_LISTAS}, **argumentos
     )
     assert len(certificado.hash) == 64 and certificado.liquido == 888_620
+
+
+# ----------------------------------------------------- E01b (UAT #5 pós-onda 1)
+# A primeira correção fechou as 5 evasões catalogadas e REABRIU a mesma classe com
+# operadores vizinhos: a lista era dada por coberta quando a MENÇÃO aparecia no texto
+# e um `_EXCLUSAO` qualquer aparecia na estrutura do predicado. Como
+# `_estrutura_do_predicado` esvazia o interior dos parênteses mas os preserva,
+# `NOT (tipo = 'blacklist … optout')` virava `not ( )` e casava. Denylist de evasão é
+# corrida armamentista — a folha passou a reconhecer FORMA CANÔNICA de supressão.
+_LISTAS_NO_TEXTO = " ".join(SETE_LISTAS)
+_NOT_EXISTS_7 = " AND ".join(
+    f"NOT EXISTS (SELECT 1 FROM {lista} s WHERE s.id = c.id)" for lista in SETE_LISTAS
+)
+
+
+@pytest.mark.parametrize(
+    ("nome", "sql"),
+    [
+        (
+            "not_parenteses",  # `NOT ( )` na estrutura — predicado que não exclui ninguém
+            f"SELECT id FROM contatos c WHERE NOT (tipo = '{_LISTAS_NO_TEXTO}') AND opt_in = 1",
+        ),
+        (
+            "not_like",  # idem, casando `\bnot\s+like\b`
+            f"SELECT id FROM contatos c WHERE obs NOT LIKE '%{_LISTAS_NO_TEXTO}%' AND opt_in = 1",
+        ),
+        (
+            "comentario_aninhado",  # o Postgres aninha; fechar no 1º `*/` mostrava a cauda
+            f"SELECT id FROM contatos c WHERE /* nota /* interna */ {_NOT_EXISTS_7} */ "
+            "1 = 1 AND opt_in = 1",
+        ),
+        (
+            "subconsulta_vazia",  # `NOT EXISTS (… AND 1=0)` é sempre verdadeiro
+            "SELECT id FROM contatos c WHERE "
+            + " AND ".join(
+                f"NOT EXISTS (SELECT 1 FROM {lista} s WHERE s.id = c.id AND 1 = 0)"
+                for lista in SETE_LISTAS
+            )
+            + " AND opt_in = 1",
+        ),
+        (
+            "dollar_quoting",  # $$…$$ é literal no banco e era código para o Guard
+            f"SELECT id FROM contatos c WHERE descricao = $$ {_NOT_EXISTS_7} $$ AND opt_in = 1",
+        ),
+    ],
+)
+def test_E01b_predicado_que_nao_exclui_ninguem_e_reprovado(nome: str, sql: str) -> None:
+    """Cada um destes saía com certificado 201 e `suprimidos` preenchido."""
+    faltantes, problemas = guard.problemas_no_sql(sql)
+    assert faltantes or problemas, f"{nome}: SQL que não suprime ninguém foi aprovado"
+
+
+@pytest.mark.parametrize(
+    ("nome", "sql"),
+    [
+        (
+            "not_exists",
+            f"SELECT id FROM contatos c WHERE {_NOT_EXISTS_7} AND opt_in = 1",
+        ),
+        (
+            "coluna_bandeira",
+            "SELECT id FROM contatos c WHERE "
+            + " AND ".join(f"{lista} = 0" for lista in SETE_LISTAS)
+            + " AND opt_in = 1",
+        ),
+        (
+            "not_in",
+            "SELECT id FROM contatos c WHERE "
+            + " AND ".join(f"c.id NOT IN (SELECT id FROM {lista})" for lista in SETE_LISTAS)
+            + " AND opt_in = 1",
+        ),
+    ],
+)
+def test_E01b_formas_canonicas_de_supressao_seguem_passando(nome: str, sql: str) -> None:
+    """O fix não pode fechar o caminho legítimo — falha para o lado seguro é fácil
+    demais, e um Guard que reprova tudo é substituído pelo primeiro analista apressado."""
+    faltantes, problemas = guard.problemas_no_sql(sql)
+    assert not faltantes and not problemas, f"{nome}: {faltantes} {problemas}"

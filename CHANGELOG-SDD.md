@@ -3,6 +3,60 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — E01b/E02b · A onda 1 corrigiu por fora e deixou a classe aberta
+Revisão adversarial do **código novo** da própria onda 1 (o diff `716ecfb..99b056a`). Os dois
+achados abaixo são regressão ou controle que não faz o que declara — e ambos estavam com o CI verde,
+que é exatamente o problema.
+
+### E01b · O Guard reabriu a classe do bypass trocando um operador vizinho
+A correção E01 fechou as cinco evasões catalogadas e **reabriu a mesma classe**. A `_folha`
+procurava a MENÇÃO da lista no texto cru e o FORMATO na estrutura do predicado; como
+`_estrutura_do_predicado` esvazia o interior dos parênteses mas os preserva,
+`NOT (tipo = 'blacklist … optout')` virava `not ( )`, casava `\bnot\s*\(` e a lista era dada por
+coberta. Reproduzidos e medidos, todos saindo com certificado:
+
+| SQL | Por que passava |
+|---|---|
+| `NOT (tipo = '<as 7 listas>')` | `not ( )` na estrutura, menção no texto |
+| `obs NOT LIKE '%<as 7 listas>%'` | idem, casando `not like` |
+| `/* nota /* interna */ …NOT EXISTS… */` | o higienizador fechava no **primeiro** `*/`; o Postgres aninha, então o Guard via supressão que o banco descartava |
+| `descricao = $$ …NOT EXISTS… $$` | dollar-quoting é literal no banco e era código para o Guard |
+| `NOT EXISTS (… AND 1 = 0)` | subconsulta que nunca devolve linha — "supressão" sempre verdadeira |
+
+**Denylist de evasão é corrida armamentista** — esta era a terceira volta no mesmo ponto. A folha
+passa a **reconhecer FORMA CANÔNICA** (`_cobre_de_verdade`): a lista só conta em `NOT EXISTS`/
+`NOT IN` com a lista dentro dos parênteses da negação e o interior não-falso, ou como coluna-bandeira
+negada (`<lista> = 0 | IS NULL | <> 1`) do lado esquerdo do operador. O que o parser não reconhece
+**não passa** — falha fechada. O higienizador passou a contar profundidade de `/* */` e a tratar
+dollar-quoting como literal.
+
+Aceites em `test_guard_evasoes.py`: os cinco bypasses reprovados **e** três formas legítimas
+(`NOT EXISTS`, coluna-bandeira, `NOT IN`) que seguem passando — um Guard que reprova tudo é
+contornado pelo primeiro analista apressado. Inversão verificada: com a lógica antiga, três dos
+cinco voltam a passar (os outros dois moram no higienizador).
+
+**Não corrigido, e é o motivo de E01b não ter atenuante:** a "camada 2" (cruzar com as contagens
+reais) é **inerte na configuração implantada**. `ReadModelFixtures.contagens_segmentacao` recebe o
+`sql_publico` e o ignora, e é o único adapter que `get_read_model` instancia — os certificados de
+bypass saíam com o dicionário `suprimidos` byte a byte idêntico ao do SQL conforme. Enquanto o read
+model for fixture, a validação textual é a única barreira. Fica registrado como limitação, não como
+promessa: o docstring de `problemas_nas_contagens` já a declara; o overclaim está em
+`emitir_certificado`.
+
+### E02b · A segregação comparava com quem empacotou, nunca com quem emite
+`criar_link_magico` conferia `aprovador_email` contra o `criado_por` do snapshot e contra o roster —
+**nunca contra `actor`**, o portador autenticado que está emitindo. Mas montar o snapshot é um
+clique disponível a qualquer Escritor: bastava o líder que desenhou a jornada pedir ao analista para
+empacotar e depois emitir o link para si mesmo. 201 na emissão, 200 na decisão, §10.5 evaporada com
+o controle constando como resolvido no CHANGELOG — pior que não existir.
+
+Distinto do pendente conhecido (lá o furo é o criador usar um token endereçado a outra pessoa, e a
+mitigação é login real): aqui o link está legitimamente endereçado ao próprio emissor, e **a sessão
+autenticada confirmaria a identidade que o código deixou passar**. Uma linha: 409 quando
+`_chave_identidade(aprovador) == _chave_identidade(actor)`. Aceite `test_M8_A6b_...`, com o snapshot
+montado pelo analista para isolar a guarda nova (se o criador fosse o emissor, a guarda antiga
+recusaria e o aceite passaria sem exercer nada — o erro que já derrubou o primeiro corte do A6).
+
 ## 2026-08-06 — D01 · "Começar do zero" em OS com experimento pré-registrado (§8-M7)
 Registrado no UAT #4 como menor e reclassificado ao restaurar a VPS: `POST /os/{id}/jornada`
 respondia **422 `holdout_ausente`** em qualquer OS que já tivesse passado pelo portão de

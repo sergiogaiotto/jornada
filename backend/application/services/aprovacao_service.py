@@ -603,6 +603,17 @@ class ServicoAprovacao(_Base):
                 f"{aprovador} montou este snapshot e não pode aprová-lo: criador ≠ aprovador "
                 "é checagem server-side (§10.5). Emita o link para outra pessoa."
             )
+        # …e nem o EMISSOR pode endereçar o link a si mesmo (emenda E02b — UAT #5 pós-onda 1).
+        # A primeira versão desta guarda só olhava o `criado_por` do snapshot, que é apenas quem
+        # apertou `POST /snapshots` — ação de um clique disponível a qualquer Escritor. Bastava o
+        # líder que desenhou a jornada pedir ao analista para empacotar e depois emitir o link
+        # para si mesmo: 201 na emissão, 200 na decisão, §10.5 evaporada com o controle "no ar".
+        # `actor` é o portador autenticado desta requisição — a identidade que o `decidir` não tem.
+        if _chave_identidade(aprovador) == _chave_identidade(_email_normalizado(actor)):
+            raise EstadoInvalido(
+                f"{aprovador} está emitindo este link para si mesmo: quem emite não aprova "
+                "(§10.5). Emita para o aprovador designado."
+            )
         papel_exigido = str(faixa["papel"])
         aptos = _papeis_aptos(faixa, POLITICA_PUBLICADA["conteudo"])
         if papeis_aprovador is not None and not (aptos & set(papeis_aprovador)):
