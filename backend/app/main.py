@@ -26,12 +26,24 @@ from application.ports.embedding import EmbeddingPort
 TENANT_HEADER = "X-Tenant"
 API_PREFIX = "/api/v1"
 
-# Rotas PÚBLICAS de /api/v1 — isentas do header X-Tenant (emenda C03, §8-M8/§8-M0-A2),
-# como /healthz já é isento por viver fora do prefixo. Aqui a credencial é o TOKEN do
-# link mágico e o tenant é DERIVADO dele no servidor (aprovacao_service._por_token): o
-# aprovador é externo, abre a URL do e-mail e não tem como mandar header nenhum. O
-# header continua ACEITO (a SPA manda) e, quando vem, é conferido contra o tenant real
-# do pacote. Prefixo fechado: só `/aprovacao/...` entra — nada mais do M8 é público.
+# Rotas de /api/v1 isentas do header X-Tenant OBRIGATÓRIO (emenda C03, §8-M8/§8-M0-A2),
+# como /healthz já é isento por viver fora do prefixo.
+#
+# ATENÇÃO ao nome (E03 — frente 3, §10.5): "PÚBLICAS" virou herança histórica e a emenda
+# propõe renomear para ROTAS_SEM_TENANT_HEADER. `/aprovacao/*` NÃO é mais anônima —
+# ambas as rotas exigem sessão autenticada na própria rota (api/v1/portoes.py), porque o
+# token do link mágico deixou de ser credencial e virou ponteiro para o pacote. Isento
+# aqui = "não precisa ANUNCIAR tenant", nunca "não precisa de credencial".
+#
+# Por que a isenção do header sobrevive ao login: esta é a URL que se abre ANTES de ter
+# app aberto (link colado no chat, deep link), quando o cliente ainda não sabe qual
+# tenant anunciar — o mesmo motivo pelo qual a futura rota de login não pode exigir o
+# header. O escopo vem da SESSÃO (`get_tenant_do_aprovador`) e o pacote é conferido
+# contra ele; o header, quando anunciado, continua sendo conferido — divergiu, 403.
+#
+# Prefixo fechado: só `/aprovacao/...` entra (test_E05_A7 guarda isso). Frente 1: as
+# rotas de login/troca de senha entram AQUI quando existirem — antes do login não há
+# tenant a anunciar. Nada mais do M8 é isento.
 ROTAS_PUBLICAS: tuple[str, ...] = (f"{API_PREFIX}/aprovacao/",)
 
 
@@ -102,9 +114,10 @@ def create_app(*, demo: bool | None = None, embedding: EmbeddingPort | None = No
         · sem portador reconhecido → o header segue como estava e a rota responde 401
           (o middleware não pode virar oráculo de "este token existe?").
 
-        Exceção: ROTAS_PUBLICAS (link mágico — C03) seguem sem header e sem Bearer; o
-        tenant vem do token do pacote. Se o header vier, é repassado e o serviço o
-        confere contra o pacote — comportamento intacto."""
+        Exceção: ROTAS_PUBLICAS (link mágico — C03) seguem sem header obrigatório. Desde o
+        E03 (§10.5) elas exigem SESSÃO na rota, e o tenant efetivo delas vem do portador,
+        não mais do token: quem confere é `get_tenant_do_aprovador` (api/v1/portoes.py),
+        inclusive o 403 do header divergente. O middleware só se abstém do 400."""
         if request.url.path.startswith(API_PREFIX):
             anunciado = request.headers.get(TENANT_HEADER)
             if request.url.path.startswith(ROTAS_PUBLICAS):

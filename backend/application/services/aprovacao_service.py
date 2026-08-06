@@ -21,6 +21,23 @@ recusa (409) quando ele é o `criado_por` do snapshot e confere o papel contra o
 quando o e-mail é de um usuário do sistema. `decidir` não aceita mais identidade pelo
 corpo: o actor da decisão é o e-mail congelado na emissão (mesma doutrina do C03 — o que
 o cliente declara é asserção a CONFERIR, nunca fonte da verdade).
+
+E03 (§10.5 — frente 3, UAT #5 pós-onda 1): o TOKEN deixa de ser credencial e vira
+PONTEIRO. O furo que o A6/E02b não fechava: `POST /snapshots/{id}/link-magico` devolve o
+token em claro a quem emite, e `decidir` era anônimo — logo quem emitia continuava de
+posse da credencial do aprovador e podia decidir por ele em outra aba. Com login real
+(sessão do §8-M0), a identidade de quem decide passa a vir da SESSÃO e é conferida contra
+o `aprovador_email` congelado na emissão — por `_mesma_conta` (igualdade EXATA), e NÃO
+pela `_chave_identidade` que a segregação do E02b usa: aquela alarga o casamento para
+recusar mais, e alargar do lado que CONCEDE é escalação de privilégio (ver a função):
+
+· `payload_aprovacao` e `decidir` exigem `sessao_email` (a rota já exige sessão) —
+  não existe mais caminho anônimo para o pacote nem para a decisão;
+· sessão ≠ destinatário do link ⇒ `AcaoNaoPermitida` (403) SEM nomear o aprovador;
+· `criar_link_magico` recusa e-mail SEM CONTA no sistema (409): sem camada de e-mail, o
+  aprovador precisa de conta para logar — falhar na emissão (onde o emissor age) é melhor
+  que entregar um link que morre na decisão. De quebra fecha o buraco de "e-mail de fora
+  pula a checagem de alçada", porque `papeis_aprovador is None` deixa de ser tolerado.
 """
 
 import hashlib
@@ -31,7 +48,12 @@ from typing import Any
 
 from application.ports.clock import ClockPort
 from application.ports.repositorio_aprovacao import RepositorioAprovacao
-from domain.campanha.erros import CodigoDuplicado, EstadoInvalido, NaoEncontrado
+from domain.campanha.erros import (
+    AcaoNaoPermitida,
+    CodigoDuplicado,
+    EstadoInvalido,
+    NaoEncontrado,
+)
 from domain.campanha.modelos import OS, EventoDominio, Pendencia
 from domain.experimento.modelos import Experimento
 from domain.experimento.poder import ALFA, PODER_ALVO, n_minimo_por_mde
@@ -79,12 +101,42 @@ def _chave_identidade(valor: str | None) -> str:
     Só ALARGA o conjunto barrado — é comparação de segurança, e errar para o lado de
     recusar custa um link a reemitir. O endereço GRAVADO segue sendo o normalizado, que
     é o que o destinatário de fato usa; esta chave nunca é persistida nem exibida.
+
+    NUNCA use esta chave para CONCEDER (autorizar, casar sessão com destinatário): do
+    lado que concede, o mesmo alargamento vira escalação de privilégio — `aprovador+qa@x`
+    é uma CONTA distinta, com papéis próprios. Para conceder existe `_mesma_conta`.
     """
     normalizado = _email_normalizado(valor)
     local, arroba, dominio = normalizado.partition("@")
     if not arroba:
         return normalizado
     return f"{local.partition('+')[0]}@{dominio}"
+
+
+def _mesma_conta(um: str | None, outro: str | None) -> bool:
+    """Esta sessão é a do aprovador designado? (§10.5/E03 — a régua que CONCEDE.)
+
+    Igualdade EXATA do e-mail normalizado, e não a `_chave_identidade` da segregação —
+    de propósito, porque as duas perguntas têm o sinal do erro invertido:
+
+    · **Recusar** (E02b, `criar_link_magico`): "estas duas identidades podem ser a mesma
+      pessoa?" Alargar é conservador — barrar demais custa um link a reemitir.
+    · **Conceder** (E03, aqui): "esta sessão É a conta a quem o link foi endereçado?"
+      Alargar aqui não barra gente demais, AUTORIZA gente demais — é escalação de
+      privilégio, e o alargamento é justamente o `+tag`.
+
+    O ataque que esta função fecha (achado da auditoria da frente 3): `aprovador+qa@x` é
+    uma CONTA distinta — login próprio, senha própria, papéis próprios. Com a comparação
+    por chave, a sessão dela decidia um link endereçado a `aprovador@x`, tornando
+    decorativa a alçada conferida na emissão (§11.4) e carimbando `decidido_por` com o
+    e-mail do inocente. Nada se perde no caminho legítimo: desde o E03 o link só nasce
+    endereçado a um e-mail que TEM conta, e é o e-mail da conta que a sessão apresenta —
+    as duas pontas são a mesma string normalizada.
+
+    Vazio de qualquer lado é `False` — sem identidade não há casamento (falha fechada).
+    """
+    conta_um, conta_outro = _email_normalizado(um), _email_normalizado(outro)
+    return bool(conta_um) and conta_um == conta_outro
 
 
 def _papeis_aptos(faixa: dict[str, Any], politica: dict[str, Any]) -> set[str]:
@@ -573,8 +625,15 @@ class ServicoAprovacao(_Base):
         · e-mail do roster (§8-M0) sem o papel da faixa ⇒ alçada de fachada.
 
         `papeis_aprovador` vem da borda (api/v1/portoes.py sabe do roster; a camada de
-        aplicação não importa `app.*`). `None` = aprovador de FORA do sistema (o cliente,
-        caso normal do link mágico) — sem informação, não se inventa veredito.
+        aplicação não importa `app.*`). `None` = e-mail SEM CONTA no sistema.
+
+        E03 (§10.5 — frente 3): `None` deixa de ser tolerado e vira recusa (409). Antes o
+        aprovador podia ser um e-mail qualquer de fora, porque o token era a credencial;
+        agora quem decide precisa de SESSÃO, então sem conta o link nasceria morto. Duas
+        consequências, ambas boas: a falha acontece na EMISSÃO, com o emissor na frente da
+        tela e o admin a um pedido de distância (não há e-mail para convidar — §8-M0); e o
+        veredito de alçada deixa de ser pulável — bastava endereçar o link a um e-mail de
+        fora para a checagem de papel virar no-op.
         """
         snapshot, os_ = self._snapshot_da_os(tenant_id, snapshot_id)
         custo = float(snapshot.conteudo["componentes"]["custo"]["previsto_p50"])
@@ -616,7 +675,13 @@ class ServicoAprovacao(_Base):
             )
         papel_exigido = str(faixa["papel"])
         aptos = _papeis_aptos(faixa, POLITICA_PUBLICADA["conteudo"])
-        if papeis_aprovador is not None and not (aptos & set(papeis_aprovador)):
+        if papeis_aprovador is None:  # E03 (§10.5): sem conta, sem link
+            raise EstadoInvalido(
+                f"{aprovador} não é usuário do sistema e a decisão exige sessão autenticada "
+                "(§10.5/§8-M0): o link mágico aponta para o pacote, não vale como credencial. "
+                "Peça ao admin para criar a conta do aprovador e emita o link depois."
+            )
+        if not (aptos & set(papeis_aprovador)):
             raise ForaDeAlcada(
                 f"{aprovador} é usuário do sistema com papéis {sorted(papeis_aprovador)}, e a "
                 f"faixa de custo deste snapshot exige `{papel_exigido}` ou acima "
@@ -658,16 +723,35 @@ class ServicoAprovacao(_Base):
         }
 
     # ------------------------------------------------- GET /aprovacao/{token}
-    def payload_aprovacao(self, token: str, *, tenant_id: str | None = None) -> dict[str, Any]:
+    def payload_aprovacao(
+        self,
+        token: str,
+        *,
+        tenant_id: str | None = None,
+        sessao_email: str,
+        sessao_nome: str | None = None,
+    ) -> dict[str, Any]:
         """Página standalone (§8-M8): resumo, waterfall, criativos, replay do previsto,
-        hash. O token é a credencial (sem login) — link expirado e não decidido → 410.
+        hash. Link expirado e não decidido → 410.
 
-        C03: `tenant_id` é OPCIONAL — o tenant sai do próprio token (ver `_por_token`)."""
+        C03: `tenant_id` segue sem vir de header — mas agora vem da SESSÃO (a rota passa
+        `usuario.tenant_id`), que é a mesma doutrina levada ao seu limite: o escopo nunca
+        é asserção do cliente.
+
+        E03 (§10.5): `sessao_email` é OBRIGATÓRIO — não há mais leitura anônima. O pacote
+        carrega dados de campanha e, pelo achado 9 do UAT #5, PII vinda do briefing; um
+        token de 72h numa URL (histórico, referer, print no WhatsApp) não é controle de
+        acesso para isso. Quem PODE ler é qualquer sessão do tenant dono do pacote — são
+        os mesmos dados que essa pessoa já lê pelas rotas da OS —, e `_por_token` recusa
+        (404) o token de outro tenant. Quem pode DECIDIR é só o destinatário: o bloco
+        `sessao.pode_decidir` diz isso à UI para ela não oferecer um botão que dará 403.
+        """
         aprovacao, snapshot, os_ = self._por_token(token, tenant_id)
         invalidar_aprovacoes_por_custo(self._repo, os_, self._relogio)  # A4 na página
         if aprovacao.decisao is None and self._relogio.agora() > aprovacao.expira_em:
             raise LinkExpirado("Link mágico expirado — solicite um novo (§8-M8-A3).")
         componentes = snapshot.conteudo["componentes"]
+        destinatario = self._destinatario_do_link(os_, aprovacao)  # A6 (§10.5)
         return {
             "os": {"codigo": os_.codigo, "nome": os_.nome, "fase": os_.fase},
             "snapshot": {
@@ -676,7 +760,15 @@ class ServicoAprovacao(_Base):
                 "created_at": snapshot.created_at.isoformat() if snapshot.created_at else None,
             },
             "alcada": aprovacao.alcada,
-            "aprovador_email": self._destinatario_do_link(os_, aprovacao),  # A6 (§10.5)
+            "aprovador_email": destinatario,  # A6 (§10.5)
+            # E03: quem está lendo, e se essa pessoa é quem pode decidir (a UI usa para
+            # não oferecer botão que dará 403). `pode_decidir` é a MESMA comparação do
+            # `decidir` — se divergirem, a tela mente; por isso saem da mesma função.
+            "sessao": {
+                "email": _email_normalizado(sessao_email),
+                "nome": sessao_nome,
+                "pode_decidir": _mesma_conta(sessao_email, destinatario),
+            },
             "expira_em": aprovacao.expira_em.isoformat(),
             "resumo": {
                 "custo": componentes["custo"],
@@ -701,6 +793,7 @@ class ServicoAprovacao(_Base):
         token: str,
         *,
         tenant_id: str | None = None,
+        sessao_email: str,
         decisao: str,
         ressalvas: list[str],
         decidido_por: str | None,
@@ -717,8 +810,31 @@ class ServicoAprovacao(_Base):
         e-mail carimbado na emissão do link; `decidido_por` sobrevive apenas como asserção
         a conferir (mesma doutrina que o C03 aplicou ao `X-Tenant`) e divergiu → 409, para
         que uma tentativa de forjar identidade apareça na cara do chamador em vez de sumir
-        num descarte silencioso."""
+        num descarte silencioso.
+
+        E03 (§10.5): o A6 congelou A QUEM o link foi endereçado, mas quem APRESENTAVA o
+        token seguia anônimo — e o token em claro volta para as mãos de quem emite. Agora
+        a decisão exige SESSÃO e a sessão tem que ser a do destinatário: posse do token
+        deixa de ser poder de decidir. O 403 é deliberadamente MUDO sobre quem é o
+        aprovador — quem está com um token que não é seu não ganha o e-mail de brinde.
+
+        Ordem importa: a identidade é conferida ANTES do estado do link (usado/expirado/
+        invalidado). Assim o portador indevido recebe sempre o mesmo 403 e não consegue
+        usar as respostas como oráculo do estado do pacote.
+        """
         aprovacao, snapshot, os_ = self._por_token(token, tenant_id)
+        aprovador = self._destinatario_do_link(os_, aprovacao)
+        if aprovador is None:
+            raise EstadoInvalido(
+                "Link mágico sem destinatário carimbado (emitido antes da segregação §10.5) — "
+                "gere um link novo nomeando o aprovador."
+            )
+        if not _mesma_conta(sessao_email, aprovador):
+            raise AcaoNaoPermitida(
+                "Esta decisão pertence ao aprovador designado no pacote e a sessão atual não "
+                "é a dele — ter o link não dá direito de decidir (§10.5). Entre com a conta "
+                "do aprovador ou peça um link novo endereçado a você."
+            )
         invalidar_aprovacoes_por_custo(self._repo, os_, self._relogio)
         if aprovacao.invalidada_em is not None:
             raise AprovacaoInvalidada(
@@ -728,12 +844,6 @@ class ServicoAprovacao(_Base):
             raise LinkJaUtilizado("Link mágico já utilizado — a decisão é de uso único (§8-M8-A3).")
         if self._relogio.agora() > aprovacao.expira_em:
             raise LinkExpirado("Link mágico expirado — solicite um novo (§8-M8-A3).")
-        aprovador = self._destinatario_do_link(os_, aprovacao)
-        if aprovador is None:
-            raise EstadoInvalido(
-                "Link mágico sem destinatário carimbado (emitido antes da segregação §10.5) — "
-                "gere um link novo nomeando o aprovador."
-            )
         if decidido_por is not None and _email_normalizado(decidido_por) != aprovador:
             raise EstadoInvalido(
                 "`decidido_por` diverge do aprovador para quem o link foi emitido — a "
@@ -787,8 +897,17 @@ class ServicoAprovacao(_Base):
 
         aprovacao.decisao = decisao
         aprovacao.decidido_em = agora
-        # ip/device continuam na trilha (A3); `decidido_por` agora é o e-mail congelado (A6)
-        aprovacao.decidido_meta = {"ip": ip, "device": device, "decidido_por": aprovador}
+        # ip/device continuam na trilha (A3); `decidido_por` agora é o e-mail congelado (A6).
+        # `sessao_email` (E03) é o e-mail AUTENTICADO que apertou o botão: casa com o
+        # congelado pela chave da pessoa, mas pode diferir no rótulo (`+tag`) — e é ele que
+        # prova que houve sessão, não posse de token. Guardar os dois é o que permite ler a
+        # trilha depois e saber que a decisão veio de alguém logado (§10.2/§2.3).
+        aprovacao.decidido_meta = {
+            "ip": ip,
+            "device": device,
+            "decidido_por": aprovador,
+            "sessao_email": _email_normalizado(sessao_email),
+        }
         aprovacao.ressalvas = registro_ressalvas
         self._repo.salvar_aprovacao(aprovacao)
 

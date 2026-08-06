@@ -525,3 +525,35 @@ tabela_policy_versao = Table(
     Column("estado", Text),
     Column("publicada_em", DateTime(timezone=True)),
 )
+
+# --- Identidade (emenda G01): `usuario` do §4.1 com corpo + `sessao` — migração 0015 ---
+tabela_usuario = Table(
+    "usuario",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("tenant_id", Text, nullable=False),
+    Column("nome", Text),
+    Column("email", Text, nullable=False),  # unique POR TENANT sobre lower(email) — 0015
+    Column("papeis", ARRAY(Text)),
+    Column("senha_hash", Text),  # argon2id (PHC string); NUNCA sai do adapter/serviço
+    Column("ativo", Boolean),
+    Column("senha_expirada", Boolean),
+    Column("criado_em", DateTime(timezone=True)),
+    Column("criado_por", UUID(as_uuid=True)),
+    Column("ultimo_acesso", DateTime(timezone=True)),
+    Column("tentativas_falhas", Integer),
+    Column("bloqueado_ate", DateTime(timezone=True)),
+)
+
+tabela_sessao = Table(
+    "sessao",
+    metadata,
+    # `id` é TEXT: guarda o sha256 do token do cookie (o segredo nunca chega ao banco)
+    Column("id", Text, primary_key=True),
+    Column("usuario_id", UUID(as_uuid=True), nullable=False),
+    Column("criada_em", DateTime(timezone=True), nullable=False),
+    Column("expira_em", DateTime(timezone=True), nullable=False),
+    Column("revogada_em", DateTime(timezone=True)),
+    Column("ip", Text),
+    Column("user_agent", Text),
+)

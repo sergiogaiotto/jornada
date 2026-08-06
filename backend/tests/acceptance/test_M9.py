@@ -185,13 +185,21 @@ def _snapshot_da_jornada(client: TestClient, jornada_id: uuid.UUID, os_id: uuid.
 def _aprovar(client: TestClient, snapshot_id: str) -> None:
     token = client.post(
         f"/api/v1/snapshots/{snapshot_id}/link-magico",
-        json={"aprovador_email": "aprovador@claro.com.br"},  # A6 §10.5: link endereçado
+        # A6 §10.5: link endereçado. E03: o destinatário precisa ter CONTA — quem
+        # decide precisa de sessão, então link para quem não loga nasceria morto.
+        json={"aprovador_email": "aprovador@dev.jornada.local"},
         headers=_h(),
     ).json()["token"]
     decidida = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
-        json={"decisao": "aprovado", "decidido_por": "aprovador@claro.com.br"},
-        headers={"X-Tenant": TENANT, "User-Agent": "pytest-m9"},
+        json={"decisao": "aprovado"},
+        # E03 (§10.5): a decisão exige a SESSÃO do aprovador designado — a identidade
+        # não vem mais do corpo nem da posse do token.
+        headers={
+            "Authorization": "Bearer dev-aprovador",
+            "X-Tenant": TENANT,
+            "User-Agent": "pytest-m9",
+        },
     )
     assert decidida.status_code == 200, decidida.text
 

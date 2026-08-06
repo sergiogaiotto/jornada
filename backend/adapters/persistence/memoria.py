@@ -31,6 +31,7 @@ from domain.criativo.modelos import Criativo
 from domain.esteira.modelos import EtapaWorkflow, HikeImportLog
 from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Aprovacao, PolicyVersao, Snapshot
+from domain.identidade.modelos import ContaUsuario, Sessao
 from domain.intake.modelos import Pedido
 from domain.jornada.modelos import (
     DriftCheck,
@@ -98,6 +99,9 @@ class RepositorioOsMemoria:
         self._harness_runs: list[HarnessRun] = []
         self._policies: dict[uuid.UUID, PolicyVersao] = {}
         self._ordem_policy: list[uuid.UUID] = []
+        self._usuarios: dict[uuid.UUID, ContaUsuario] = {}  # G01
+        self._ordem_usuario: list[uuid.UUID] = []  # G01 — ordem de criação na listagem
+        self._sessoes: dict[str, Sessao] = {}  # G01 — chave = sha256 do token do cookie
         self._eventos: list[EventoDominio] = []
         self._seq_evento = itertools.count(1)
         self._seq_os: dict[tuple[str | None, int], itertools.count[int]] = {}
@@ -667,6 +671,58 @@ class RepositorioOsMemoria:
             reverse=True,
         )
         return pontuadas[: max(k, 0)]
+
+    # --- Identidade (`usuario`/`sessao` §4.1 + migração 0015 — emenda G01) ---
+    def adicionar_usuario(self, conta: ContaUsuario) -> None:
+        """UPSERT por id (mesma semântica do adapter SQL) — bootstrap idempotente."""
+        if conta.id not in self._usuarios:
+            self._ordem_usuario.append(conta.id)
+        self._usuarios[conta.id] = conta
+
+    def salvar_usuario(self, conta: ContaUsuario) -> None:
+        self.adicionar_usuario(conta)
+
+    def obter_usuario(self, usuario_id: uuid.UUID) -> ContaUsuario | None:
+        return self._usuarios.get(usuario_id)
+
+    def obter_usuario_por_email(self, tenant_id: str, email: str) -> ContaUsuario | None:
+        """Escopo de tenant OBRIGATÓRIO: o unique é `(tenant_id, lower(email))` desde a
+        migração 0015 — busca global aqui seria o oráculo cross-tenant do achado 22."""
+        alvo = email.strip().lower()
+        return next(
+            (
+                u
+                for u in self._usuarios.values()
+                if u.tenant_id == tenant_id and u.email.lower() == alvo
+            ),
+            None,
+        )
+
+    def listar_usuarios(self, tenant_id: str) -> list[ContaUsuario]:
+        return [
+            self._usuarios[i]
+            for i in self._ordem_usuario
+            if self._usuarios[i].tenant_id == tenant_id
+        ]
+
+    def adicionar_sessao(self, sessao: Sessao) -> None:
+        self._sessoes[sessao.id] = sessao
+
+    def obter_sessao(self, sessao_id: str) -> Sessao | None:
+        return self._sessoes.get(sessao_id)
+
+    def salvar_sessao(self, sessao: Sessao) -> None:
+        self._sessoes[sessao.id] = sessao
+
+    def revogar_sessoes_do_usuario(self, usuario_id: uuid.UUID, agora: datetime) -> int:
+        """Só as VIVAS: reescrever `revogada_em` de uma sessão já revogada apagaria o
+        instante real da revogação anterior (a trilha por pessoa depende dele)."""
+        revogadas = 0
+        for sessao in self._sessoes.values():
+            if sessao.usuario_id == usuario_id and sessao.revogada_em is None:
+                sessao.revogada_em = agora
+                revogadas += 1
+        return revogadas
 
     # --- Outbox (§2.3) ---
     def adicionar_evento(self, evento: EventoDominio) -> None:

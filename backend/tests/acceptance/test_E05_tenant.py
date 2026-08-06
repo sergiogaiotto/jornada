@@ -92,17 +92,31 @@ def test_E05_A4_sem_header_segue_400_e_credencial_invalida_segue_401(
     assert token_falso.status_code == 401
 
 
-def test_E05_A5_rotas_publicas_do_link_magico_intactas(client: TestClient) -> None:
-    """C03 preservado: `/aprovacao/*` segue SEM header e SEM Bearer (o aprovador
-    externo não tem como mandar nenhum dos dois) — 404 do token inexistente, nunca
-    400/403 do middleware. Header anunciado segue sendo anúncio conferido no serviço."""
+def test_E05_A5_link_magico_isento_do_header_mas_nao_da_sessao(client: TestClient) -> None:
+    """C03 preservado NA PARTE QUE IMPORTA; E03 (§10.5) somado por cima.
+
+    O C03 tirou de `/aprovacao/*` o `X-Tenant` OBRIGATÓRIO, e isso continua valendo: o
+    deep link é aberto direto do chat/e-mail e nenhuma resposta aqui é o 400 do
+    middleware. O que MUDOU é que o token deixou de ser credencial e virou ponteiro para
+    o pacote (o emissor recebe o token em claro — §10.5): sem sessão a resposta agora é
+    401, não mais o 404 do token inexistente. Não é regressão do C03, é o complemento
+    dele — o escopo saiu do token e foi para o portador autenticado, como no resto da API
+    desde o achado 5."""
     sem_nada = client.get("/api/v1/aprovacao/token-que-nao-existe")
-    assert sem_nada.status_code == 404
+    assert sem_nada.status_code == 401  # 401, e não 400: o header segue dispensado
 
     anunciando = client.get(
         "/api/v1/aprovacao/token-que-nao-existe", headers={"X-Tenant": "torre-residencial"}
     )
-    assert anunciando.status_code == 404
+    assert anunciando.status_code == 401
+
+    # COM sessão e SEM header: o middleware continua não exigindo nada — a resposta é o
+    # 404 do token que não existe, que é o que o C03 fixou.
+    com_sessao = client.get(
+        "/api/v1/aprovacao/token-que-nao-existe",
+        headers={"Authorization": "Bearer dev-aprovador"},
+    )
+    assert com_sessao.status_code == 404
 
 
 # ------------------------------------------------- Achado 5 · a CLASSE, não o caso

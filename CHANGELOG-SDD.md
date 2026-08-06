@@ -3,6 +3,73 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — G01 · Autenticação local real (§8-M0) — onda 2 do corte para produção
+A aplicação deixa de ser demo autenticada por token estático. O RBAC do §8-M0 já existia
+(`require_role` com 6 papéis, usado por todas as rotas); o que faltava era **identidade real** por
+trás dele — hoje `Bearer dev-analista` entra como analista e o próprio cliente escolhe quem é.
+
+- **Usuários locais** (`usuario` + `sessao`, migração nova): senha em **argon2id**, e-mail único por
+  tenant, bloqueio temporal por tentativas, `senha_expirada` forçando troca antes de liberar
+  qualquer rota. Sem camada de e-mail no projeto, o admin cria a conta com senha provisória exibida
+  uma vez na tela.
+- **Sessão revogável por cookie httpOnly**, id opaco de 256 bits, rotacionado no login e na troca de
+  senha. Não JWT em `localStorage`: token ali cai com qualquer XSS, e sessão em tabela permite
+  revogar de verdade (logout, bloqueio, expiração) e dá a trilha por pessoa que o Art. 20 pressupõe.
+  `Secure` do cookie é configuração, não constante — liga quando o TLS entrar.
+- **Login não revela se o e-mail existe**, nem pela mensagem nem pelo tempo (o caminho "inexistente"
+  paga o mesmo argon2 de uma isca).
+- **`DEV_TOKENS`/`PORTAL_TOKENS` só valem com `APP_ENV=dev`**, com fail-fast no startup — fecha o
+  achado do UAT #5 em que `Bearer dev-admin` funcionava mesmo em produção.
+- **Bootstrap do root** por `JORNADA_ROOT_EMAIL`/`JORNADA_ROOT_SENHA`, idempotente (não reseta quem
+  já trocou), conta nascendo expirada. Os valores vivem só no `.env` do servidor.
+- **Frontend**: telas de login, troca obrigatória e administração de usuários; guard de rota no 401;
+  o seletor de papel por `localStorage` foi removido — não é mais o cliente que decide quem é.
+
+### E03 · O link mágico deixa de ser credencial
+O furo que o E02b não fechava: a emissão devolve o token em claro a quem emite, e `decidir` era
+anônimo — quem tivesse o token decidia. Com sessão real, o token vira **ponteiro** para o pacote e a
+identidade de quem decide vem da sessão, conferida contra o `aprovador_email` congelado na emissão.
+`criar_link_magico` passa a recusar e-mail **sem conta** no sistema (409): sem camada de e-mail, o
+aprovador precisa de conta para logar, e falhar na emissão — onde o emissor está — é melhor que
+entregar um link que morre na decisão. De quebra fecha o buraco em que "e-mail de fora" pulava a
+checagem de alçada.
+
+Detalhe que a auditoria da frente forçou e vale registrar: a comparação que **concede** usa
+igualdade exata (`_mesma_conta`), e **não** a `_chave_identidade` que a segregação usa. As duas
+perguntas têm o sinal do erro invertido — alargar do lado que recusa é conservador; alargar do lado
+que concede é escalação de privilégio, porque `aprovador+qa@x` é uma conta distinta, com papéis
+próprios.
+
+### Achados da auditoria adversarial (3, todos corrigidos antes do commit)
+1. **CRÍTICO — o `.env.example` fabricava um admin com credencial publicada.** O parser de `.env` só
+   trata `# …` como comentário quando a linha **tem valor**; com `JORNADA_ROOT_EMAIL=  # login do
+   root …` o texto do comentário virava o VALOR. Quem seguisse a instrução da linha 1 do arquivo
+   ("copiar para .env") ganhava um root funcional cujo login e senha eram duas frases impressas no
+   repositório — e `senha_expirada=True` não salvava nada, porque `trocar-senha` é justamente uma
+   das rotas liberadas nesse estado. Corrigido no arquivo (comentário de variável vazia vai ACIMA da
+   chave) e travado por `login_utilizavel()`: nenhum login legítimo tem espaço no meio, então
+   configuração podre não vira conta. Há teste que lê o `.env.example` real.
+2. **A senha provisória sobrevivia à própria troca** — `trocar_senha` aceitava
+   `senha_nova == senha_atual`, então o gesto óbvio (provisória → provisória) limpava a flag e
+   deixava o admin com credencial permanente da conta alheia. A checagem fica **só** nessa rota: no
+   `resetar_senha` do admin a mesma comparação seria um oráculo.
+3. **A "higiene de segredo" era teatro e quebrava o bootstrap** — o código zerava
+   `settings.jornada_root_senha` alegando limpar a memória, mas a variável segue em `os.environ` e
+   todo `Settings()` novo a relê; pior, escrevia no objeto do `lru_cache` (global ao processo)
+   enquanto o controle de "já semeei" é do app, então o segundo `create_app()` do mesmo processo
+   subia **sem root e sem erro**. Removido; o `SecretStr`, que é o que de fato protege repr e
+   traceback, fica.
+
+### Ressalvas registradas, não corrigidas
+- **Sem limite por IP no login.** O bloqueio é por conta, então *password spraying* (uma senha ×
+  muitas contas) não dispara nada — e cada tentativa custa um argon2 de 64 MiB numa rota não
+  autenticada, o que é amplificador de DoS. Precisa de limite no proxy reverso **antes de PII real**.
+- **argon2 dentro de `async def` bloqueia o event loop** (~100 ms por login). O projeto inteiro usa
+  `async def` com repositório síncrono, então a frente não divergiu unilateralmente — mas aqui é
+  pior por ser rota aberta e memory-hard.
+- A VPS segue com `APP_ENV: dev` no compose, então os tokens `dev-*` continuam valendo lá. Aceitável
+  enquanto for demo com dado sintético; **é `homolog`/`prod` que os desliga** no dia do PII real.
+
 ## 2026-08-06 — E01b/E02b · A onda 1 corrigiu por fora e deixou a classe aberta
 Revisão adversarial do **código novo** da própria onda 1 (o diff `716ecfb..99b056a`). Os dois
 achados abaixo são regressão ou controle que não faz o que declara — e ambos estavam com o CI verde,

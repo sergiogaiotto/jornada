@@ -266,12 +266,27 @@ def test_M8_grafo_invalido_422(client: TestClient, app: FastAPI) -> None:
 
 # ================================================= M8 parte 2 · Portões T9 + Aprovação T10
 # Fluxo (§8-M8): simular → congelar previsto → snapshot (hash composto) → link mágico
-# → decisão. Rotas de /aprovacao/* são standalone: o TOKEN é a credencial (sem Bearer
-# e, desde C03/A5, sem X-Tenant — o tenant é derivado do token).
+# → decisão. As rotas de /aprovacao/* são STANDALONE (sem shell, §12) e dispensam
+# `X-Tenant` (C03/A5) — mas, desde o E03 (§10.5), NÃO são anônimas: o token deixou de ser
+# credencial e virou ponteiro para o pacote; quem lê e quem decide vem da SESSÃO.
 
-_H_PUBLICO = {"X-Tenant": TENANT, "User-Agent": "pytest-aprovador"}
-# A5 (C03): o aprovador externo abre a URL do e-mail — nenhum header do app.
-_H_EXTERNO = {"User-Agent": "pytest-aprovador-externo"}
+# O aprovador designado dos aceites: usuário do sistema com o papel `aprovador`, que
+# cobre a faixa de alçada deste snapshot (§11.4). Desde o E03 o destinatário do link
+# PRECISA ter conta — sem conta não há sessão, e sem sessão não há decisão.
+APROVADOR = "aprovador@dev.jornada.local"  # dono do Bearer `dev-aprovador`
+
+# Sessão do aprovador COM o header do app (o caminho da SPA)…
+_H_APROVADOR = {
+    "X-Tenant": TENANT,
+    "Authorization": "Bearer dev-aprovador",
+    "User-Agent": "pytest-aprovador",
+}
+# …e SEM header nenhum além da credencial: o deep link aberto direto do chat/e-mail, que
+# é o caso do C03/A5 e continua valendo — o escopo sai da sessão, não de um header.
+_H_APROVADOR_SEM_TENANT = {
+    "Authorization": "Bearer dev-aprovador",
+    "User-Agent": "pytest-aprovador-externo",
+}
 
 
 def _preparar_snapshot(
@@ -334,7 +349,7 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
 
     link = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador@claro.com.br"},  # A6: link nasce endereçado
+        json={"aprovador_email": APROVADOR},  # A6: link nasce endereçado
         headers=_h(),
     )
     assert link.status_code == 201, link.text
@@ -343,26 +358,33 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
     assert token in corpo_link["url"] and "/aprovacao/" in corpo_link["url"]  # rota §12
     assert corpo_link["alcada"] == "lider"  # custo ~R$81 → faixa `ate` 100k (§11.4)
 
-    # página standalone: SEM Bearer — o token é a credencial; hash + replay do previsto
-    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_PUBLICO)
+    # página standalone com a SESSÃO do aprovador (E03); hash + replay do previsto
+    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_APROVADOR)
     assert pagina.status_code == 200, pagina.text
     assert pagina.json()["snapshot"]["hash"] == snap["hash"]
     assert pagina.json()["previsto"]["congelado_em"]
+    assert pagina.json()["sessao"] == {  # E03: a UI sabe quem está decidindo
+        "email": APROVADOR,
+        "nome": "Dev Aprovador",
+        "pode_decidir": True,
+    }
 
     decisao = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
         json={
             "decisao": "aprovado_ressalvas",
             "ressalvas": ["Ajustar copy do e-mail", "Confirmar verba com financeiro"],
-            "decidido_por": "aprovador@claro.com.br",
+            "decidido_por": APROVADOR,
         },
-        headers=_H_PUBLICO,
+        headers=_H_APROVADOR,
     )
     assert decisao.status_code == 200, decisao.text
     corpo = decisao.json()
     assert corpo["decisao"] == "aprovado_ressalvas"
     assert corpo["decidido_meta"]["ip"]  # ip registrado (TestClient → "testclient")
     assert corpo["decidido_meta"]["device"] == "pytest-aprovador"  # device = user-agent
+    # E03: a trilha guarda o e-mail AUTENTICADO da sessão, não só o congelado no link
+    assert corpo["decidido_meta"]["sessao_email"] == APROVADOR
     assert len(corpo["pendencias_criadas"]) == 2
 
     # ressalvas viraram pendências bloqueantes na OS (origem aprovacao:{id})
@@ -377,7 +399,7 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
 
     # uso ÚNICO: decidir de novo com o mesmo token → 409 problem+json
     repetida = client.post(
-        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_PUBLICO
+        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_APROVADOR
     )
     assert repetida.status_code == 409
     assert repetida.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
@@ -385,7 +407,7 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
     # expiração: segundo link, vencido → 410 Gone no GET e no decidir
     link2 = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador@claro.com.br"},
+        json={"aprovador_email": APROVADOR},
         headers=_h(),
     ).json()
     aprovacao2 = next(
@@ -395,18 +417,20 @@ def test_M8_A3(client: TestClient, app: FastAPI) -> None:
     )
     aprovacao2.expira_em = datetime.now(UTC) - timedelta(hours=1)
     repo.salvar_aprovacao(aprovacao2)
-    assert client.get(f"/api/v1/aprovacao/{link2['token']}", headers=_H_PUBLICO).status_code == 410
+    assert (
+        client.get(f"/api/v1/aprovacao/{link2['token']}", headers=_H_APROVADOR).status_code == 410
+    )
     vencida = client.post(
         f"/api/v1/aprovacao/{link2['token']}/decidir",
         json={"decisao": "aprovado"},
-        headers=_H_PUBLICO,
+        headers=_H_APROVADOR,
     )
     assert vencida.status_code == 410
     assert vencida.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 
     # token desconhecido não vaza existência → 404
     token_falso = "x" * 43
-    assert client.get(f"/api/v1/aprovacao/{token_falso}", headers=_H_PUBLICO).status_code == 404
+    assert client.get(f"/api/v1/aprovacao/{token_falso}", headers=_H_APROVADOR).status_code == 404
 
 
 def test_M8_A4(client: TestClient, app: FastAPI) -> None:
@@ -415,12 +439,12 @@ def test_M8_A4(client: TestClient, app: FastAPI) -> None:
     _, os_id, snap = _preparar_snapshot(client, app)
     token = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador@claro.com.br"},
+        json={"aprovador_email": APROVADOR},
         headers=_h(),
     ).json()["token"]
     assert (
         client.post(
-            f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_PUBLICO
+            f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_APROVADOR
         ).status_code
         == 200
     )
@@ -452,22 +476,23 @@ def test_M8_A4(client: TestClient, app: FastAPI) -> None:
 
 
 def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> None:
-    """A5 (C03 — UAT #3 adversarial): o link mágico é STANDALONE de verdade.
+    """A5 (C03 — UAT #3 adversarial), revisto pelo E03: o link mágico é STANDALONE de
+    verdade, e standalone NÃO quer dizer anônimo.
 
-    O aprovador externo recebe a URL por e-mail e abre no navegador: nenhum header do
-    app viaja junto. O fluxo inteiro (ver o pacote → decidir → uso único) tem que rodar
-    SEM `X-Tenant` — o tenant é derivado do próprio token no servidor. O escopo continua
-    fechado: header anunciando OUTRO tenant → 404 sem vazar a existência do link, e o
-    resto da API v1 segue exigindo o header (§8-M0-A2)."""
+    O que o C03 provou e continua valendo: o deep link é aberto direto (chat, e-mail,
+    barra do navegador) e nenhum header do app viaja junto — o fluxo inteiro (ver o
+    pacote → decidir → uso único) roda SEM `X-Tenant`. O que muda com o E03 é a FONTE do
+    escopo: antes derivado do token, agora do portador autenticado — porque o token
+    deixou de ser credencial. O resto da API v1 segue exigindo o header (§8-M0-A2)."""
     jornada_id, os_id, snap = _preparar_snapshot(client, app)
     token = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador.externo@claro.com.br"},
+        json={"aprovador_email": APROVADOR},
         headers=_h(),
     ).json()["token"]
 
-    # 1) página pública SEM X-Tenant
-    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_EXTERNO)
+    # 1) página SEM X-Tenant, só com a sessão
+    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_APROVADOR_SEM_TENANT)
     assert pagina.status_code == 200, pagina.text
     assert pagina.json()["snapshot"]["hash"] == snap["hash"]
     assert pagina.json()["decisao"] is None
@@ -475,8 +500,8 @@ def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> Non
     # 2) decisão SEM X-Tenant
     decisao = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
-        json={"decisao": "aprovado", "decidido_por": "aprovador.externo@claro.com.br"},
-        headers=_H_EXTERNO,
+        json={"decisao": "aprovado", "decidido_por": APROVADOR},
+        headers=_H_APROVADOR_SEM_TENANT,
     )
     assert decisao.status_code == 200, decisao.text
     assert decisao.json()["decisao"] == "aprovado"
@@ -487,14 +512,21 @@ def test_M8_A5_link_magico_sem_x_tenant(client: TestClient, app: FastAPI) -> Non
 
     # 3) uso ÚNICO continua valendo sem header: 2ª decisão → 409
     repetida = client.post(
-        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_EXTERNO
+        f"/api/v1/aprovacao/{token}/decidir",
+        json={"decisao": "aprovado"},
+        headers=_H_APROVADOR_SEM_TENANT,
     )
     assert repetida.status_code == 409
     assert repetida.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 
-    # 4) escopo fechado: header anunciando outro tenant não alcança o pacote
-    outro = client.get(f"/api/v1/aprovacao/{token}", headers={"X-Tenant": "torre-residencial"})
-    assert outro.status_code == 404
+    # 4) escopo fechado: anunciar OUTRO tenant não alcança o pacote. O 403 vem de
+    # `get_current_user` (emenda G01) — o header é asserção conferida contra a credencial,
+    # e a isenção do C03 é do header OBRIGATÓRIO, nunca da conferência.
+    outro = client.get(
+        f"/api/v1/aprovacao/{token}",
+        headers={**_H_APROVADOR_SEM_TENANT, "X-Tenant": "torre-residencial"},
+    )
+    assert outro.status_code == 403, outro.text
 
     # 5) a isenção é SÓ do link mágico — o resto da API v1 segue exigindo X-Tenant
     sem_tenant = client.get("/api/v1/os", headers={"Authorization": "Bearer dev-analista"})
@@ -564,21 +596,21 @@ def test_M8_A6_criador_nao_aprova(client: TestClient, app: FastAPI) -> None:
     # 4) aprovação legítima por OUTRA pessoa segue funcionando
     link = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "Aprovador.Externo@Claro.com.BR"},
+        json={"aprovador_email": "Aprovador@DEV.Jornada.Local"},
         headers=_h(),
     )
     assert link.status_code == 201, link.text
-    assert link.json()["aprovador_email"] == "aprovador.externo@claro.com.br"
+    assert link.json()["aprovador_email"] == APROVADOR
     token = link.json()["token"]
-    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_EXTERNO)
+    pagina = client.get(f"/api/v1/aprovacao/{token}", headers=_H_APROVADOR_SEM_TENANT)
     assert pagina.status_code == 200, pagina.text
-    assert pagina.json()["aprovador_email"] == "aprovador.externo@claro.com.br"
+    assert pagina.json()["aprovador_email"] == APROVADOR
 
     # 5) forjar `decidido_por` no corpo falha ALTO e não decide nada
     forjada = client.post(
         f"/api/v1/aprovacao/{token}/decidir",
         json={"decisao": "aprovado", "decidido_por": criador},
-        headers=_H_EXTERNO,
+        headers=_H_APROVADOR_SEM_TENANT,
     )
     assert forjada.status_code == 409, forjada.text
     assert forjada.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
@@ -587,12 +619,14 @@ def test_M8_A6_criador_nao_aprova(client: TestClient, app: FastAPI) -> None:
 
     # 6) sem identidade no corpo: o registrado é o e-mail congelado na emissão
     ok = client.post(
-        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_EXTERNO
+        f"/api/v1/aprovacao/{token}/decidir",
+        json={"decisao": "aprovado"},
+        headers=_H_APROVADOR_SEM_TENANT,
     )
     assert ok.status_code == 200, ok.text
-    assert ok.json()["decidido_meta"]["decidido_por"] == "aprovador.externo@claro.com.br"
+    assert ok.json()["decidido_meta"]["decidido_por"] == APROVADOR
     aprovado = repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")[-1]
-    assert aprovado.actor == "aprovador.externo@claro.com.br"  # trilha real, não declarada
+    assert aprovado.actor == APROVADOR  # trilha real, não declarada
 
 
 def test_M8_A6_evasoes_da_segregacao(client: TestClient, app: FastAPI) -> None:
@@ -628,15 +662,28 @@ def test_M8_A6_evasoes_da_segregacao(client: TestClient, app: FastAPI) -> None:
     assert "não pode aprová-lo" in plus.json()["detail"]
     assert not repo.listar_aprovacoes(uuid.UUID(snap["id"]))
 
-    # 3) o `+tag` de OUTRA pessoa continua válido — a chave só colapsa a mesma caixa
+    # 3) a chave SÓ colapsa a mesma caixa: OUTRA pessoa não é barrada pela segregação.
+    # Mas o `+tag` dela também não passa mais — desde o E03 `aprovador_email` é um LOGIN,
+    # não um endereço de envio (não há camada de e-mail no projeto), e o rótulo depois do
+    # `+` não é login de ninguém. A recusa muda de motivo, e a mensagem prova isso: quem
+    # decide precisa de conta, e a conta é `aprovador@dev.jornada.local` exatamente.
+    com_tag = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "aprovador+jornada@dev.jornada.local"},
+        headers=_h("dev-lider"),
+    )
+    assert com_tag.status_code == 409, com_tag.text
+    assert "não é usuário do sistema" in com_tag.json()["detail"]
+    assert not repo.listar_aprovacoes(uuid.UUID(snap["id"]))
+
+    # …e a forma canônica da MESMA pessoa passa (o caminho legítimo não pode fechar)
     outro = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador+jornada@claro.com.br"},
+        json={"aprovador_email": APROVADOR},
         headers=_h("dev-lider"),
     )
     assert outro.status_code == 201, outro.text
-    # o endereço GRAVADO preserva o rótulo (é o que o destinatário usa de verdade)
-    assert outro.json()["aprovador_email"] == "aprovador+jornada@claro.com.br"
+    assert outro.json()["aprovador_email"] == APROVADOR
 
 
 def test_M8_A6b_quem_emite_nao_endereca_o_link_a_si_mesmo(client: TestClient, app: FastAPI) -> None:
@@ -675,10 +722,224 @@ def test_M8_A6b_quem_emite_nao_endereca_o_link_a_si_mesmo(client: TestClient, ap
     # emitir para OUTRA pessoa segue funcionando (o caminho legítimo não pode fechar)
     ok = client.post(
         f"/api/v1/snapshots/{snap['id']}/link-magico",
-        json={"aprovador_email": "aprovador.externo@claro.com.br"},
+        json={"aprovador_email": APROVADOR},
         headers=_h("dev-lider"),
     )
     assert ok.status_code == 201, ok.text
+
+
+def test_M8_E03_so_a_sessao_do_aprovador_decide(client: TestClient, app: FastAPI) -> None:
+    """E03 (§10.5 — UAT #5, o que sobrou depois do A6/E02b): POSSE DO TOKEN NÃO É PODER.
+
+    O buraco que este aceite mata: `POST /snapshots/{id}/link-magico` devolve o token em
+    CLARO para quem emite (é a única vez que ele existe fora do hash) e o `decidir` era
+    anônimo. Ou seja, o analista que emitia o link tinha, em mãos, a credencial completa
+    do aprovador — bastava colar a URL noutra aba. A segregação do A6 congelou o
+    DESTINATÁRIO; faltava exigir que quem apresenta o token SEJA ele.
+
+    Agora a identidade vem da sessão e é conferida contra o e-mail congelado na emissão.
+    Os quatro casos do §10.5, na ordem em que um atacante os tentaria.
+    """
+    repo = app.state.repositorio_os
+    jornada_id, os_id, snap = _preparar_snapshot(client, app)
+    token = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": APROVADOR},
+        headers=_h(),  # emitido pelo `dev-analista` — que fica com o token em claro
+    ).json()["token"]
+    corpo = {"decisao": "aprovado"}
+
+    # 1) SEM sessão: o token sozinho não abre nem a página nem a decisão. 401, e não 404:
+    # a credencial é conferida ANTES de existir pergunta sobre o token.
+    anonimo = {"User-Agent": "pytest-anonimo"}
+    assert client.get(f"/api/v1/aprovacao/{token}", headers=anonimo).status_code == 401
+    sem_sessao = client.post(f"/api/v1/aprovacao/{token}/decidir", json=corpo, headers=anonimo)
+    assert sem_sessao.status_code == 401, sem_sessao.text
+    assert sem_sessao.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    # nem um token INEXISTENTE responde sem credencial (nada de sondar links por fora)
+    assert client.get("/api/v1/aprovacao/" + "x" * 43, headers=anonimo).status_code == 401
+
+    # 2) O EMISSOR, de posse do token em claro, logado como ele mesmo → 403.
+    # Este é literalmente o cenário do achado: mesma pessoa, mesma URL, outra aba.
+    emissor = client.post(
+        f"/api/v1/aprovacao/{token}/decidir", json=corpo, headers=_h("dev-analista")
+    )
+    assert emissor.status_code == 403, emissor.text
+    assert emissor.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    # o 403 é MUDO sobre quem é o aprovador: quem está com token alheio não ganha o
+    # e-mail dele de brinde (§10.2 — nome/e-mail de pessoa não vaza em erro)
+    assert APROVADOR not in emissor.text
+
+    # 3) OUTRA pessoa qualquer do tenant, também com o token → 403 idêntico
+    terceiro = client.post(
+        f"/api/v1/aprovacao/{token}/decidir", json=corpo, headers=_h("dev-lider")
+    )
+    assert terceiro.status_code == 403, terceiro.text
+
+    # nada aconteceu: o link continua virgem e o twin não foi aprovado por ninguém
+    assert repo.obter_jornada(jornada_id).estado != "aprovado"
+    assert not repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")
+    assert repo.listar_aprovacoes(uuid.UUID(snap["id"]))[0].decisao is None
+
+    # 4) o APROVADOR designado decide — e só ele
+    ok = client.post(f"/api/v1/aprovacao/{token}/decidir", json=corpo, headers=_H_APROVADOR)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["decidido_meta"]["sessao_email"] == APROVADOR
+    assert repo.obter_jornada(jornada_id).estado == "aprovado"
+    assert repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")[-1].actor == APROVADOR
+
+
+def test_M8_E03_ler_o_pacote_exige_sessao_do_tenant(client: TestClient, app: FastAPI) -> None:
+    """E03 (§10.5): `GET /aprovacao/{token}` também deixa de ser anônimo — e por quê.
+
+    O pacote carrega custo, criativos e, pelo achado 9 do UAT #5, PII herdada do
+    briefing. Um token de 72h numa URL vaza por histórico de navegador, `Referer`, print
+    encaminhado e log de proxy; isso não é controle de acesso para dado de cliente
+    (§10.2). Como não há camada de e-mail e quem decide precisa de conta de qualquer
+    forma, exigir sessão para LER não custa usabilidade nenhuma: é a mesma pessoa.
+
+    O corte fica onde a informação já mora: LER é de qualquer sessão do tenant dono do
+    pacote (são os mesmos dados que essa pessoa lê pelas rotas da OS); DECIDIR é só do
+    destinatário — e o payload diz isso à UI para ela não oferecer um botão que dará 403.
+    """
+    _, _, snap = _preparar_snapshot(client, app)
+    token = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": APROVADOR},
+        headers=_h(),
+    ).json()["token"]
+
+    # colega do tenant: LÊ o pacote…
+    colega = client.get(f"/api/v1/aprovacao/{token}", headers=_h("dev-lider"))
+    assert colega.status_code == 200, colega.text
+    assert colega.json()["snapshot"]["hash"] == snap["hash"]
+    # …e a própria resposta avisa que ele NÃO é quem decide (a UI desabilita os botões)
+    assert colega.json()["sessao"] == {
+        "email": "lider@dev.jornada.local",
+        "nome": "Dev Lider",
+        "pode_decidir": False,
+    }
+
+    # o aprovador vê o mesmo pacote com `pode_decidir` verdadeiro
+    dono = client.get(f"/api/v1/aprovacao/{token}", headers=_H_APROVADOR)
+    assert dono.status_code == 200, dono.text
+    assert dono.json()["sessao"]["pode_decidir"] is True
+
+
+def test_M8_E03_link_para_quem_nao_tem_conta_e_recusado(client: TestClient, app: FastAPI) -> None:
+    """E03 (§10.5): a emissão recusa aprovador SEM CONTA — e falha CEDO, de propósito.
+
+    Não há camada de e-mail no projeto (SMTP_URL existe no config e não tem consumidor),
+    então não há convite: contas nascem pelo admin (§8-M0/E04). Se a decisão exige sessão,
+    um link endereçado a quem não pode entrar é um link natimorto — e descobrir isso na
+    hora de decidir seria o pior momento possível (aprovador travado, prazo correndo,
+    ninguém sabendo que o problema é falta de conta). Recusar na EMISSÃO põe a falha na
+    frente de quem pode resolvê-la, com o admin a um pedido de distância.
+
+    Efeito colateral que vale por si: "e-mail de fora" era o jeito de PULAR a checagem de
+    alçada — sem papéis conhecidos, o serviço não tinha o que conferir e emitia assim
+    mesmo. Agora todo destinatário tem papéis, e a faixa da política sempre vale.
+    """
+    repo = app.state.repositorio_os
+    _, _, snap = _preparar_snapshot(client, app)
+
+    de_fora = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": "diretor.cliente@claro.com.br"},
+        headers=_h(),
+    )
+    assert de_fora.status_code == 409, de_fora.text
+    assert de_fora.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert "não é usuário do sistema" in de_fora.json()["detail"]
+    assert "admin" in de_fora.json()["detail"]  # diz o que fazer, não só que falhou
+    assert not repo.listar_aprovacoes(uuid.UUID(snap["id"])), "nenhum token pode nascer"
+
+
+def test_M8_E03_conta_com_subendereco_nao_herda_a_decisao(client: TestClient, app: FastAPI) -> None:
+    """E03 (§10.5 — auditoria da frente 3): a régua que RECUSA não pode ser a que CONCEDE.
+
+    `_chave_identidade` colapsa o `+tag` de propósito: para a segregação do E02b ("o
+    emissor está endereçando o link a si mesmo?") errar para o lado de barrar custa um
+    link a reemitir. Usar a MESMA chave para responder "esta sessão é a do aprovador?"
+    inverte o sinal do erro — o alargamento deixa de barrar gente demais e passa a
+    AUTORIZAR gente demais, que é escalação de privilégio.
+
+    O cenário concreto, todo ele com contas legítimas: `aprovador+qa@…` é uma conta
+    DISTINTA (login próprio, senha própria, papel `solicitante`, alçada nenhuma). O link
+    foi endereçado a `aprovador@…`, cujo papel cobre a faixa de custo do snapshot
+    (§11.4). Com a comparação por chave, a sessão do robô de QA decide no lugar do
+    aprovador, a alçada conferida na emissão vira decorativa — e a trilha ainda carimba
+    `decidido_por` com o e-mail do INOCENTE.
+
+    Aqui a decisão passa a exigir a MESMA CONTA (e-mail normalizado, igualdade exata).
+    Nada se perde no caminho legítimo: desde o E03 o link só nasce endereçado a um
+    e-mail que TEM conta, e o e-mail da conta é exatamente o que a sessão apresenta.
+    """
+    repo = app.state.repositorio_os
+    jornada_id, os_id, snap = _preparar_snapshot(client, app)
+
+    # 1) o admin cria uma conta cujo login só difere do aprovador pelo rótulo `+`
+    vizinha = "aprovador+qa@dev.jornada.local"
+    criada = client.post(
+        "/api/v1/auth/usuarios",
+        json={
+            "email": vizinha,
+            "nome": "Robô de QA",
+            "papeis": ["solicitante"],  # NENHUMA alçada de aprovação (§11.4)
+            "senha_provisoria": "provisoria-longa-01",
+        },
+        headers=_h("dev-admin"),
+    )
+    assert criada.status_code == 201, criada.text
+
+    # 2) o link vai para o APROVADOR de verdade — o que tem o papel da faixa
+    token = client.post(
+        f"/api/v1/snapshots/{snap['id']}/link-magico",
+        json={"aprovador_email": APROVADOR},
+        headers=_h(),
+    ).json()["token"]
+
+    # 3) o robô de QA entra com a própria conta (sessão por cookie, §8-M0/G01)
+    with TestClient(app, raise_server_exceptions=False) as intruso:
+        entrada = intruso.post(
+            "/api/v1/auth/login",
+            json={"email": vizinha, "senha": "provisoria-longa-01"},
+            headers={"X-Tenant": TENANT},
+        )
+        assert entrada.status_code == 200, entrada.text
+        trocou = intruso.post(  # senha provisória nasce expirada (§8-M0)
+            "/api/v1/auth/trocar-senha",
+            json={"senha_atual": "provisoria-longa-01", "senha_nova": "frase-propria-longa-01"},
+            headers={"X-Tenant": TENANT},
+        )
+        assert trocou.status_code == 200, trocou.text
+
+        # 4) ele LÊ o pacote (é do tenant) mas a própria resposta nega a decisão…
+        pagina = intruso.get(f"/api/v1/aprovacao/{token}", headers={"X-Tenant": TENANT})
+        assert pagina.status_code == 200, pagina.text
+        assert pagina.json()["sessao"]["email"] == vizinha
+        assert pagina.json()["sessao"]["pode_decidir"] is False, "conta ≠ pessoa-aproximada"
+
+        # 5) …e a decisão é recusada com o MESMO 403 mudo de qualquer portador indevido
+        golpe = intruso.post(
+            f"/api/v1/aprovacao/{token}/decidir",
+            json={"decisao": "aprovado"},
+            headers={"X-Tenant": TENANT},
+        )
+        assert golpe.status_code == 403, golpe.text
+        assert APROVADOR not in golpe.text  # 403 segue sem entregar o e-mail do aprovador
+
+    # 6) nada foi decidido: link virgem, twin não aprovado, trilha limpa
+    assert repo.listar_aprovacoes(uuid.UUID(snap["id"]))[0].decisao is None
+    assert repo.obter_jornada(jornada_id).estado != "aprovado"
+    assert not repo.listar_eventos(os_id=os_id, tipo="snapshot.approved")
+
+    # 7) o caminho legítimo continua aberto — a conta EXATA do link decide
+    ok = client.post(
+        f"/api/v1/aprovacao/{token}/decidir", json={"decisao": "aprovado"}, headers=_H_APROVADOR
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["decidido_meta"]["sessao_email"] == APROVADOR
 
 
 # ------------------------------------------------- Contrato das demais rotas §8-M8 (T9)

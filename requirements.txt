@@ -25,6 +25,11 @@ zeep~=4.2
 numpy~=1.26
 langfuse~=2.53
 python-jose[cryptography]~=3.3
+# Hash de senha argon2id (emenda G01 — identidade real por trás do RBAC §8-M0). Vencedor
+# da Password Hashing Competition e recomendação corrente da OWASP: memory-hard, custo
+# parametrizável e `check_needs_rehash` embutido (reparametrizar não invalida os hashes
+# antigos — eles migram no próximo login bem-sucedido).
+argon2-cffi~=23.1
 structlog~=24.4
 python-docx~=1.1
 orjson~=3.10

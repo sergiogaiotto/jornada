@@ -10,7 +10,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, EstadoVazio, TituloTela } from "../components/ui/basics";
-import { devToken, get, post, tenant } from "../lib/api";
+import { cabecalhosDaSessao, get, post } from "../lib/api";
 import { fmtCompacto, fmtInt, rotuloFonte, tempoRelativo } from "../lib/format";
 import { usePainelContextual } from "../lib/hooks";
 import type { DcSegmentoOut, RelatorioDcOut, SegmentoOut } from "../lib/types";
@@ -35,10 +35,15 @@ function ChipStatus({ status }: { status: string | null }) {
   return <span className="mchip-n">{status ?? "—"}</span>;
 }
 
-/** Download autenticado do .docx (§8-M5) — <a href> puro não levaria Bearer/X-Tenant. */
+/**
+ * Download autenticado do .docx (§8-M5) — <a href> puro não levaria o X-Tenant.
+ * Emenda E04: a credencial é o cookie de sessão httpOnly (`credentials: "include"`),
+ * não mais um Bearer de dev montado pelo cliente.
+ */
 async function baixarRelatorioDocx(segmentoId: string): Promise<void> {
   const res = await fetch(`/api/v1/datacloud/segmentos/${segmentoId}/relatorio.docx`, {
-    headers: { Authorization: `Bearer ${devToken()}`, "X-Tenant": tenant() },
+    headers: cabecalhosDaSessao(),
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`Falha ao gerar o .docx (HTTP ${res.status}).`);
   const blob = await res.blob();

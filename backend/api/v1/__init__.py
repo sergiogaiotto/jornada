@@ -9,6 +9,7 @@ from api.v1 import (
     ajuda,
     atelie,
     audiencia,
+    autenticacao,
     compilador,
     criativo,
     datacloud,
@@ -28,6 +29,7 @@ from api.v1 import (
 
 api_router = APIRouter()
 
+api_router.include_router(autenticacao.router)  # M0 · Identidade/sessão (§8-M0, emenda G01)
 api_router.include_router(os_governanca.router)  # M1 · Núcleo OS/governança (§8-M1)
 api_router.include_router(esteira.router)  # M2 · Esteira de Produção ex-Hike (§8-M2)
 api_router.include_router(intake.router)  # M3 · Intake & Consultor (§8-M3)

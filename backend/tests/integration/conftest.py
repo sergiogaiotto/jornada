@@ -67,6 +67,10 @@ _TABELAS_CORE = (
     "agente",
     "policy_versao",
     "os",
+    # identidade (emenda G01 — migração 0015). `sessao` antes de `usuario` por clareza;
+    # o `cascade` do truncate já cobriria a FK, mas a ordem documenta a dependência.
+    "sessao",
+    "usuario",
 )
 
 

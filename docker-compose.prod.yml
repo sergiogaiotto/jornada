@@ -40,6 +40,12 @@ services:
       APP_SECRET: ${APP_SECRET:?defina APP_SECRET no .env (openssl rand -hex 32)}
       DEFAULT_TENANT: torre-movel
       DEMO_MODE: "true"
+      # Bootstrap do root (§8-M0 · G01). Os valores vivem SÓ no `.env` do servidor —
+      # nunca no repositório, nunca no CI. Idempotente: se a conta já existe, o boot não
+      # toca na senha (quem já trocou não é resetado). Sem as duas variáveis, o boot
+      # segue normalmente e nenhum root é criado — a aplicação não quebra por isso.
+      JORNADA_ROOT_EMAIL: ${JORNADA_ROOT_EMAIL:-}
+      JORNADA_ROOT_SENHA: ${JORNADA_ROOT_SENHA:-}
       LLM_120B_BASE_URL: https://hub-gpus.claro.com.br/gpt120/v1
       LLM_120B_MODEL: openai/gpt-oss-120b
       LLM_20B_BASE_URL: https://hub-gpus.claro.com.br/gpt20/v1

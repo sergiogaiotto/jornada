@@ -33,7 +33,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import Engine, Row, Select, Table, create_engine, func, select, text
+from sqlalchemy import Engine, Row, Select, Table, create_engine, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine.url import URL, make_url
 
@@ -68,11 +68,13 @@ from adapters.persistence.tabelas import (
     tabela_proposta_otimizacao,
     tabela_resource_registry,
     tabela_segmento,
+    tabela_sessao,
     tabela_skill_versao,
     tabela_sla_clock,
     tabela_snapshot,
     tabela_sync_run,
     tabela_telemetry_event,
+    tabela_usuario,
     tabela_validacao_campo,
 )
 from domain.agentes.modelos import AgenteEvidence, Invocacao
@@ -83,6 +85,7 @@ from domain.criativo.modelos import CelulaCriativo, Criativo
 from domain.esteira.modelos import EtapaWorkflow, HikeImportLog
 from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Aprovacao, PolicyVersao, Snapshot
+from domain.identidade.modelos import ContaUsuario, Sessao
 from domain.intake.modelos import Pedido
 from domain.jornada.modelos import (
     DriftCheck,
@@ -659,6 +662,39 @@ def _linha_para_policy(linha: Row[Any]) -> PolicyVersao:
         conteudo=dict(linha.conteudo or {}),
         estado=linha.estado,
         publicada_em=linha.publicada_em,
+    )
+
+
+def _linha_para_conta(linha: Row[Any]) -> ContaUsuario:
+    """`usuario` → agregado (emenda G01). Colunas nullable no banco (a tabela nasceu
+    decorativa no 0001) viram os defaults do agregado — conta legada sem `senha_hash`
+    simplesmente nunca autentica (`senha.verificar` devolve False)."""
+    return ContaUsuario(
+        id=linha.id,
+        tenant_id=linha.tenant_id,
+        email=linha.email,
+        nome=linha.nome or linha.email,
+        senha_hash=linha.senha_hash or "",
+        papeis=list(linha.papeis or []),
+        ativo=True if linha.ativo is None else linha.ativo,
+        senha_expirada=bool(linha.senha_expirada),
+        criado_em=linha.criado_em,
+        criado_por=linha.criado_por,
+        ultimo_acesso=linha.ultimo_acesso,
+        tentativas_falhas=linha.tentativas_falhas or 0,
+        bloqueado_ate=linha.bloqueado_ate,
+    )
+
+
+def _linha_para_sessao(linha: Row[Any]) -> Sessao:
+    return Sessao(
+        id=linha.id,
+        usuario_id=linha.usuario_id,
+        criada_em=linha.criada_em,
+        expira_em=linha.expira_em,
+        revogada_em=linha.revogada_em,
+        ip=linha.ip,
+        user_agent=linha.user_agent,
     )
 
 
@@ -1936,3 +1972,89 @@ class RepositorioSql(RepositorioOsMemoria):
             select(tabela_invocacao).where(tabela_invocacao.c.id == invocacao_id)
         )
         return _linha_para_invocacao(linha) if linha is not None else None
+
+    # --- Identidade (`usuario`/`sessao` §4.1 + migração 0015 — emenda G01) ---
+    def adicionar_usuario(self, conta: ContaUsuario) -> None:
+        """UPSERT por id, como todo o resto do adapter. `senha_hash` entra aqui e não
+        sai por lugar nenhum: nenhum `_linha_para_*` de outro agregado toca esta tabela
+        e nenhum contrato de API expõe a coluna (§10.2)."""
+        self._upsert(
+            tabela_usuario,
+            {
+                "id": conta.id,
+                "tenant_id": conta.tenant_id,
+                "nome": conta.nome,
+                "email": conta.email,
+                "papeis": list(conta.papeis),
+                "senha_hash": conta.senha_hash,
+                "ativo": conta.ativo,
+                "senha_expirada": conta.senha_expirada,
+                "criado_em": conta.criado_em,
+                "criado_por": conta.criado_por,
+                "ultimo_acesso": conta.ultimo_acesso,
+                "tentativas_falhas": conta.tentativas_falhas,
+                "bloqueado_ate": conta.bloqueado_ate,
+            },
+        )
+
+    def salvar_usuario(self, conta: ContaUsuario) -> None:
+        self.adicionar_usuario(conta)
+
+    def obter_usuario(self, usuario_id: uuid.UUID) -> ContaUsuario | None:
+        linha = self._primeira(select(tabela_usuario).where(tabela_usuario.c.id == usuario_id))
+        return _linha_para_conta(linha) if linha is not None else None
+
+    def obter_usuario_por_email(self, tenant_id: str, email: str) -> ContaUsuario | None:
+        """`lower(email)` no WHERE casa com o índice único da migração 0015 — é a MESMA
+        expressão, então o índice é usado e a busca não pode discordar do unique."""
+        linha = self._primeira(
+            select(tabela_usuario).where(
+                tabela_usuario.c.tenant_id == tenant_id,
+                func.lower(tabela_usuario.c.email) == email.strip().lower(),
+            )
+        )
+        return _linha_para_conta(linha) if linha is not None else None
+
+    def listar_usuarios(self, tenant_id: str) -> list[ContaUsuario]:
+        consulta = (
+            select(tabela_usuario)
+            .where(tabela_usuario.c.tenant_id == tenant_id)
+            .order_by(tabela_usuario.c.criado_em.asc().nulls_first(), tabela_usuario.c.email)
+        )
+        return [_linha_para_conta(linha) for linha in self._todas(consulta)]
+
+    def adicionar_sessao(self, sessao: Sessao) -> None:
+        self._upsert(
+            tabela_sessao,
+            {
+                "id": sessao.id,
+                "usuario_id": sessao.usuario_id,
+                "criada_em": sessao.criada_em,
+                "expira_em": sessao.expira_em,
+                "revogada_em": sessao.revogada_em,
+                "ip": sessao.ip,
+                "user_agent": sessao.user_agent,
+            },
+        )
+
+    def obter_sessao(self, sessao_id: str) -> Sessao | None:
+        linha = self._primeira(select(tabela_sessao).where(tabela_sessao.c.id == sessao_id))
+        return _linha_para_sessao(linha) if linha is not None else None
+
+    def salvar_sessao(self, sessao: Sessao) -> None:
+        self.adicionar_sessao(sessao)
+
+    def revogar_sessoes_do_usuario(self, usuario_id: uuid.UUID, agora: datetime) -> int:
+        """UPDATE em massa numa transação — desativar usuário com dezenas de sessões
+        não pode virar dezenas de round-trips. `revogada_em is null` no WHERE preserva
+        o instante da revogação anterior (a trilha por pessoa depende dele)."""
+        comando = (
+            update(tabela_sessao)
+            .where(
+                tabela_sessao.c.usuario_id == usuario_id,
+                tabela_sessao.c.revogada_em.is_(None),
+            )
+            .values(revogada_em=agora)
+        )
+        with self._engine.begin() as conexao:
+            return int(conexao.execute(comando).rowcount or 0)
