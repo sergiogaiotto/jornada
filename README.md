@@ -176,11 +176,12 @@ Sobe `web` (nginx + SPA, porta **8050**), `api`, mocks e Langfuse (**:13000**, s
 - **2026-08-05 · Validação com o hub real**: 120B/20B/embeddings confirmados; nasce o padrão retry §7.3 (o modelo real "conversa sem estruturar" — o FakeLLM nunca pegaria).
 - **2026-08-05 · UAT via UI na VPS**: 10 use cases, **18 achados** (7 invisíveis a testes sintéticos), 9 corrigidos e retestados no dia — [`docs/UAT-VPS-2026-08-05.md`](docs/UAT-VPS-2026-08-05.md).
 - **2026-08-05 · Guia Interativo** (tour, módulos, ajuda contextual, chat IA) · **rename Portão→QA** · **canvas editor JB** (versões, diff visual, export XML/JSON) · **Nova Campanha nativa** (Portal do Solicitante aposentado — achado A3 resolvido).
+- **2026-08-06 · Produção de verdade:** **persistência PostgreSQL** em todos os agregados (A7 — provado na VPS: pedido criado sobrevive ao restart do container) · **RAG operante** (A11 — 17 chunks do dicionário no pgvector; o Engineer gera SQL com opt-in por canal e as 7 listas no `NOT EXISTS`) · **evidências de compliance pinadas** (A24) · **version-stamp de deploy** (A22 — `/healthz.sha` e o CI falhando em "deploy-fantasma") · achados A8/A9/A18/A23. **209 testes** (196 + 13 de integração em Postgres real no CI).
 
 **Pendências conhecidas (honestidade de produto):**
-1. **Persistência PostgreSQL** — repositórios de demo em memória; redeploy apaga o que não é seed (A7). DDL/migrações prontos (§4.1).
-2. **RAG em produção** — pgvector + ingestão do dicionário de dados (o Engineer recusa honestamente sem evidência — A11).
-3. **HTTPS** — aguardando o registro DNS do subdomínio (nginx + certbot prontos na VPS).
+1. **HTTPS** — aguardando o registro DNS `jornada.falagaiotto.com.br → 187.77.46.137` (nginx + certbot já prontos na VPS).
+2. **Escopo do mypy** limitado a `app` + `api`: os adapters e services novos não são checados por tipo (gate dá menos garantia do que aparenta).
+3. **Benchmark do painel do Criativo (T6)** ainda é texto fixo de mock — com o RAG real ativo, deve virar consulta ao retriever ou sair da tela.
 
 ## Contribuindo (o jeito SDD)
 
