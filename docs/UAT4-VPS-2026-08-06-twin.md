@@ -1,6 +1,6 @@
 # UAT #4 — Digital Twin do Journey Builder (exaustivo)
 
-**Alvo:** `http://vps.falagaiotto.com.br:8050` · SHA deployado `8969688` · tenant `torre-movel`
+**Alvo:** `http://vps.falagaiotto.com.br:8050` · SHA testado `8969688` -> corrigido e revalidado em `b67a5d1` · tenant `torre-movel`
 **Data:** 2026-08-06 · **Foco:** construção do fluxo — validação, edição, versionamento, hash,
 simulação, exportação e geração por IA. Tudo executado contra a **VPS real** (Postgres real,
 HubGPU real, gpt-oss-120b real). Nenhum mock.
@@ -328,6 +328,38 @@ D03 novo:   duracao_em_dias('imediato_apos_…')    ->  None -> rejeitado
 
 **Gates:** `pytest -m "not integration"` **267 passed** · `ruff check` limpo · `ruff format`
 270 arquivos · `mypy` (escopo do CI) sem erros.
+
+### Revalidação na VPS após o deploy (SHA `b67a5d1`, prova A22)
+
+**D07 — o que dava HTTP 500 agora simula.** Grafo com `decisionSplit` cujas `regras` não têm
+`to`, roteado por arestas `cond`:
+
+```
+salvar  -> 200, custo projetado R$ 743,92
+simular -> 200 OK, runs=500, ROAS P50 9247.9, semáforo amarelo
+           funil: n1=826580, n2=826580, em=413290, sms=413290, n9=413290
+```
+
+**D03 — duração conferida em produção:**
+
+```
+[422 duracao_invalida]  'imediato_apos_quiet_hours'   <- o valor que o 120b gerou
+[422 duracao_invalida]  '3 dias'
+[422 duracao_invalida]  'PT90D'
+[200 aceito]            'P1D'   'PT12H'
+```
+
+Efeito colateral bem-vindo: simular a v4 (salva antes do fix) agora devolve **422 nomeando o nó
+e a regra** em vez do 500 genérico — o erro virou acionável.
+
+**D05 — classe-objeto salva:** `[{"id":"baixa","max":2},{"id":"alta","min":3}]` → **200**, hash
+`4adfae927dea`.
+
+**Reprodutibilidade por seed (§6 / M8-A1) — confirmada campo a campo.** Duas execuções com
+`seed=42` produzem resultado idêntico em **todos** os 20 campos de conteúdo (funil, roas, custo,
+conversões, receita, poder, gargalos, pressão de contato, semáforo, personas, portões,
+premissas). O único campo que difere é `executada_em`, o timestamp da execução — como deve ser.
+Seeds distintas (42 vs 7) produzem resultados distintos.
 
 ---
 
