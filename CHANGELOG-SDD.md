@@ -3,6 +3,19 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — D01 · "Começar do zero" em OS com experimento pré-registrado (§8-M7)
+Registrado no UAT #4 como menor e reclassificado ao restaurar a VPS: `POST /os/{id}/jornada`
+respondia **422 `holdout_ausente`** em qualquer OS que já tivesse passado pelo portão de
+experimento — a OS demo entre elas. A validação cruzada está certa (experimento travado sem braço
+de controle invalida a medição), mas o esqueleto mínimo `entrySource → goal → exit` não tinha como
+nascer com holdout, então **não existia caminho nenhum pela UI** para criar a primeira versão do
+twin nessas OS. Só apareceu como "menor" porque no UAT #4 eu contornei criando uma OS limpa.
+
+O esqueleto passa a nascer `entrySource → randomSplit(holdout | tratamento) → goal → exit` quando a
+OS tem experimento travado, com o controle no **mesmo pct que o experimento registrou** (não um
+valor inventado — §1.3.5) e ligado direto ao `exit`. Sem experimento, nada muda. Aceite
+`test_M7_D01_comecar_do_zero_em_os_com_experimento`, com inversão verificada.
+
 ## 2026-08-06 — F01 · O backend de RNG era acidental — a simulação não reproduzia entre ambientes
 Descoberto ao integrar a onda 1: quatro testes passavam no Windows e falhavam no CI. A causa não era
 o SO — era `numpy` **não constar do `requirements.txt`**. `adapters/aleatorio.rng_disponivel()`

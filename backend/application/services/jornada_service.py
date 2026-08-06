@@ -168,7 +168,18 @@ class ServicoJornada:
         LLM (§10.6) — usa o grafo informado ou o esqueleto mínimo entry→goal→exit
         (§5.2); `jgc_validate` (§5.3) reprova antes de persistir; taxímetro A2."""
         os_ = self._exigir_os(tenant_id, os_id)
-        candidato = grafo if grafo is not None else self._grafo_minimo(os_)
+        # D01 (UAT #4/#5): numa OS com experimento pré-registrado o §5.3 exige holdout no
+        # grafo — e o esqueleto sem ele era rejeitado, deixando "começar do zero"
+        # IMPOSSÍVEL justamente nas OS que já passaram pelo portão de experimento (a OS
+        # demo entre elas). O esqueleto passa a nascer com o braço de controle, no mesmo
+        # pct que o experimento registrou.
+        experimento = self._repo.experimento_da_os(os_.id)
+        holdout_pct = (
+            float(getattr(experimento, "holdout_pct", 0) or 0)
+            if experimento_travado(experimento)
+            else 0.0
+        )
+        candidato = grafo if grafo is not None else self._grafo_minimo(os_, holdout_pct)
         candidato = self._normalizar_meta(candidato, os_)
         self._validar(candidato, os_.id, POLITICA_PUBLICADA["conteudo"])  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(candidato, os_.id)
@@ -198,33 +209,64 @@ class ServicoJornada:
         return jornada, {"memoria": memoria, "avisos": avisos}
 
     @staticmethod
-    def _grafo_minimo(os_: OS) -> dict[str, Any]:
+    def _grafo_minimo(os_: OS, holdout_pct: float = 0.0) -> dict[str, Any]:
         """Esqueleto §5.2/§5.3 do "começar do zero": entrySource → goal → exit —
-        o menor grafo que passa no `jgc_validate` (tem goal, nada órfão)."""
+        o menor grafo que passa no `jgc_validate` (tem goal, nada órfão).
+
+        `holdout_pct > 0` (D01): a OS tem experimento pré-registrado, e o §5.3 exige
+        braço de controle no grafo. O esqueleto então nasce
+        `entrySource → randomSplit(holdout | tratamento) → goal → exit`, com o controle
+        indo direto ao `exit` — sem isso o "começar do zero" respondia 422 e a OS ficava
+        sem nenhum caminho para criar a primeira versão do twin.
+        """
+        entrada = {
+            "id": "entrada",
+            "type": "entrySource",
+            "data": {
+                "deRef": f"DE_{os_.codigo}_entrada",
+                "modo": "fire_once",
+                "agenda": None,
+                "reentrada": "nao",
+            },
+        }
+        meta = {
+            "id": "meta",
+            "type": "goal",
+            "data": {"metrica": "conversao", "deRef": f"DE_{os_.codigo}_conversoes"},
+        }
+        saida = {"id": "saida", "type": "exit", "data": {"motivo": "fim_da_jornada"}}
+
+        if holdout_pct <= 0:
+            return {
+                "jgcVersion": "1.0",
+                "meta": {},  # osCodigo/tenant/reentrada reescritos por _normalizar_meta
+                "nodes": [entrada, meta, saida],
+                "edges": [
+                    {"id": "e1", "from": "entrada", "to": "meta", "cond": None},
+                    {"id": "e2", "from": "meta", "to": "saida", "cond": None},
+                ],
+            }
+
+        controle = round(float(holdout_pct), 4)
+        divisao = {
+            "id": "controle",
+            "type": "randomSplit",
+            "data": {
+                "braços": [
+                    {"id": "holdout", "pct": controle, "holdout": True},
+                    {"id": "tratamento", "pct": round(100.0 - controle, 4)},
+                ]
+            },
+        }
         return {
             "jgcVersion": "1.0",
-            "meta": {},  # osCodigo/tenant/reentrada reescritos por _normalizar_meta
-            "nodes": [
-                {
-                    "id": "entrada",
-                    "type": "entrySource",
-                    "data": {
-                        "deRef": f"DE_{os_.codigo}_entrada",
-                        "modo": "fire_once",
-                        "agenda": None,
-                        "reentrada": "nao",
-                    },
-                },
-                {
-                    "id": "meta",
-                    "type": "goal",
-                    "data": {"metrica": "conversao", "deRef": f"DE_{os_.codigo}_conversoes"},
-                },
-                {"id": "saida", "type": "exit", "data": {"motivo": "fim_da_jornada"}},
-            ],
+            "meta": {},
+            "nodes": [entrada, divisao, meta, saida],
             "edges": [
-                {"id": "e1", "from": "entrada", "to": "meta", "cond": None},
-                {"id": "e2", "from": "meta", "to": "saida", "cond": None},
+                {"id": "e1", "from": "entrada", "to": "controle", "cond": None},
+                {"id": "e2", "from": "controle", "to": "saida", "cond": "holdout"},
+                {"id": "e3", "from": "controle", "to": "meta", "cond": "tratamento"},
+                {"id": "e4", "from": "meta", "to": "saida", "cond": None},
             ],
         }
 

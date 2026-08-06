@@ -630,6 +630,49 @@ def test_M7_criar_manual_comecar_do_zero(client: TestClient, app: FastAPI) -> No
     assert v2.status_code == 201 and v2.json()["jornada"]["versao"] == 2
 
 
+def test_M7_D01_comecar_do_zero_em_os_com_experimento(client: TestClient, app: FastAPI) -> None:
+    """D01 (UAT #4/#5): numa OS com experimento pré-registrado, o §5.3 exige holdout no
+    grafo — e o esqueleto entry→goal→exit era rejeitado com 422 `holdout_ausente`.
+
+    Efeito prático: "começar do zero" ficava IMPOSSÍVEL exatamente nas OS que já
+    passaram pelo portão de experimento (a OS demo da VPS entre elas), sem nenhum
+    caminho pela UI para criar a primeira versão do twin. O esqueleto passa a nascer
+    com o braço de controle, no mesmo pct que o experimento registrou.
+    """
+    os_ = _criar_os_com_segmento(client, app)
+    app.state.llm = LLMFake(disponivel=False)  # segue sem LLM (§10.6)
+
+    pre_registro = client.post(
+        "/api/v1/experimentos",
+        json={
+            "os_id": os_["id"],
+            "hipotese": "oferta 5G eleva conversão",
+            "mde_pp": 2.0,
+            "janela_dias": 15,
+        },
+        headers=_h(),
+    )
+    assert pre_registro.status_code == 201, pre_registro.text
+    holdout_pct = pre_registro.json()["experimento"]["holdout_pct"]
+
+    resposta = client.post(f"/api/v1/os/{os_['id']}/jornada", headers=_h())
+    assert resposta.status_code == 201, resposta.text  # era 422 holdout_ausente
+
+    grafo = resposta.json()["jornada"]["grafo"]
+    assert [n["type"] for n in grafo["nodes"]] == ["entrySource", "randomSplit", "goal", "exit"]
+    bracos = {b["id"]: b["pct"] for b in grafo["nodes"][1]["data"]["braços"]}
+    assert bracos["holdout"] == holdout_pct, "o controle tem de espelhar o experimento"
+    assert sum(bracos.values()) == 100.0
+
+    # e o esqueleto continua sendo um grafo válido: salvá-lo de volta é 200
+    salvo = client.put(
+        f"/api/v1/jornadas/{resposta.json()['jornada']['id']}/grafo",
+        json={"grafo": grafo},
+        headers=_h(),
+    )
+    assert salvo.status_code == 200, salvo.text
+
+
 def test_M7_criar_manual_com_grafo_valida_e_persiste(client: TestClient, app: FastAPI) -> None:
     """Emenda §8-M7: `POST /os/{id}/jornada` com `grafo` no corpo valida §5.3 ANTES de
     persistir (422 apontando o nó — A1) e taxa o grafo aceito (A2, valor exato)."""
