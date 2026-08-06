@@ -14,9 +14,10 @@ from types import ModuleType
 
 from domain.simulacao.tipos import GeradorAleatorio
 
-_np: ModuleType | None
 try:  # numpy é opcional (§6: "vetorizar com numpy" quando disponível)
-    import numpy as _np
+    import numpy
+
+    _np: ModuleType | None = numpy
 except ImportError:  # pragma: no cover - depende do ambiente
     _np = None
 
