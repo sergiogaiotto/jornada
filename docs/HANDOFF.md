@@ -1,0 +1,462 @@
+# HANDOFF — Jornada (Digital Twin do Journey Builder)
+
+**Escrito em:** 2026-08-07 · **Commit de referência:** `36c4f52` (main, local == remoto)
+**Para:** continuar o trabalho em outra máquina, do zero, sem esta conversa.
+
+Este documento é longo de propósito. Ele existe para que quem chegar agora entenda **por que** o
+código está do jeito que está, não só o que ele faz. Onde houver decisão contra-intuitiva, o motivo
+está escrito — quase sempre porque a alternativa óbvia já falhou e custou um achado.
+
+---
+
+## 1. O que é o projeto
+
+Plataforma de marketing que funciona como **gêmeo digital do Journey Builder** do Salesforce
+Marketing Cloud. O usuário desenha a jornada num canvas, o sistema simula o resultado antes de
+disparar, congela o previsto como régua, compila para o SFMC e depois compara previsto × realizado.
+
+Agentes de IA participam do fluxo (geram o SQL do segmento, propõem o grafo da jornada, escrevem
+criativos), mas **nunca decidem** — todo portão é código determinístico. Essa é a regra §1.1.2 do
+contrato, e boa parte dos achados desta jornada foi exatamente onde ela estava sendo violada na
+prática.
+
+**Contrato vinculante:** `SDD-Jornada.md`. Toda divergência necessária edita a seção afetada **e**
+registra em `CHANGELOG-SDD.md`, no mesmo commit (regra §1.3.3). O CHANGELOG está em ordem cronológica
+inversa e é a melhor porta de entrada para entender a história.
+
+---
+
+## 2. Estado atual — o que está no ar e o que não está
+
+| Item | Estado |
+|---|---|
+| **Repositório** | `main` em `36c4f52`, local e remoto pareados, **branch única** |
+| **VPS** | roda `8e21341` (uma onda atrás — a onda 4 ainda não foi deployada) |
+| **Suíte** | **744 passed**, 1 skipped, 23 deselected, 1 xfailed |
+| **Gates** | ruff, ruff format, mypy e `npm run build` verdes |
+| **Ambiente** | `APP_ENV=dev` na VPS, `DEMO_MODE=true` — ainda **demo pública**, dado sintético |
+| **PII real** | **NÃO liberado.** Faltam TLS, backup aplicado e o corte de ambiente |
+
+### ⚠️ O CI está sem cota
+
+O GitHub Actions parou de disparar runs (cota de minutos esgotada). O último run bem-sucedido foi
+`b8591b5`. Desde então os deploys foram feitos manualmente reproduzindo o job — ver §7.
+
+**Antes de qualquer coisa na máquina nova:** confira em Settings → Billing se a cota voltou. Se
+voltou, o deploy da onda 4 sai sozinho no próximo push.
+
+---
+
+## 3. Como levantar o ambiente na máquina nova
+
+```bash
+git clone https://github.com/sergiogaiotto/jornada.git
+cd jornada
+```
+
+### O ponto mais importante deste documento
+
+**Não rode a suíte com o Python da sua máquina.** Rode no container, instalando do **lock**:
+
+```bash
+docker run --rm -v "$(pwd):/w" -w /w python:3.11-slim \
+  bash -c "pip install -q -r requirements.lock && python -m pytest -m 'not integration' -q"
+```
+
+No Windows (Git Bash), prefixe com `MSYS_NO_PATHCONV=1` e use o caminho absoluto:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/caminho/para/jornada:/w" -w /w python:3.11-slim \
+  bash -c "pip install -q -r requirements.lock && python -m pytest -m 'not integration' -q"
+```
+
+**Por que isso importa tanto:** a máquina de desenvolvimento diverge do CI, e isso já custou dois
+achados. Na última sessão, 8 testes falhavam localmente e **todos os 8 passavam no container** — a
+causa era `starlette` 0.41 local contra 1.4.1 do lock (`TestClient(client=...)` não existe na
+antiga) e WSL quebrado. Se você "consertar" um teste que só falha na sua máquina, vai quebrar o que
+está certo.
+
+`requirements.lock` **não instala no Windows** (o `uvloop` é Linux-only). Isso é esperado, não é bug.
+
+Demais gates, no mesmo container:
+
+```bash
+python -m ruff check . && python -m ruff format --check . && python -m mypy
+```
+
+Frontend (esse pode ser local):
+
+```bash
+cd frontend && npm ci && npm run build
+```
+
+---
+
+## 4. Credenciais e acessos
+
+> **Nenhum segredo está escrito neste arquivo, e isso é deliberado.** Ele vive no repositório. Abaixo
+> estão os **caminhos** e os **nomes de variável**; os valores ficam no `.env` do servidor e na sua
+> máquina.
+
+### 4.1 SSH da VPS
+
+| | |
+|---|---|
+| Host | `187.77.46.137` — `vps.falagaiotto.com.br` |
+| Usuário | `root` |
+| Chave (máquina antiga) | `~/.ssh/id_ed25519_jornada` |
+| Chave do CI | `~/.ssh/id_ed25519_jornada_actions` → secret `VPS_SSH_KEY` no GitHub |
+| Diretório do projeto | `/opt/jornada` |
+
+**Na máquina nova você precisa copiar a chave privada** de `~/.ssh/id_ed25519_jornada` (ou gerar uma
+nova e adicioná-la ao `~/.ssh/authorized_keys` da VPS). Sem ela não há deploy manual.
+
+Se aparecer `REMOTE HOST IDENTIFICATION HAS CHANGED`, verifique **de onde** você está rodando: numa
+das sessões o comando foi disparado de dentro da própria VPS, e o auto-SSH pelo IP externo dispara
+esse aviso. Estando na VPS, não use SSH — rode o comando direto.
+
+### 4.2 Acesso à aplicação hoje
+
+A VPS está em `APP_ENV=dev`, então o acesso é por **token estático** no header:
+
+```
+Authorization: Bearer dev-admin        (ou dev-dpo, dev-lider, dev-aprovador, dev-analista, dev-solicitante)
+X-Tenant: torre-movel
+```
+
+A interface em `http://vps.falagaiotto.com.br:8050` já manda isso sozinha.
+
+**Não existe usuário criado no banco.** O mecanismo de bootstrap do root está pronto e nunca foi
+executado — verifiquei: não há `JORNADA_ROOT_*` no `.env` da VPS nem linha de bootstrap no log.
+
+### 4.3 Variáveis do `.env` da VPS (`/opt/jornada/.env`)
+
+| Variável | O que é | Obrigatória |
+|---|---|---|
+| `APP_SECRET` | segredo da aplicação (`openssl rand -hex 32`) | sim |
+| `JORNADA_DB_PASSWORD` | senha do Postgres da aplicação | não (default `jornada`) |
+| `JORNADA_ROOT_EMAIL` / `JORNADA_ROOT_SENHA` | bootstrap do root; vazio = nenhum root criado | não |
+| `JORNADA_PURGE_TOKEN` | credencial de máquina do purge; **vazio = porta fechada** | não |
+| `LANGFUSE_PK` / `LANGFUSE_SK` | chaves do projeto Langfuse | sim |
+| `LANGFUSE_DB_PASSWORD`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT` | infra do Langfuse | sim |
+| `LANGFUSE_INIT_EMAIL` / `LANGFUSE_INIT_PASSWORD` | usuário inicial da UI do Langfuse | sim |
+
+Para ver quais existem hoje **sem revelar valores**:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_jornada root@187.77.46.137 "cd /opt/jornada && cut -d= -f1 .env | sort"
+```
+
+### 4.4 Criar o root (quando decidir)
+
+Rode **na VPS**, com `read -s` para a senha não ficar no histórico:
+
+```bash
+cd /opt/jornada && read -s -p "Senha do root: " S && \
+  printf "\nJORNADA_ROOT_EMAIL=sergio.gaiotto\nJORNADA_ROOT_SENHA=%s\n" "$S" >> .env && unset S && \
+  docker compose -f docker-compose.prod.yml --env-file .env up -d api
+```
+
+Mínimo de 12 caracteres, diferente do login, senão o boot recusa e **não cria a conta**. A conta
+nasce com troca obrigatória no primeiro acesso.
+
+**Recomendação:** não crie agora. Enquanto `APP_ENV=dev`, os tokens `dev-*` continuam válidos, então
+a conta não fecha porta nenhuma — só adiciona credencial num ambiente aberto e sem TLS. Faça junto do
+corte (§8).
+
+### 4.5 HubGPU (LLM da Claro)
+
+Só responde **de dentro da rede Claro** — e a VPS está nela. Da sua máquina, as chamadas de IA falham
+e a aplicação degrada para 503 + modo manual (§10.6), o que é o comportamento correto.
+
+```
+LLM_120B_BASE_URL=https://hub-gpus.claro.com.br/gpt120/v1     modelo openai/gpt-oss-120b
+LLM_20B_BASE_URL=https://hub-gpus.claro.com.br/gpt20/v1       modelo openai/gpt-oss-20b
+EMBED_BASE_URL=https://hub-gpus.claro.com.br/embed06b/v1      Qwen3-Embedding-0.6B, 1024 dims
+LLM_API_KEY=not-needed
+```
+
+---
+
+## 5. A história dos achados
+
+Cinco rodadas de UAT, cada uma documentada em `docs/`. Vale ler os documentos; aqui está o mapa e,
+mais importante, **os padrões** que se repetiram.
+
+| Rodada | Documento | Achados |
+|---|---|---|
+| UAT #1 | `docs/UAT-VPS-2026-08-05.md` | A1–A18 |
+| UAT #2 | `docs/UAT2-VPS-2026-08-06.md` | B01–B03 |
+| UAT #3 | `docs/UAT3-VPS-2026-08-06-adversarial.md` | C01–C04 |
+| UAT #4 | `docs/UAT4-VPS-2026-08-06-twin.md` | D01–D07 |
+| UAT #5 | `docs/UAT5-2026-08-06-cacada.md` | 23 achados + 6 padrões |
+
+### 5.1 Os achados críticos e o que eles ensinaram
+
+**D07 — três cópias da mesma função.** O simulador devolvia HTTP 500 para um grafo que o **próprio
+sistema gerou** e que o validador aprovou. A adjacência do grafo estava implementada em três lugares;
+uma correção anterior alcançou duas. Virou fonte única em `domain/jornada/adjacencia.py`.
+
+**E05 — a mesma doença, uma cópia adiante.** Eu declarei o D07 fechado e **deixei a quarta cópia** no
+compilador. Todo `decisionSplit` roteado por regra exportava sem saída: na jornada aprovada da demo,
+push, SMS, WhatsApp e goal ficavam órfãos no Journey Builder — cerca de R$ 3.810 de canais que o
+taxímetro cobrava e nunca disparariam. O golden file do teste de contrato não tinha nenhum
+`decisionSplit`, por isso o CI ficava verde.
+
+**E01 — o Guard das 7 listas era `if lista not in texto`.** Um SQL que mira **exatamente** os
+contatos suprimidos (Procon, blacklist, não-perturbe) saía com certificado válido. Corrigido duas
+vezes: a primeira fechou as cinco evasões catalogadas e **reabriu a classe** com operadores vizinhos
+(`NOT (…)` genérico virava `not ( )` na estrutura e casava). A segunda inverteu para **reconhecer
+forma canônica** — o que o parser não reconhece não passa.
+
+**E02 — a segregação criador ≠ aprovador não existia.** `criado_por` era gravado e nunca lido.
+Também corrigido duas vezes: a primeira comparava com quem *empacotou* em vez de com quem *emite*, e
+montar o pacote é um clique disponível a qualquer analista.
+
+**F05 — o detector de PII só via dígito.** Nome, endereço, CEP, data de nascimento e RG passavam
+intactos para o LLM, para o ledger e para o índice RAG (de onde **reaparecem como precedente para
+outro usuário**). Numa base de telco, é a PII mais comum. Reprovado na primeira entrega pelo auditor,
+que achou três abreviações de logradouro (`av.`, `trav.`, `rod.`) escritas no regex e
+**inalcançáveis**, e **35% de falso positivo** em briefing legítimo.
+
+**F01 — a simulação não reproduzia entre ambientes.** `numpy` não constava do `requirements.txt`, e o
+gerador troca de **algoritmo** conforme ele esteja instalado: o mesmo grafo com a mesma seed dava
+conversões P50 de 1625,0 numa máquina e 1736,5 no CI. O §6 promete o contrário, e o Previsto congelado
+é a régua do realizado.
+
+### 5.2 Os padrões — valem mais que a lista
+
+**P1 · A emenda vai onde o bug foi reportado, não onde a doença mora.** D07 → E05, E01 → E01b,
+D05 → o lint do canvas. Toda correção de UAT deve terminar com um `grep` da lógica corrigida e um
+teste que rode **todos** os consumidores.
+
+**P2 · Validação por presença, nunca por valor.** Nenhum jsonschema roda em lugar nenhum do sistema.
+O `jgc.schema.json`, que o SDD chama de fonte da verdade, é lido só para extrair `required` e o enum
+de tipos. **Continua aberto** e é a melhor relação conserto/dano do relatório.
+
+**P3 · O default silencioso é zero, não recusa.** Quando o dado não casa, o sistema inventa um zero e
+segue: R$ 267 mil viram R$ 0,00 com semáforo verde. O que não casa deveria virar aviso ou erro.
+
+**P4 · Contrato maior que o código.** Regras escritas com parâmetro que ninguém passa, NFRs sem
+implementação, seções descrevendo arquitetura que não existe.
+
+**P5 · A cobertura mente; só a mutação fala.** O Guard tinha **98% de cobertura de linha** e aceitou
+as duas mutações que o quebram por completo. Dez de 17 mutações no código determinístico sobreviveram
+com a suíte verde.
+
+**P6 · Identidade e escopo vindos do cliente.** Tenant no header, aprovador no corpo, política numa
+constante. Em todos, o servidor tinha a informação correta e escolhia não usá-la.
+
+### 5.3 Uma classe de bug que apareceu quatro vezes: **o teste que passa por não enxergar**
+
+Vale destaque porque é a mais perigosa — o CI fica verde e o controle não existe.
+
+- `E05_A7` varria `app.routes` para provar que toda rota exige tenant. No FastAPI novo a lista deixou
+  de ser plana: o aceite passou a enxergar **zero rota** e seguiu verde.
+- `_ROTAS_DE_LEITURA` apontava para `/api/v1/atelie/agentes`, **rota que não existe**. Passou cinco
+  meses invisível porque o 403 do middleware é emitido **antes** do roteamento — o aceite recebia o
+  403 que esperava sem tocar rota nenhuma.
+- O golden do compilador não tinha `decisionSplit`, então o E05 não era detectável.
+- O aceite de PII criava a OS com briefing **vazio** e punha PII só em `instrucoes` — verde com o
+  vazamento aberto.
+
+**Regra que ficou:** todo aceite de segurança precisa de um guarda-corpo que prove que ele está
+olhando para algo. Há três deles no repositório hoje (`test_E05_A6b`, `test_achado8_guarda_corpo_politica`,
+`test_F03_vigia_portao_llm`).
+
+---
+
+## 6. As melhorias, onda a onda
+
+Todas com detalhe em `CHANGELOG-SDD.md`.
+
+**Onda 1 — os cinco críticos do UAT #5.** Guard estrutural; segregação criador ≠ aprovador;
+calibração com backtest que pode reprovar + rollback; tenant vindo do token; D07 completado no
+compilador. Mais o **smoke funcional** no CI, que exercita o caminho crítico contra a VPS
+recém-deployada e derruba o deploy se falhar — antes o smoke só provava a *versão*.
+
+**Onda 2 — autenticação local (G01).** Usuários com argon2id, sessão revogável por cookie httpOnly,
+bloqueio por tentativas, login que não revela se o e-mail existe (nem pela mensagem, nem pelo tempo),
+tokens `dev-*` restritos a `APP_ENV=dev`. O **link mágico virou ponteiro**: a identidade de quem
+decide vem da sessão.
+
+> Detalhe que vale carregar: a comparação que **concede** usa igualdade exata; a que **recusa** usa
+> chave de identidade (colapsa `+tag`). Alargar do lado que recusa é conservador; do lado que concede
+> é escalação de privilégio.
+
+**Onda 3 — a política do M12 governa.** Era uma tela que publicava no banco e não mudava o
+comportamento de nada. Agora `holdout_min=40` publicado faz o sistema recusar holdout de 15. Junto: o
+purge do §10.4 ganhou consumidor, e a PII parou de entrar pelo briefing.
+
+**Onda 3b — IA Responsável fiada.** O módulo saiu do domínio e passou a governar sete serviços.
+Publicar muda a política vigente de `origem=seed` para `origem=policy_versao`.
+
+**Onda 3c — os bloqueantes de PII.** Detector enxergando titular identificado; Ateliê no portão;
+retenção alcançando evidências; purge com agendador real.
+
+**Onda 4 — corte para produção (no repositório, não aplicado).** Rate limit por IP; disjuntor do hub;
+`except APIError`; TLS e backup preparados; **a suíte passou a autenticar por sessão**, o que a torna
+executável em `APP_ENV=prod`; e o `requirements.lock`.
+
+---
+
+## 7. Scripts — commit, PR e deploy
+
+### 7.1 Commit e push
+
+```bash
+# Gates ANTES de commitar — no container, sempre
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd):/w" -w /w python:3.11-slim \
+  bash -c "pip install -q -r requirements.lock && python -m pytest -m 'not integration' -q && \
+           python -m ruff check . && python -m ruff format --check . && python -m mypy"
+cd frontend && npm run build && cd ..
+
+git add -A
+git commit -m "..."   # e emende SDD-Jornada.md + CHANGELOG-SDD.md no MESMO commit (§1.3.3)
+git push origin main
+```
+
+### 7.2 Pull request
+
+O fluxo tem sido commit direto na `main` com o CI como gate. Se preferir PR:
+
+```bash
+git checkout -b minha-frente
+git push -u origin minha-frente
+gh pr create --title "..." --body "..." --base main
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+```
+
+### 7.3 Deploy — o caminho normal (CI)
+
+Push na `main` dispara `.github/workflows/ci.yml`. O job `deploy` roda **só** com `backend`,
+`frontend` e `compose-validate` verdes, e faz: SSH → `git reset --hard origin/main` →
+`docker compose up -d --build` → smoke de versão (A22) → **smoke funcional**.
+
+```bash
+gh run list --limit 3
+gh run watch <ID> --exit-status
+```
+
+### 7.4 Deploy manual — quando o CI está indisponível
+
+Use **só** quando o CI estiver fora por infraestrutura (como agora, sem cota). Nunca para contornar
+um gate que **reprovou** — essa distinção é a razão de o "deploy-fantasma" não ter voltado.
+
+```bash
+# 1. Gates completos no container (§7.1). Se algo falhar, PARE.
+
+# 2. Aplicar
+ssh -i ~/.ssh/id_ed25519_jornada root@187.77.46.137 \
+  "cd /opt/jornada && git fetch origin && git reset --hard origin/main && \
+   export GIT_SHA=\$(git rev-parse HEAD | cut -c1-7) && \
+   docker compose -f docker-compose.prod.yml --env-file .env up -d --build && \
+   docker compose -f docker-compose.prod.yml --env-file .env ps"
+
+# 3. Prova de versão
+curl -s http://vps.falagaiotto.com.br:8050/healthz     # sha tem de bater com o HEAD
+
+# 4. Smoke funcional — o que prova que FUNCIONA, não só que subiu
+python scripts/smoke_funcional.py \
+  --base-url http://vps.falagaiotto.com.br:8050 --sha "$(git rev-parse HEAD | cut -c1-7)"
+```
+
+**Se algum passo falhar, reverta:**
+
+```bash
+ssh -i ~/.ssh/id_ed25519_jornada root@187.77.46.137 \
+  "cd /opt/jornada && git reset --hard <SHA_ANTERIOR> && \
+   export GIT_SHA=<SHA_ANTERIOR> && \
+   docker compose -f docker-compose.prod.yml --env-file .env up -d --build"
+```
+
+### 7.5 Scripts operacionais no repositório
+
+| Script | O que faz |
+|---|---|
+| `scripts/smoke_funcional.py` | caminho crítico ponta a ponta contra a VPS; roda no CI |
+| `scripts/purge_retencao.sh` | purge §10.4; dry-run por padrão |
+| `scripts/backup_bancos.sh` | dump dos dois Postgres |
+| `scripts/restaura_teste.sh` | **restaura em container descartável e verifica** |
+| `scripts/cert_status.sh` | validade do certificado TLS |
+| `deploy/deploy.sh` | instala o cron do purge e do backup |
+| `deploy/tls_setup.sh` | nginx + certbot no hostname existente |
+| `nginx/jornada.conf` | proxy reverso 443 |
+
+---
+
+## 8. Próximos passos
+
+### 8.1 Imediato
+
+1. **Deployar a onda 4** (§7.3 ou §7.4). A VPS está uma onda atrás.
+2. **Verificar a cota do Actions.**
+
+### 8.2 Antes de PII real — bloqueantes
+
+Nenhum destes é opcional:
+
+**TLS.** Preparado, não aplicado. `vps.falagaiotto.com.br` **já resolve** para o IP — dá para emitir
+Let's Encrypt sem criar DNS. Rode `deploy/tls_setup.sh`. Muda junto: cookie `Secure`, CORS,
+`NEXTAUTH_URL` do Langfuse, `APP_BASE_URL` dos links mágicos e o `--base-url` do smoke.
+
+**Backup com restauração testada.** Os scripts existem; falta instalar o cron (`deploy/deploy.sh`) e
+**rodar `restaura_teste.sh` pelo menos uma vez**. Backup não testado não é backup. Limite conhecido: o
+backup mora no mesmo disco da VPS — se o disco morre, morre junto. Considere destino externo.
+
+**Corte de ambiente.** `APP_ENV=prod` + `DEMO_MODE=false` no `docker-compose.prod.yml`, os `dev-*`
+desligados, o root criado. A suíte já cobre `prod` (`test_prod_corte_de_ambiente.py`).
+
+**Rate limit em produção.** O middleware existe e está fiado. Considere uma segunda camada no nginx —
+o middleware protege a aplicação, não a máquina.
+
+### 8.3 Achados abertos, por gravidade
+
+| Achado | O quê |
+|---|---|
+| **P2** | Nenhum jsonschema roda; o `jgc.schema.json` é lido só para `required` |
+| **Camada 2 do Guard** | Inerte: o read model é fixture e **ignora** o `sql_publico` |
+| **Ação inerte na IA Responsável** | `decisao_automatizada` governa 1 das 7 ações; travado por teste, não escondido |
+| **`blackout` e `precedencia`** | No conjunto fechado, na tela, **sem consumidor** |
+| **Roteamento híbrido** | `decisionSplit` por regra **e** por aresta duplica saída (+33% no taxímetro) |
+| **D06** | Editar o grafo sobrescreve a versão, sem histórico |
+| **D04 / throttle** | Regras implementadas que nenhum chamador ativa |
+| **Nome sem âncora** | Limite **declarado** do detector; a tela ainda não o exibe |
+| **Teto de tokens** | Fora do escopo: `invocacao.tokens` é sempre nulo (`LLMPort.chat` descarta o `usage`) |
+| **e2e Playwright** | Job comentado no CI; não existe |
+| **Reconciliação diária / drift 30min** | Sem scheduler |
+| **Hash sensível à ordem** | Mesmo grafo em ordem diferente → `externalKey` diferente |
+
+### 8.4 Emenda pendente ao SDD
+
+O §10.2 precisa registrar que a detecção de PII tem **duas naturezas**: por **forma** (CPF, CNPJ,
+e-mail, telefone, cartão, CEP, RG — verificável) e por **contexto** (nome, endereço, data de
+nascimento — probabilística, com buracos nomeados). Hoje a seção lê como se fosse binária, e é essa
+leitura que faz o DPO acreditar que marcar `nome: bloquear` fecha a porta. **A tela deve exibir o
+limite ao lado do seletor** — senão é o achado 8 na granularidade da confiança do detector.
+
+---
+
+## 9. Como trabalhar neste repositório
+
+O que funcionou, e por que:
+
+**Gates no container, sempre.** Custou dois achados aprender.
+
+**Auditor cético separado de quem escreve.** Em quase toda onda o auditor achou algo que o autor não
+viu — inclusive **reprovando** duas entregas. O prompt do auditor pergunta sempre a mesma coisa: *isto
+protege de verdade, ou passa no teste que o próprio autor escreveu?*
+
+**Inversão verificada.** Todo teste novo precisa **falhar** sem o código. Reverta a linha-chave, rode,
+restaure, mostre as duas saídas. Teste que não morre sem o código é decoração.
+
+**Limite declarado é controle; limite escondido é passivo.** Vale para o detector de PII, para o
+backup e para qualquer parâmetro que não governe.
+
+**Comentário que parece controle é pior que controle nenhum.** O cron do purge existiu como comentário
+por semanas — a auditoria o contava como existente. O comentário do compose hoje avisa explicitamente
+que ali não mora cron.
+
+**Parâmetro que não muda comportamento é teatro auditável.** Se um parâmetro não tem teste que prove a
+mudança **por rota HTTP**, ele não está fiado — declare como pendente em vez de entregar.
