@@ -30,27 +30,30 @@ inversa e é a melhor porta de entrada para entender a história.
 
 | Item | Estado |
 |---|---|
-| **Repositório** | `main` com a **onda 5** (I01–I05 + auditoria); antes dela, `0ad7d8c` |
-| **VPS** | containers rodam `8e21341`; o repo em `/opt/jornada` já está adiante (o CI fez `git reset --hard` antes de falhar no compose — ver o box abaixo) |
+| **Repositório** | `main` com a **onda 5** (I01–I05 + auditoria, `af3e80d`) + workflow `configurar-vps` (`bfe1cc2`) |
+| **VPS** | **roda `bfe1cc2`** — ondas 4 e 5 deployadas em 2026-08-07 pelo CI, smoke A22 + funcional verdes |
 | **Suíte** | **777 passed** (a onda 5 somou 33 testes aos 744), 1 skipped, 23 deselected, 1 xfailed |
 | **Gates** | ruff, ruff format, mypy e `npm run build` verdes |
 | **Ambiente** | `APP_ENV=dev` na VPS, `DEMO_MODE=true` — ainda **demo pública**, dado sintético |
 | **PII real** | **NÃO liberado.** Faltam TLS, backup aplicado e o corte de ambiente |
 
-### ⚠️ ~~O CI está sem cota~~ — a cota VOLTOU (2026-08-07); o deploy falha por outro motivo
+### ✅ O impasse do deploy foi RESOLVIDO (2026-08-07) — registro histórico
 
-Atualização de 2026-08-07 (verificado na máquina nova): a cota do Actions voltou no mesmo dia em
-que este handoff foi escrito — os pushes de `36c4f52` e `0ad7d8c` dispararam runs, e os três gates
-(backend, frontend, compose-validate) passaram VERDES. O job `deploy` falhou por outra razão: a
-onda 4 tornou `APP_ENV` **obrigatório** no `docker-compose.prod.yml` e o `.env` da VPS ainda não o
-tem (`required variable APP_ENV is missing a value`). Efeito colateral: o `git reset --hard` do job
-JÁ rodou — o repositório da VPS está em `0ad7d8c` com os containers ainda servindo `8e21341`.
+A sequência, para quem chegar depois: (1) a cota do Actions voltou no mesmo dia em que este
+handoff foi escrito; (2) o deploy passou a falhar por `APP_ENV` ausente no `.env` da VPS — a
+exigência deliberada da onda 4 — e a máquina de operação nova não tinha a chave SSH para gravar a
+variável; (3) o workflow **`configurar-vps`** (emenda I06, `workflow_dispatch`) resolveu usando o
+SSH do próprio CI, com a decisão de ambiente explícita de quem dispara: `APP_ENV=dev` +
+`DEMO_MODE=true` (explícito porque o default do compose virou `false` — sem a linha a demo
+desligaria em silêncio); (4) o deploy seguinte passou inteiro, com smoke A22 + funcional verdes.
 
-**Para destravar o deploy da onda 4** (com a chave SSH em mãos): adicionar ao `/opt/jornada/.env`
-`APP_ENV=dev` **e** `DEMO_MODE=true` explícito — o default do compose agora é `false`; sem a linha,
-o deploy desliga a demo em silêncio — e re-rodar o job (`gh run rerun <id> --failed`). Ou fazer
-logo o corte completo do §8.2, que o comentário do compose recomenda ir junto (prod + TLS +
-DEMO_MODE=false no MESMO deploy).
+Para o corte de produção (§8.2): dispare `configurar-vps` com `app_env=prod` + `demo_mode=false`
+— DEPOIS do TLS e junto dele, como o comentário do compose exige. O workflow nunca sobrescreve
+variável existente: para TROCAR o ambiente é preciso editar o `.env` na VPS (chave SSH).
+
+**Observação de 2026-08-07:** a listagem de variáveis do primeiro dispatch mostrou
+`JORNADA_ROOT_EMAIL`/`JORNADA_ROOT_SENHA` presentes no `.env` — o §4.2 deste handoff dizia que não
+existiam. Foram adicionadas depois da escrita; o bootstrap do root pode já ter rodado.
 
 ---
 
@@ -397,9 +400,10 @@ ssh -i ~/.ssh/id_ed25519_jornada root@187.77.46.137 \
 
 ### 8.1 Imediato
 
-1. **Deployar a onda 4** (§7.3 ou §7.4). A VPS está uma onda atrás — e o deploy exige antes
-   `APP_ENV=dev` + `DEMO_MODE=true` no `.env` da VPS (ver o box do §2).
+1. ~~**Deployar a onda 4**~~ Feito em 2026-08-07: ondas 4 e 5 no ar (`bfe1cc2`), smokes verdes.
 2. ~~**Verificar a cota do Actions.**~~ Feito em 2026-08-07: a cota voltou; gates verdes.
+3. **Copiar a chave SSH** (`id_ed25519_jornada`) para a máquina nova — sem ela não há §7.4 nem
+   edição do `.env`; o CI cobre deploy e a configuração pontual (`configurar-vps`), mais nada.
 
 ### 8.2 Antes de PII real — bloqueantes
 
