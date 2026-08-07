@@ -438,7 +438,7 @@ o middleware protege a aplicação, não a máquina.
 | ~~**Teto de tokens**~~ | **Meio fechado na onda 5 (I04):** o `usage` flui até `invocacao.tokens` (medição feita); falta o ENFORCEMENT do teto — só então o campo entra na política |
 | **e2e Playwright** | Job comentado no CI; não existe |
 | **Reconciliação diária / drift 30min** | Sem scheduler |
-| **Motor §6 × classes D05** | frequencySplit com classes fora de saturado/ok/sub (legais desde a onda 5) simula com alocação ZERO — o funil a jusante zera sem aviso (achado da auditoria da onda 5) |
+| ~~**Motor §6 × classes D05**~~ | **Fechado (D08):** cond fora do mix do governor vira AVISO nomeando nó e chaves (semáforo amarelo), determinístico e fora do loop de runs — M8-A1 preservado. Aberto derivado: escalar "100% do volume some" para vermelho é decisão de precedência do semáforo |
 | **Tela T16 × tokens** | `invocacao.tokens` agora tem valor (I04) e a API o expõe; nenhuma tela renderiza ainda |
 | ~~**Hash sensível à ordem**~~ | **Fechado na onda 5 (I03):** nodes/edges ordenados por id na persistência e no hash; golden intacto por construção |
 

@@ -4,7 +4,8 @@ Execução: K runs sobre o JGC com relógio VIRTUAL (horas desde o início): wai
 duração; quiet hours (meta §5.1 ou política) empurram envios para o fim da janela;
 throttle (`throttlePorHora`) adiciona o tempo médio de vazão; STO amostra a distribuição
 de horários das personas dentro de `janelaHoras`; frequencySplit usa o mix de classes do
-governor (coortes de personas §6). O relógio virtual afeta TEMPO/gargalos; as taxas
+governor (coortes de personas §6) — cond/classe fora do mix vira AVISO, nunca zero mudo
+(D08). O relógio virtual afeta TEMPO/gargalos; as taxas
 (entrega/conversão) vêm dos priors × multiplicadores amostrados por run — por isso a
 mesma seed reproduz os mesmos P10/P50/P90 (M8-A1) independente da hora de parede.
 
@@ -158,6 +159,29 @@ def simular(
     mult_personas = float(personas.get("mult_conversao_medio", 1.0))
     hora_pico = float((personas.get("horarios") or {}).get("pico", 20.0))
     desvio_horas = float((personas.get("horarios") or {}).get("desvio", 3.0))
+
+    # D08 (P3 do UAT #5): cond/classe de frequencySplit que não casa com o mix do
+    # governor NÃO pode zerar mudo — vira aviso (⇒ amarelo). Fora do loop de runs e
+    # sem draw de RNG: a mesma seed segue reproduzindo os mesmos percentis (M8-A1).
+    classes_mix = sorted(classe for classe, _ in pesos_classe)
+    for no_id, no in nos.items():
+        if str(no.get("type", "")) != "frequencySplit":
+            continue
+        conds = sorted({str(a.get("cond")) for a in saidas.get(no_id, []) if str(a["to"]) in nos})
+        sem_classe = [c for c in conds if c not in classes_mix]
+        sem_aresta = [c for c in classes_mix if c not in conds]
+        if sem_classe:
+            avisos.append(
+                f"frequencySplit {no_id}: cond {', '.join(map(repr, sem_classe))} sem classe "
+                f"no mix do governor {classes_mix} — volume 0 nesses braços em todos os runs "
+                "(§6/D08: o que não casa vira aviso, nunca zero mudo)."
+            )
+        if sem_aresta:
+            avisos.append(
+                f"frequencySplit {no_id}: classe {', '.join(map(repr, sem_aresta))} do mix do "
+                "governor sem aresta correspondente — essa fração do volume sai do funil "
+                "neste nó (§6/D08)."
+            )
 
     grau_base: dict[str, int] = dict.fromkeys(nos, 0)
     for arestas in saidas.values():

@@ -15,6 +15,35 @@ variável existente e não imprime valores. Primeiro uso: `app_env=dev` + `demo_
 linha o deploy desligaria a demo em silêncio. Serve também ao corte §8.2 (prod + demo
 off), depois do TLS e junto dele.
 
+## 2026-08-07 — D08 · `frequencySplit` fora do mix do governor vira aviso, não zero mudo (§6)
+É o achado que a auditoria da Onda 5 declarou aberto no HANDOFF §8.3 ("Motor §6 × classes
+D05"), fechado em sessão paralela e integrado aqui por cherry-pick — a sessão trabalhou
+sobre a base pré-onda-5, e a integração confirmou que nada colide: o motor não foi tocado
+pela onda, e as classes livres que o D08 protege são exatamente as que a emenda I01
+legalizou no schema.
+
+Instância nova do padrão **P3** do UAT #5 ("o default silencioso é zero, não recusa"), no
+motor: o roteamento é `por_classe.get(str(cond), 0)` e o mix de coortes só tem as classes
+do governor (`saturado/ok/sub` — CLASSES_FREQUENCIA em personas.py). A forma D05 (classes
+livres ou objeto `{id,min/max}`, ex.: `baixa`/`alta` do grafo v5 real) é VÁLIDA no save — o
+grafo passava no validador e simulava com alocação ZERO em todos os braços: funil a jusante
+zerado, custo R$ 0,00 e semáforo **VERDE**, porque com custo 0 o ROAS fica `None` e a regra
+"ROAS P50 < 1 → vermelho" nunca dispara. Nenhum aviso, nenhuma premissa.
+- **Correção:** checagem determinística no motor, FORA do loop de runs (zero draws novos — a
+  mesma seed segue reproduzindo os mesmos percentis, M8-A1): `cond` sem classe no mix → aviso
+  nomeando nó e conds ("volume 0 nesses braços em todos os runs"); classe do mix sem aresta →
+  aviso ("essa fração do volume sai do funil neste nó"). O aviso pinta amarelo pela regra já
+  existente do §6. Grafo cujas conds cobrem o mix não ganha aviso nenhum e produz saída idêntica
+  à de antes — goldens e `previsto` da demo intactos (nenhum grafo de demo/fixture tem
+  frequencySplit).
+- **Avaliado e rejeitado:** (a) redistribuir proporcionalmente — seria inventar um mapeamento
+  entre classes que o twin não conhece, o §1.3.5 pelo avesso; (b) reprovar no save com regra
+  nomeada — regrediria a D05 (a forma livre é válida e está em grafo real na VPS) e o mix do
+  governor é conhecimento do MOTOR, não do validador de grafo. Escalar o caso "100% do volume
+  some" para vermelho fica como decisão aberta de precedência do semáforo.
+- Aceites: `test_D08_*` (unit), com inversão verificada — sem o bloco D08 do motor os dois
+  testes do aviso ficam vermelhos e o guarda-corpo (ausência + M8-A1) segue verde.
+
 ## 2026-08-07 — Onda 5 · O contrato passa a valer por valor (§5, §5.2, §5.3, §10.2, §10.8)
 
 Cinco frentes dos achados abertos do handoff, escolhidas pela relação conserto/dano. O fio
@@ -130,7 +159,6 @@ F04 nas duas direções) — o mapeamento desta onda flagrou o `docs/HANDOFF.md`
 ("a tela ainda não o exibe") e ele foi corrigido junto, incluindo o estado do CI (a cota
 voltou no mesmo dia em que o handoff foi escrito; o deploy da onda 4 falha por `APP_ENV`
 ausente no `.env` da VPS, não por cota).
-
 ## 2026-08-06 — Onda 3c · Os bloqueantes de PII real (§10.2, §10.4)
 A auditoria das ondas 2/3/3b provou que **PII real não podia entrar**. Quatro bloqueantes, todos
 fechados. O detector foi **reprovado na primeira entrega** pelo auditor e refeito.
