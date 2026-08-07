@@ -10,10 +10,15 @@
 # RETENÇÃO (§10.4): o purge NÃO tem scheduler na aplicação — de propósito. Um worker a
 # mais traria lease/retry/fuso e um novo modo de falha silenciosa, que é justamente
 # como o §10.4 ficou sem consumidor até o UAT #5. O agendamento é cron do HOST, e a
-# rota é idempotente e dry-run por default (`?aplicar=true` para valer). Ver README:
-#   15 3 * * * root curl -fsS -X POST -H "Authorization: Bearer $JORNADA_DPO_TOKEN" \
-#     -H "X-Tenant: torre-movel" \
-#     "http://127.0.0.1:8000/api/v1/admin/purge?aplicar=true" >> /var/log/jornada-purge.log 2>&1
+# rota é idempotente e dry-run por default (`?aplicar=true` para valer).
+#
+# ATENÇÃO ao ler este bloco: aqui NÃO mora nenhuma linha de cron. Até o F04 morava — um
+# `curl` de exemplo em comentário — e ninguém a instalava (não havia hit de `cron` em
+# backend/Dockerfile, frontend/Dockerfile, .github/workflows/ci.yml nem deploy/deploy.sh).
+# Comentário não instala nada, e um comentário que PARECE um controle é pior do que
+# controle nenhum: a auditoria o conta como existente. Quem instala o cron agora é
+# `deploy/deploy.sh` (escreve /etc/cron.d/jornada-purge e confere se há daemon de cron
+# vivo); quem executa é `scripts/purge_retencao.sh`. Fora daqui, só documentação (README).
 name: jornada
 
 services:
@@ -54,6 +59,11 @@ services:
       # segue normalmente e nenhum root é criado — a aplicação não quebra por isso.
       JORNADA_ROOT_EMAIL: ${JORNADA_ROOT_EMAIL:-}
       JORNADA_ROOT_SENHA: ${JORNADA_ROOT_SENHA:-}
+      # Credencial de MÁQUINA do purge §10.4 (F04). O cron não tem sessão nem usuário;
+      # este token é aceito SÓ pela rota do purge (api/v1/admin.py::ator_do_purge) e só
+      # quando tem ≥32 caracteres. Gerado pelo deploy no .env do servidor — vazio aqui
+      # significa porta FECHADA (a rota volta a exigir dpo/admin humano), nunca aberta.
+      JORNADA_PURGE_TOKEN: ${JORNADA_PURGE_TOKEN:-}
       LLM_120B_BASE_URL: https://hub-gpus.claro.com.br/gpt120/v1
       LLM_120B_MODEL: openai/gpt-oss-120b
       LLM_20B_BASE_URL: https://hub-gpus.claro.com.br/gpt20/v1

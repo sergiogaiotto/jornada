@@ -111,16 +111,53 @@ Botão primário no Cockpit (e na busca ⌘K): cria o pedido e abre a **Sala de 
 
 `POST /admin/purge` aplica o `retencao_dias` da política **publicada** (tela de Políticas → banco; publicar 30 dias muda o que a rota apaga) sobre `telemetry_event` e `dc_segment_cache`, e registra a destruição no outbox (`dados.purgados`). Papel `dpo` (admin passa). **Sem `?aplicar=true` nada é apagado** — a resposta é o relatório do que expirou, com os mesmos números que a execução usaria.
 
-Deliberadamente **não** há scheduler na aplicação (nem apscheduler, nem celery): um segundo modelo de execução traria worker, lease, retry e fuso — e um novo modo de falha silenciosa, que é exatamente como o §10.4 passou meses sem consumidor. O agendamento é uma linha no cron do host, observável pelo log do cron, pelo código HTTP e pelo evento no outbox:
+Deliberadamente **não** há scheduler na aplicação (nem apscheduler, nem celery): um segundo modelo de execução traria worker, lease, retry e fuso — e um novo modo de falha silenciosa, que é exatamente como o §10.4 passou meses sem consumidor. O agendamento é cron do host — mas **instalado pelo deploy, não descrito no README**. Até o F04 esta seção mostrava uma linha de `curl` que nada instalava (nenhum hit de `cron` em `backend/Dockerfile`, `frontend/Dockerfile`, `.github/workflows/ci.yml` ou `deploy/deploy.sh`), apontava para `127.0.0.1:8000` — porta que o serviço `api` **não publica** — e usava um `JORNADA_DPO_TOKEN` que não existe em lugar nenhum do repositório.
+
+| Peça | Onde | O que faz |
+|---|---|---|
+| Instalação | `deploy/deploy.sh` → `/etc/cron.d/jornada-purge` | escreve o cron a cada deploy, gera o token no `.env`, cria log e logrotate, e **falha o deploy** se não houver daemon de cron vivo |
+| Execução | `scripts/purge_retencao.sh` | dry-run por default; `--aplicar` destrói; `--status` responde "quando foi o último purge?" |
+| Credencial | `JORNADA_PURGE_TOKEN` (≥32 chars) | token de **máquina**, aceito só pela rota do purge (`api/v1/admin.py::ator_do_purge`); gerado com `openssl rand -hex 32` pelo deploy, vive só no `.env` do servidor (0600) e é injetado no serviço `api` pelo compose. Ausente ou curto ⇒ porta fechada (401), nunca aberta. Em `APP_ENV=prod` não há Bearer de dev: sem este token, o cron não teria como autenticar |
+| Endereço | `http://127.0.0.1:8050/api/v1/admin/purge` | 8050 é a porta publicada (`web`/nginx faz proxy de `/api/` para `api:8000`); loopback, o token não sai da máquina |
+
+O que o deploy instala, literalmente:
 
 ```cron
-# /etc/cron.d/jornada-purge — purge de retenção diário, 03:15 (§10.4)
-15 3 * * * root curl -fsS -X POST -H "Authorization: Bearer $JORNADA_DPO_TOKEN" \
-  -H "X-Tenant: torre-movel" "http://127.0.0.1:8000/api/v1/admin/purge?aplicar=true" \
-  >> /var/log/jornada-purge.log 2>&1
+# /etc/cron.d/jornada-purge — INSTALADO por deploy/deploy.sh (SDD §10.4). Não editar à mão:
+# o próximo deploy sobrescreve. Executor: /opt/jornada/scripts/purge_retencao.sh
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=America/Sao_Paulo
+MAILTO=root
+
+15 3 * * * root /opt/jornada/scripts/purge_retencao.sh --aplicar
+30 9 * * * root /opt/jornada/scripts/purge_retencao.sh --status
+```
+
+**Falha é visível, por três caminhos independentes.** (1) *Exit code*: o script sai `1` em falha de execução, `2` em configuração ausente, `3` em purge atrasado — o cron enxerga o número. (2) *stderr + syslog*: mensagens de erro vão para o stderr, que o cron entrega ao `MAILTO` **se houver um MTA no host** — e numa VPS enxuta não há (o cron registra "No MTA installed, discarding output" e a notificação morre ali). Por isso toda falha vai TAMBÉM para o syslog (`logger -t jornada-purge -p daemon.err`), que existe em qualquer host systemd: `journalctl -t jornada-purge -p err --since '-7d'`. O deploy avisa em voz alta quando não encontra MTA. O log recebe só a saída normal. É o oposto do `>> log 2>&1` antigo, que enterrava o erro no arquivo. Sucesso é silencioso — cron que fala todo dia vira filtro de e-mail. (3) *Ausência*: um script não consegue relatar a própria ausência, então a linha das 09:30 (`--status`) lê o carimbo de `/var/lib/jornada/purge-ultimo.json` e grita se a última execução falhou, nunca aconteceu ou tem mais de 26h. Só `--aplicar` carimba: um dry-run manual não pode fazer o vigia achar que o cron está vivo. Pela API, `GET /auditoria?tipo=dados.purgados` mostra as destruições — mas atenção, o evento só é emitido quando algo foi de fato apagado, então a ausência dele significa "nada expirou" *ou* "não rodou"; quem separa os dois é o carimbo.
+
+Verificação manual, a qualquer momento (nada é apagado):
+
+```bash
+/opt/jornada/scripts/purge_retencao.sh            # dry-run: quanto expirou hoje
+/opt/jornada/scripts/purge_retencao.sh --status   # silêncio = em dia; exit 3 = atrasado
+tail -n 20 /var/log/jornada-purge.log             # carimbo de tempo por execução
+journalctl -t jornada-purge -p err --since '-7d'  # falhas, sem depender de e-mail
 ```
 
 Rodar de novo é seguro: na segunda passagem nada mais é elegível, o total é `0` e nenhum evento novo é emitido (idempotência do dado, não flag de controle).
+
+#### O que este purge NÃO faz (limites declarados)
+
+Antes de processar PII real, o DPO precisa ler isto — um limite declarado é controle; um limite escondido é passivo.
+
+| Limite | Consequência prática |
+|---|---|
+| **Varre duas tabelas: `telemetry_event` e `dc_segment_cache`.** Texto livre de OS (`os_thread`, `pedido`, `documento_portao`) e as evidências de RAG (`agente_evidence`) **não têm relógio de retenção** | um nome, CPF ou endereço colado por um analista na conversa de uma OS, ou ingerido num documento de RAG, sobrevive ao purge indefinidamente. A retenção do §10.4 cobre o dado que a plataforma COLETA, não o que uma pessoa DIGITA |
+| **`invocacao` e `domain_event` ficam de fora por decisão** (§8-M12/Art. 20: são a prova de como a plataforma se comportou, inclusive a prova do próprio purge) | a trilha é preservada; ela nasce sanitizada pelo C02, e é aí — não aqui — que se garante que não há PII nela |
+| **É retenção por prazo, não atendimento de titular.** Não existe "apague os dados da Maria" (Art. 18, III) | um pedido de eliminação individual hoje é procedimento manual. O purge só sabe apagar o que passou da data |
+| **`telemetry_event` guarda `contato_hash`, não o contato** | o purge apaga o pseudônimo; a chave que ligaria o hash à pessoa nunca esteve neste twin |
+| **O token de máquina purga o tenant que vier no `X-Tenant`** — a lista efetiva é `JORNADA_PURGE_TENANTS` (default `torre-movel`), lida pelo executor | onboardar um segundo tenant e esquecer a variável faz o purge desse tenant nunca rodar, e o vigia continua dizendo "em dia" porque o primeiro deu ok. A lista é ecoada no log e no carimbo de toda execução — confira ali |
 
 ## Estrutura do repositório
 
@@ -130,7 +167,8 @@ Rodar de novo é seguro: na segunda passagem nada mais é elegível, o total é 
 ├── docs/UAT-VPS-2026-08-05.md# UAT via UI: 10 use cases, 18 achados, reteste
 ├── docker-compose.yml        # dev: db(pgvector), api, mocks, mailpit, langfuse
 ├── docker-compose.prod.yml   # demo VPS: web(nginx+SPA):8050, api, mocks, langfuse:13000
-├── deploy/deploy.sh          # deploy por git clone/reset na VPS
+├── deploy/deploy.sh          # deploy por git clone/reset na VPS + cron do purge (§10.4)
+├── scripts/purge_retencao.sh # executor do purge chamado pelo cron (dry-run default)
 ├── backend/
 │   ├── domain/               # puro, sem I/O (campanha, jornada/JGC + XSD de export, simulação…)
 │   ├── application/          # ports (Protocols) + services (casos de uso)

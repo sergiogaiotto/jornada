@@ -12,14 +12,16 @@ publicadas + 3 casos golden por agente-chave + política v1 publicada.
 
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from adapters.llm.fake import LLMFake
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from app.errors import PROBLEM_CONTENT_TYPE
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.services.atelie_service import ServicoAtelie
 from domain.atelie.modelos import DIMENSOES_PADRAO
 from domain.audiencia.modelos import Segmento
@@ -176,7 +178,16 @@ def test_M12_A2(client: TestClient, app: FastAPI) -> None:
     assert frozen["agent_versions"] == versoes_seed  # snapshot das publicadas do GO
 
     # resolução por OS (frozen §4.1): em voo → 1.0; plataforma (publicada atual) → 1.1
-    servico = ServicoAtelie(app.state.repositorio_os, RelogioSistema(), LLMFake(), app.state.tracer)
+    servico = ServicoAtelie(
+        app.state.repositorio_os,
+        RelogioSistema(),
+        LLMFake(),
+        app.state.tracer,
+        # O serviço passou a exigir a política de IA PUBLICADA (§10.2). Aqui o teste só
+        # exercita `versao_para_os`, que nem chega ao LLM — mas a porta é obrigatória no
+        # construtor de propósito: um Ateliê montável sem ela é um Ateliê que nasce mudo.
+        cast(PublicacoesIaPort, publicacoes_vigentes(app.state.repositorio_os)),
+    )
     em_voo = servico.versao_para_os(TENANT, uuid.UUID(os_em_voo["id"]), "engineer")
     assert em_voo == {"agente": "engineer", "versao": "1.0", "origem": "frozen"}
     nova = client.post("/api/v1/os", json={"nome": "OS nova", "tshirt": "P"}, headers=_h())

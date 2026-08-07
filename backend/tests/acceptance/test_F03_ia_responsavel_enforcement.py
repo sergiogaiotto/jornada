@@ -46,6 +46,8 @@ from application.ports.publicacoes import ORIGEM_PUBLICADA, ORIGEM_SEED
 from application.services import portao_ia
 from domain.ia_responsavel.politica import ACOES_VIA_AI
 from domain.ia_responsavel.retencao import REDIGIDO
+from tests.acceptance.test_M6 import CELULAS_CONFORMES
+from tests.acceptance.test_M6 import _criar_os as _criar_os_m6
 from tests.acceptance.test_M7 import (
     _criar_os_com_segmento,
     _gerar_jornada,
@@ -57,6 +59,12 @@ from tests.acceptance.test_M11 import (
     _resposta_optimize,
     _semear_jornada,
     _simular_e_congelar,
+)
+from tests.acceptance.test_M12 import (
+    NOTAS_VERDES,
+    _agentes,
+    _criar_candidata,
+    _judge,
 )
 
 TENANT = "torre-movel"
@@ -336,6 +344,259 @@ def _reconstruir(client: TestClient, invocacao_id: uuid.UUID) -> dict[str, Any]:
     return dict(resposta.json())
 
 
+# ------------------------------------ as duas rotas cujo ledger carrega EVIDÊNCIAS
+#
+# Texto exatamente na forma que a auditoria mediu saindo por `GET /auditoria` e por
+# `POST /auditoria/reconstruir` com `reter_prompt: false, reter_resposta: false`
+# publicado: a `resposta` vinha `[SUPRIMIDO...]` e isto vinha inteiro ao lado.
+EVIDENCIA_LIVRE = "Solicitante Joao (contato joao@acme.com.br) pediu 500k na conversa"
+
+
+def _conversar_com_o_consultor(client: TestClient, app: FastAPI) -> None:
+    """`POST /pedidos/{id}/mensagem` — aqui a evidência é TRECHO DA CONVERSA.
+
+    Escolhida porque é o pior caso do campo: `agents/consultor.py` monta `evidencias`
+    com `str(e).strip()` do que o modelo devolveu, e o modelo é instruído a citar a
+    conversa do solicitante. "Ref versionada" é o que o comentário de `CHAVES_TECNICAS`
+    afirmava; isto é o que o campo carrega.
+    """
+    app.state.llm = LLMFake(
+        resposta=json.dumps(
+            {
+                "resposta": "Com base em campanhas anteriores, sugiro verba e janela.",
+                "inferencias": [
+                    {"campo": "verba", "valor": "R$ 500.000", "evidencias": [EVIDENCIA_LIVRE]}
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+    pedido = client.post(
+        "/api/v1/pedidos",
+        json={
+            "solicitante": {"nome": "Ana Lima", "area": "Marketing"},
+            "conteudo": {
+                "objetivo": "Upgrade de pós-pago para 5G",
+                "publico": "Pós-pago ativo há 12+ meses",
+                "oferta": "20GB de bônus por 6 meses",
+            },
+        },
+        headers=_h("portal-dev"),
+    )
+    assert pedido.status_code == 201, pedido.text
+    resposta = client.post(
+        f"/api/v1/pedidos/{pedido.json()['id']}/mensagem",
+        json={"mensagem": "Pode usar a campanha de upgrade do ano passado como referência."},
+        headers=_h("portal-dev"),
+    )
+    assert resposta.status_code == 200, resposta.text
+
+
+def _gerar_sql_com_o_engineer(client: TestClient, app: FastAPI) -> None:
+    """`POST /os/{id}/segmento/gerar-sql` — aqui a evidência vem do corpus RAG."""
+    os_ = client.post(
+        "/api/v1/os",
+        json={
+            "nome": "Upgrade Pós-Pago 5G",
+            "tshirt": "G",
+            "briefing": {"publico": {"valor": "Pós-pago sem 5G", "inferido": False}},
+        },
+        headers=_h(),
+    )
+    assert os_.status_code == 201, os_.text
+    app.state.llm = LLMFake(
+        resposta=json.dumps(
+            {
+                "sql": "SELECT contato_hash FROM clientes",
+                "explicacao": [{"clausula": "WHERE", "explicacao": "listas de supressão"}],
+                "evidencias": [EVIDENCIA_LIVRE],
+            },
+            ensure_ascii=False,
+        )
+    )
+    gerado = client.post(
+        f"/api/v1/os/{os_.json()['id']}/segmento/gerar-sql",
+        json={"instrucoes": "Pós-pago elegível a upgrade 5G, todos os canais com opt-in."},
+        headers=_h(),
+    )
+    assert gerado.status_code == 201, gerado.text
+
+
+def test_b_reter_false_redige_tambem_a_coluna_evidencias(client: TestClient, app: FastAPI) -> None:
+    """A auditoria lia `[SUPRIMIDO...]` no `output` e o texto INTACTO na coluna ao lado.
+
+    Dois furos numa linha só de ledger, e nenhum deles alcançável por configuração:
+
+    1. `invocacao.evidencias` é COLUNA (§4.1), não parte de `input`/`output` — os
+       serviços atribuíam `evidencias=` fora do `portao.reter_output(...)`, então
+       nenhum valor de política mudava aquele campo. Publicar `reter_prompt: false` E
+       `reter_resposta: false` deixava o texto do solicitante legível.
+    2. dentro do `output`, `evidencias` estava em `CHAVES_TECNICAS` com a justificativa
+       de ser "id e ref `nome@versao`" — premissa falsa em todos os produtores.
+
+    O teste cobra os dois pelas ROTAS: a de usuário que grava e a do DPO que lê
+    (`POST /auditoria/reconstruir`, o próprio direito do Art. 20 que a retenção
+    equilibra). Assim como no teste do prompt, "o marcador apareceu" é compatível com o
+    bug — o que separa supressão de carimbo é o texto ter SUMIDO.
+    """
+    # ---- ANTES: o default retém, e a evidência é a prova do Art. 20 por inteiro
+    _conversar_com_o_consultor(client, app)
+    antes = _reconstruir(client, _ultima_invocacao(app))
+    assert EVIDENCIA_LIVRE in json.dumps(antes, ensure_ascii=False), (
+        "com o default, a evidência TEM de estar lá — é o que explica a inferência"
+    )
+    assert antes["evidencias"] == [EVIDENCIA_LIVRE]
+
+    # ---- o DPO desliga os dois lados
+    conteudo = _conservador(client)
+    conteudo["retencao"]["reter_prompt"] = False
+    conteudo["retencao"]["reter_resposta"] = False
+    assert _publicar(client, conteudo) == 1
+
+    # ---- DEPOIS: a mesma rota, e o texto não chega a ser gravado em NENHUM dos dois
+    for rota in (_conversar_com_o_consultor, _gerar_sql_com_o_engineer):
+        rota(client, app)
+        invocacao_id = _ultima_invocacao(app)
+        corpo = json.dumps(_reconstruir(client, invocacao_id), ensure_ascii=False)
+
+        assert REDIGIDO in corpo, f"{rota.__name__}: nada foi suprimido"
+        assert "joao@acme.com.br" not in corpo, f"{rota.__name__}: contato do titular sobreviveu"
+        assert "pediu 500k" not in corpo, (
+            f"{rota.__name__}: a coluna `evidencias` devolveu o texto que o `output` "
+            "diz ter suprimido — é o furo com o carimbo ao lado"
+        )
+        # a linha continua sendo PROVA: correlação intacta (é o que `SUFIXO_ID` guarda)
+        assert str(invocacao_id) in corpo
+
+        # o ledger persistido conta a mesma história — a redação é na ESCRITA
+        gravada = app.state.repositorio_os.listar_invocacoes(TENANT)[-1]
+        assert gravada.evidencias == [REDIGIDO], f"{rota.__name__}: coluna fora da política"
+
+        # a OUTRA rota de leitura do mesmo ledger: `GET /auditoria` embute o detalhe
+        # completo da invocação no evento via_ai (o "clicável" da T16). Redigir na
+        # ESCRITA é o que faz as duas rotas contarem a mesma história sem nenhuma
+        # delas precisar filtrar nada na saída.
+        trilha = client.get("/api/v1/auditoria?via_ai=true", headers=_h("dev-dpo"))
+        assert trilha.status_code == 200, trilha.text
+        embutida = [
+            e["invocacao"]
+            for e in trilha.json()["eventos"]
+            if e.get("invocacao", {}).get("invocacao_id") == str(invocacao_id)
+        ]
+        assert embutida, f"{rota.__name__}: a trilha tem de embutir a invocação via_ai"
+        na_trilha = json.dumps(embutida[0], ensure_ascii=False)
+        assert "pediu 500k" not in na_trilha and "joao@acme.com.br" not in na_trilha
+        assert REDIGIDO in na_trilha
+
+    # e a mesma evidência ANINHADA dentro do `output` do consultor (a chave que estava
+    # declarada como técnica) também some — os dois caminhos do mesmo texto.
+    inferidas = [
+        i
+        for i in app.state.repositorio_os.listar_invocacoes(TENANT)
+        if i.output and "inferencias" in i.output and i.output["inferencias"]
+    ]
+    assert inferidas, "o consultor tem de ter gravado inferências para o teste valer"
+    assert inferidas[-1].output["inferencias"][0]["evidencias"] == [REDIGIDO]
+
+
+# PII do titular na forma em que ela chega de verdade num tenant de telco: nome composto
+# com preposição (sem âncora sintática que detector nenhum pegue com confiança), CPF
+# pontuado e celular com DDI. Nenhum destes é o CPF do topo do arquivo de propósito — o
+# que se mede aqui é o campo em que a PII entra, não a capacidade do mascarador.
+TITULAR = "Maria da Conceicao dos Santos"
+CONTATO_TITULAR = "maria.da.conceicao@vivo.com.br"
+
+
+def test_b_reter_false_nao_deixa_pii_sobreviver_em_chave_de_id_do_kv_master(
+    client: TestClient, app: FastAPI
+) -> None:
+    """`*_id` preservava QUALQUER escalar — e no `kv_master` quem nomeia é o USUÁRIO.
+
+    Este teste é a terceira encenação do MESMO modo de falha, e a razão de ele existir
+    na camada de rota é que as duas anteriores foram fechadas no domínio e a terceira
+    continuou de pé mesmo assim:
+
+    * onda 3 — `evidencias` preservada por estar em `CHAVES_TECNICAS`;
+    * onda 4 — chave preservada com dicionário embaixo atravessando inteira;
+    * aqui   — chave preservada com ESCALAR embaixo, onde o nome da chave vem do corpo
+      da requisição. `POST /os/{id}/criativos/gerar` recebe `kv_master: dict[str, Any]`,
+      grava-o no `input` do ledger CRU (só `instrucoes` passa por `portao.sanear`), e
+      `validar_kv_master` só olha termos proibidos de marketing — não nomes de campo.
+
+    Medido pela rota, com `reter_prompt: false` + `reter_resposta: false` publicados:
+
+        "kv_master": {"produto":    "[SUPRIMIDO POR POLITICA DE RETENCAO]",
+                      "cliente_id": "Maria da Conceicao dos Santos - <CPF>",
+                      "contato_id": "maria.da.conceicao@vivo.com.br",
+                      "documento":  11144477735}
+
+    O marcador ao lado do titular intacto — a supressão em que a auditoria acredita e
+    que não aconteceu, agora sem adversário nenhum: basta o analista de campanha nomear
+    um campo de KV `cliente_id`, que é como campos de KV se chamam.
+
+    E `documento` mostra a outra metade: CPF cabe num JSON number, e valor não-textual
+    atravessava a redação por não ser `str`.
+    """
+    conteudo = _conservador(client)
+    conteudo["retencao"]["reter_prompt"] = False
+    conteudo["retencao"]["reter_resposta"] = False
+    assert _publicar(client, conteudo) == 1
+
+    # ATENÇÃO — a `evidencias` deste fake é deliberadamente SEM PII, e isso é uma
+    # dívida declarada, não um descuido. A coluna `evidencias` do criativo NÃO passa
+    # pelo portão: `criativo_service.py` grava `evidencias=list(evidencias)` no
+    # construtor e ainda sobrescreve com `invocacoes[-1].evidencias = list(saida.
+    # evidencias)` depois. Com PII aqui, este teste falharia — e falharia pelo furo do
+    # M6, que é de outro arquivo, escondendo o que ele veio medir (o `kv_master`).
+    # Enquanto `portao.reter_evidencias` não entrar naquele serviço, `reter_* = false`
+    # continua vazando pela rota do criativo. Ver VEREDITO/EMENDA desta rodada.
+    app.state.llm = LLMFake(
+        respostas_por_perfil={
+            "120b": json.dumps(
+                {
+                    "celulas": CELULAS_CONFORMES,
+                    "evidencias": ["criativos: KV master aprovado na campanha 5G (T6)"],
+                    "resposta": "Matriz montada.",
+                },
+                ensure_ascii=False,
+            ),
+            "20b": json.dumps({"avisos": []}),
+        }
+    )
+    os_ = _criar_os_m6(client)
+    gerado = client.post(
+        f"/api/v1/os/{os_['id']}/criativos/gerar",
+        json={
+            "kv_master": {
+                "produto": "5G",
+                "cliente_id": f"{TITULAR} - {CPF}",  # chave do USUÁRIO, valor com PII
+                "contato_id": CONTATO_TITULAR,
+                "documento": 11144477735,  # CPF como JSON number
+            },
+            "canais": ["email", "sms"],
+            "variantes": ["A", "B"],
+        },
+        headers=_h(),
+    )
+    assert gerado.status_code == 201, gerado.text
+
+    # Todas as linhas que a rota gravou, lidas pela rota do DPO (Art. 20).
+    invocacoes = app.state.repositorio_os.listar_invocacoes(TENANT)
+    assert invocacoes, "a rota do criativo tem de ter gravado ledger"
+    for invocacao in invocacoes:
+        corpo = json.dumps(_reconstruir(client, invocacao.id), ensure_ascii=False)
+        assert TITULAR not in corpo, f"nome do titular sobreviveu em {corpo}"
+        assert CONTATO_TITULAR not in corpo, f"contato do titular sobreviveu em {corpo}"
+        assert CPF not in corpo, f"CPF sobreviveu em {corpo}"
+        assert "11144477735" not in corpo, f"CPF como número sobreviveu em {corpo}"
+
+    # ...e a linha continua correlacionável: `os_id` é UUID, tem FORMA de id e fica.
+    com_kv = [i for i in invocacoes if i.input and "kv_master" in i.input]
+    assert com_kv, "o teste precisa de uma linha com `kv_master` para valer"
+    assert com_kv[-1].input["os_id"] == os_["id"]
+    assert com_kv[-1].input["kv_master"]["cliente_id"] == REDIGIDO
+
+
 # ======================================================== (c) decisão automatizada
 def test_c_decisao_automatizada_abre_o_caminho_que_o_codigo_fechava_na_mao(
     client: TestClient, app: FastAPI
@@ -532,6 +793,306 @@ def test_f_restringir_um_agente_nao_derruba_os_outros(client: TestClient, app: F
     assert gerada.status_code == 201, gerada.text
 
 
+# ============================ o Ateliê (§8-M12): o serviço que estava INTEIRO fora
+#
+# Os três testes abaixo são o "antes e depois" do único serviço da plataforma que não
+# conhecia o portão. A auditoria mediu, com a política MAIS restritiva publicada:
+#
+#   [DRY-RUN]  200 | CPF em claro no prompt? True | EMAIL em claro? True
+#   [DRY-RUN]  perfis usados = ['120b']        <- `modelos_permitidos` ignorado
+#   [DRY-RUN]  invocacoes gravadas = 0         <- o Art. 20 não alcançava o caminho
+#
+# Cada linha daquela medição vira um teste por ROTA aqui, com o "antes" preservado: sem
+# o antes, os asserts não distinguiriam política que governa de coincidência de valores.
+#
+# O Ateliê é a rota MAIS exposta a esse tipo de furo, e não a menos: o `modelo_perfil`
+# está no front-matter do SKILL.md que o analista DIGITA na tela do T16 (§7.1). Nos
+# outros sete serviços a skill é arquivo de disco revisado em PR; aqui é entrada de
+# usuário escolhendo com qual modelo o dado do tenant vai conversar.
+EMAIL_ATELIE = "joao.silva@acme.com.br"
+ENTRADA_COM_PII = {
+    "pedido": f"Cliente {EMAIL_ATELIE}, CPF {CPF}, quer upgrade para 5G",
+    "canal": "email",
+}
+
+
+def _candidata_do_engineer(client: TestClient) -> str:
+    """Skill 1.1 do `engineer` em `em_revisao` (helpers do M12 — nada redigitado aqui).
+
+    `engineer` porque é o agente com golden dataset E com a v1.0 publicada nas seeds
+    (§11.4): o dry-run precisa dos DOIS lados para que a contagem de chamadas signifique
+    alguma coisa, e o harness precisa dos casos.
+    """
+    return _criar_candidata(client, _agentes(client)["engineer"]["id"])
+
+
+def test_a_atelie_dry_run_saneia_a_entrada_digitada_na_tela(
+    client: TestClient, app: FastAPI
+) -> None:
+    """`POST /skills/{id}/dry-run`: a `entrada` é corpo de POST, não golden dataset.
+
+    O guarda-corpo estático desta frente declarava o Ateliê como dívida "menos grave"
+    porque ele rodaria `harness_case.input` curado. Metade da rota é isso; a outra
+    metade é este endpoint, em que o texto vem inteiro do navegador — e era por ele que
+    o CPF saía em claro.
+    """
+    skill_id = _candidata_do_engineer(client)
+    fake = LLMFake(resposta='{"sql": "SELECT contato_hash FROM clientes"}')
+    app.state.llm = fake
+
+    # ---- ANTES: o default MASCARA (piso do C02) e os DOIS lados recebem o texto marcado
+    antes = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run", json={"entrada": ENTRADA_COM_PII}, headers=_h()
+    )
+    assert antes.status_code == 200, antes.text
+    assert len(fake.chamadas) == 2, "lado a lado: versão publicada atual + candidata"
+    prompt = json.dumps(fake.chamadas, ensure_ascii=False)
+    assert CPF not in prompt and EMAIL_ATELIE not in prompt
+    assert "[CPF]" in prompt and "[EMAIL]" in prompt
+    # …e a tela devolve o que REALMENTE foi ao modelo: um lado a lado que exibisse o
+    # texto original faria o revisor comparar duas saídas de um prompt que não existiu.
+    assert CPF not in json.dumps(antes.json(), ensure_ascii=False)
+
+    # ---- o DPO aperta: CPF em pedido de segmentação nunca é parâmetro legítimo
+    conteudo = _conservador(client)
+    conteudo["dados_llm"]["acoes"]["cpf"] = "bloquear"
+    assert _publicar(client, conteudo) == 1
+
+    # ---- DEPOIS: mesma requisição, recusa explícita, e NENHUMA chamada nova
+    depois = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run", json={"entrada": ENTRADA_COM_PII}, headers=_h()
+    )
+    assert depois.status_code == 422, depois.text
+    assert depois.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert "cpf" in depois.json()["detail"].lower()
+    assert len(fake.chamadas) == 2, "a política BLOQUEIA: o texto não podia chegar ao modelo"
+
+    # e segue sendo régua, não trava: entrada sem CPF passa sob a MESMA versão
+    limpa = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run",
+        json={"entrada": {"pedido": "Pós-pago elegível a upgrade 5G"}},
+        headers=_h(),
+    )
+    assert limpa.status_code == 200, limpa.text
+    assert len(fake.chamadas) == 4
+
+
+# Cadastro de telco como ele chega de verdade: o sinal do titular está na CHAVE, não no
+# formato do valor. Nenhuma destas linhas casa com um regex de CPF/e-mail — é justamente
+# por isso que a versão anterior desta rota as mandava inteiras ao modelo.
+ENTRADA_COM_PII_DE_CADASTRO: dict[str, Any] = {
+    "nome do titular": "Maria da Conceição Souza",
+    "cliente_id": "Maria Aparecida da Silva - 529.982.247-25",
+    "dados do titular": {"nome completo": "João dos Santos", "cep": "01310100"},
+    f"contato {EMAIL_ATELIE}": "preferencial",
+}
+
+
+def test_a_atelie_a_arvore_do_dry_run_e_DIGITACAO_e_a_chave_ancora(
+    client: TestClient, app: FastAPI
+) -> None:
+    """A `entrada` do dry-run é `dict[str, Any]` ABERTO — o analista escolhe a CHAVE.
+
+    A primeira fiação desta rota saneou a árvore com `mascarar_estrutura`, que por
+    contrato ignora a chave e não a mascara (o certo para payload de evento e trace,
+    §4.1). Só que aqui a chave é DIGITAÇÃO, igual ao `pedido.conteudo` do intake — e a
+    auditoria mediu o preço: nome, CEP, RG e data de nascimento cujo único sinal é a
+    chave (`{"nome do titular": "Maria da Conceição Souza"}`) chegavam INTEIROS ao
+    prompt, e PII escrita na PRÓPRIA chave (`{"contato joao@x.com.br": ...}`) também —
+    o achado 9 do UAT #5 renascido nesta rota.
+
+    O teste cobra as duas metades porque elas falham por motivos diferentes: âncora na
+    chave (que só `mascarar_campos` usa) e chave como dado (que só `mascarar_campos`
+    mascara). Um nome SEM âncora nenhuma continua saindo em claro — é limite declarado
+    de `domain/privacidade/mascarar.py`, não promessa desta rota.
+    """
+    skill_id = _candidata_do_engineer(client)
+    fake = LLMFake(resposta='{"sql": "SELECT contato_hash FROM clientes"}')
+    app.state.llm = fake
+
+    resposta = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run",
+        json={"entrada": ENTRADA_COM_PII_DE_CADASTRO},
+        headers=_h(),
+    )
+    assert resposta.status_code == 200, resposta.text
+    prompt = json.dumps(fake.chamadas, ensure_ascii=False)
+
+    # o dado do titular não chegou ao modelo…
+    for vazamento in ("Conceição", "Aparecida", "dos Santos", "01310100", EMAIL_ATELIE, CPF):
+        assert vazamento not in prompt, f"{vazamento!r} saiu em claro no prompt do Ateliê"
+    # …e os marcadores provam que foi mascaramento, não uma entrada que se perdeu
+    for marcador in ("[NOME]", "[CEP]", "[EMAIL]", "[CPF]"):
+        assert marcador in prompt, f"{marcador} ausente: a árvore não passou pelo portão"
+    # a tela mostra o mesmo texto que foi ao modelo (senão o lado a lado mentiria)
+    assert "Conceição" not in json.dumps(resposta.json(), ensure_ascii=False)
+
+    # ---- e o `bloquear` do DPO alcança a ÁRVORE, não só o texto corrido.
+    #
+    # Esta é a metade que faltava e que ninguém veria: mascarar e bloquear são o MESMO
+    # parâmetro (a), e a rota mascarava `nome` sem honrar `nome: bloquear` — seguia
+    # adiante quando o DPO mandara recusar. Menos estrito que o publicado, em silêncio.
+    conteudo = _conservador(client)
+    conteudo["dados_llm"]["acoes"]["nome"] = "bloquear"
+    assert _publicar(client, conteudo) == 1
+    chamadas = len(fake.chamadas)
+
+    bloqueado = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run",
+        json={"entrada": {"nome_do_titular": "Maria da Conceição Souza"}},
+        headers=_h(),
+    )
+    assert bloqueado.status_code == 422, bloqueado.text
+    assert "nome" in bloqueado.json()["detail"].lower()
+    assert len(fake.chamadas) == chamadas, "bloqueado: o texto não podia chegar ao modelo"
+
+    # segue régua, não trava: a MESMA versão deixa passar árvore de negócio inteira
+    limpa = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run",
+        json={
+            "entrada": {
+                "pergunta": "quantos clientes Fibra Residencial em churn?",
+                "nome_da_campanha": "Black Friday 2026",
+                "os_id": "OS-2026-0457",
+                "verba": 480000,
+                "janela": "01/10 a 15/10",
+                "contato_hash": "a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5",
+            }
+        },
+        headers=_h(),
+    )
+    assert limpa.status_code == 200, limpa.text
+    # NADA do texto de negócio foi destruído: o controle que come briefing é desligado,
+    # e controle desligado protege zero.
+    assert limpa.json()["entrada"] == {
+        "pergunta": "quantos clientes Fibra Residencial em churn?",
+        "nome_da_campanha": "Black Friday 2026",
+        "os_id": "OS-2026-0457",
+        "verba": 480000,
+        "janela": "01/10 a 15/10",
+        "contato_hash": "a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5",
+    }
+
+
+def test_f_atelie_recusa_o_perfil_que_o_front_matter_escolheu(
+    client: TestClient, app: FastAPI
+) -> None:
+    """O perfil vem do SKILL.md DIGITADO na tela; quem autoriza é a política publicada.
+
+    Este é o teste que fecha "perfis usados = ['120b']" com `modelos_permitidos` pinado
+    em 20b. Vale para os DOIS caminhos, por motivos diferentes:
+
+    * dry-run e execução do harness usam o `modelo_perfil` do front-matter — entrada
+      não confiável escolhendo modelo;
+    * o JUDGE usa a constante `PERFIL_JUDGE` (120b), mas lê o dado do agente julgado,
+      então é conferido contra o roster DESSE agente. Restringir o `engineer` a 20b tem
+      de derrubar o harness inteiro — deixá-lo passar mandaria ao 120b, para julgar, o
+      dado que o DPO acabou de proibir de ir ao 120b.
+    """
+    skill_id = _candidata_do_engineer(client)
+    fake = LLMFake(resposta=_judge(NOTAS_VERDES))
+    app.state.llm = fake
+    entrada = {"entrada": {"pedido": "SQL de pós-pago elegível a 5G"}}
+
+    # ---- ANTES: o default PINA o roster (`engineer: 120b`) e tudo roda
+    antes = client.post(f"/api/v1/skills/{skill_id}/dry-run", json=entrada, headers=_h())
+    assert antes.status_code == 200, antes.text
+    assert {c["perfil"] for c in fake.chamadas} == {"120b"}, "o engineer roda no 120b (§7.2)"
+
+    # ---- o DPO restringe o `engineer` ao 20b (custo, soberania — o motivo é dele)
+    conteudo = _conservador(client)
+    conteudo["modelos_permitidos"]["engineer"] = ["20b"]
+    assert _publicar(client, conteudo) == 1
+    chamadas = len(fake.chamadas)
+
+    # ---- DEPOIS: as duas rotas recusam ANTES de falar com o modelo
+    recusado = client.post(f"/api/v1/skills/{skill_id}/dry-run", json=entrada, headers=_h())
+    assert recusado.status_code == 409, recusado.text
+    assert recusado.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    detalhe = recusado.json()["detail"]
+    assert "120b" in detalhe and "engineer" in detalhe, detalhe
+
+    harness = client.post(f"/api/v1/skills/{skill_id}/harness", headers=_h())
+    assert harness.status_code == 409, harness.text
+
+    assert len(fake.chamadas) == chamadas, (
+        "a política não autoriza o perfil: nem a execução nem o judge podiam ser chamados"
+    )
+    # nenhum `harness_run` nasceu da tentativa recusada — publicar (A1) segue sem base
+    assert app.state.repositorio_os.listar_harness_runs(uuid.UUID(skill_id)) == []
+
+
+def test_b_atelie_grava_invocacao_e_redige_a_saida_do_modelo(
+    client: TestClient, app: FastAPI
+) -> None:
+    """Art. 20 + §10.4 no Ateliê: o ledger deixa de ser zero e a saída obedece à política.
+
+    Duas coisas que só existem juntas. Gravar a invocação sem retenção seria criar, no
+    caminho que não tinha ledger nenhum, uma cópia perene do que o modelo respondeu;
+    aplicar retenção sem gravar seria continuar sem Art. 20 nesta rota.
+
+    O último assert é o que impede o conserto de quebrar o portão da publicação: a
+    redação alcança a SAÍDA do modelo e não o `skill_md_hash`. Se alcançasse, todo run
+    passaria a parecer obsoleto sob `reter_resposta: false` e ninguém publicaria skill
+    nenhuma — um controle de privacidade derrubando um controle de qualidade em
+    silêncio, que é como se perde a confiança nos dois.
+    """
+    skill_id = _candidata_do_engineer(client)
+    app.state.llm = LLMFake(resposta=_judge(NOTAS_VERDES))
+    antes = len(app.state.repositorio_os.listar_invocacoes(TENANT))
+
+    assert client.post(f"/api/v1/skills/{skill_id}/harness", headers=_h()).status_code == 201
+    dry = client.post(
+        f"/api/v1/skills/{skill_id}/dry-run",
+        json={"entrada": {"pedido": "SQL de pós-pago elegível a 5G"}},
+        headers=_h(),
+    )
+    assert dry.status_code == 200, dry.text
+
+    invocacoes = app.state.repositorio_os.listar_invocacoes(TENANT)
+    assert len(invocacoes) - antes == 3, "1 do harness + 1 por lado do dry-run (era 0)"
+    # a linha é PROVA: a rota do Art. 20 reconstrói a invocação do Ateliê como qualquer
+    # outra — sem isso o ledger seria só volume, e não direito à explicação.
+    assert _reconstruir(client, invocacoes[-1].id)["output"]
+
+    # ---- o DPO desliga a retenção da resposta
+    conteudo = _conservador(client)
+    conteudo["retencao"]["reter_resposta"] = False
+    assert _publicar(client, conteudo) == 1
+
+    verde = client.post(f"/api/v1/skills/{skill_id}/harness", headers=_h())
+    assert verde.status_code == 201 and verde.json()["passou"] is True, verde.text
+
+    run = app.state.repositorio_os.listar_harness_runs(uuid.UUID(skill_id))[-1]
+    saidas = [caso["saida"] for caso in run.resultados["casos"]]
+    assert saidas and set(saidas) == {REDIGIDO}, (
+        "`harness_run.resultados` guardava a saída do modelo sem passar por retenção"
+    )
+    # o ledger conta a MESMA história pelo outro caminho: o `output` do dry-run é a
+    # saída do modelo, e ela também nasce redigida (a redação é na ESCRITA, §10.4).
+    assert (
+        client.post(
+            f"/api/v1/skills/{skill_id}/dry-run",
+            json={"entrada": {"pedido": "SQL de pós-pago elegível a 5G"}},
+            headers=_h(),
+        ).status_code
+        == 200
+    )
+    assert app.state.repositorio_os.listar_invocacoes(TENANT)[-1].output["saida"] == REDIGIDO
+    # a invocação do HARNESS não tem `saida` no `output` de propósito: o que ela guarda
+    # é o veredito consolidado (score/passou), que é número, não texto de titular — a
+    # saída do modelo daquele caminho vive em `harness_run.resultados`, conferida acima.
+    do_harness = next(
+        i for i in reversed(app.state.repositorio_os.listar_invocacoes(TENANT)) if i.judge
+    )
+    assert set(do_harness.output) == {"harness_run_id", "score", "passou"}
+
+    # …e o portão A1 da publicação continua de pé: o hash não é texto de titular e
+    # sobrevive à redação, senão a privacidade teria derrubado a qualidade sem avisar.
+    publicada = client.post(f"/api/v1/skills/{skill_id}/publicar", headers=_h("dev-lider"))
+    assert publicada.status_code == 200, publicada.text
+
+
 # ============================================ guarda-corpo: o SÉTIMO serviço não nasce mudo
 #
 # Serviços que chamam o LLM HOJE sem passar pelo portão de IA Responsável (§10.2).
@@ -541,48 +1102,28 @@ def test_f_restringir_um_agente_nao_derruba_os_outros(client: TestClient, app: F
 # existir. `portao_ia` documenta o modo de falha que ela cobre — "o sétimo serviço, o
 # que ainda não existe, nasce sem nenhuma [checagem], em silêncio".
 #
-# `otimizacao_service` SAIU desta lista nesta onda: ele mandava ao modelo os `sinais`
-# (`aprendizado.texto`) — TEXTO LIVRE escrito por gente, direto do `motivo` de rejeição —
-# sem saneamento, sem conferência de perfil e sem retenção no ledger. A dívida foi
-# quitada com a fiação do serviço MAIS o teste por rota que a regra abaixo exige
-# (`test_a_otimizacao_*`), e a lista encolheu junto: a bidirecionalidade do assert é o
-# que obriga as duas coisas a andarem juntas.
+# `otimizacao_service` saiu desta lista na onda anterior e `atelie_service` sai NESTA,
+# que era o único serviço da plataforma inteiramente fora do portão: ele escolhia o
+# `modelo_perfil` no front-matter do SKILL.md (texto que o analista digita na tela do
+# T16), chamava o hub três vezes sem conferir nada contra a política e gravava saída de
+# modelo em `harness_run.resultados` sem passar por retenção — com zero linhas no ledger
+# `invocacao`, então o Art. 20 nem alcançava o caminho. A auditoria mediu os três
+# controles caindo juntos com a política mais restritiva PUBLICADA.
 #
-# Sobra `atelie_service`, que escolhe o `modelo_perfil` no front-matter da skill e chama
-# o hub três vezes sem conferir o roster contra a política — o parâmetro (f) não alcança
-# o harness. Ele é MENOS grave que o optimize era, e a diferença importa para priorizar:
-# o Ateliê roda `harness_case.input` (golden dataset curado por quem edita a skill, não
-# texto que um usuário digitou numa tela), então o vetor de PII é indireto. Não é
-# isenção — é a ordem em que a dívida deve ser paga.
-#
-# Tirar um nome daqui é o trabalho; a regra da onda vale para ele como valeu para os
-# sete: o serviço só sai desta lista junto com o teste por ROTA que prova a mudança de
-# comportamento.
-SEM_PORTAO_HOJE = frozenset({"atelie_service.py"})
+# A lista está VAZIA, e é aqui que ela é mais útil: o próximo serviço com `LLMPort.chat`
+# nasce em vermelho até alguém injetar `PublicacoesIaPort`. Esvaziá-la NÃO é motivo para
+# apagar o teste — um guarda-corpo só protege o futuro enquanto continua rodando.
+SEM_PORTAO_HOJE: frozenset[str] = frozenset()
 
-# …e a dívida do parâmetro (f) medida por CALL SITE, que é a unidade em que ela existe.
+# A dívida do parâmetro (f) medida por CALL SITE mudou de casa nesta onda: ela agora
+# vive em `tests/unit/test_F03_vigia_portao_llm.py`, que lê a ÁRVORE em vez de contar
+# ocorrências. A contagem que morava aqui (`_llm.chat(` menos `portao.autorizar_modelo(`
+# por arquivo) empatava com três furos reais — autorizar DEPOIS do `chat`, autorizar um
+# perfil e chamar com outro, autorizar num método e chamar em outro — e o segundo deles
+# era, ironicamente, a própria divergência do `criativo_service` que ela declarava.
 #
-# A primeira versão deste guarda-corpo contava ARQUIVOS ("tem `_llm.chat` e não importa
-# `portao_ia`") e por isso não via o furo mais fácil de aparecer numa revisão: o arquivo
-# JÁ fiado que ganha uma chamada NOVA sem conferência de perfil. O diff inteiro passa no
-# teste porque o `import` continua lá em cima — que é o mesmo modo de falha do achado 8,
-# só que dentro de um arquivo em vez de dentro da plataforma.
-#
-# `criativo_service.py` é esse caso HOJE, e ele não estava declarado em lugar nenhum
-# fora de um comentário no próprio serviço: dos seus dois `chat`, o de avisos de
-# compliance usa o perfil LITERAL `"20b"` atribuído ao `content` (cujo roster §7.2
-# declara 120b). Conferir esse perfil recusaria a geração de criativo sob a política
-# DEFAULT — e o default não muda nesta fiação. A correção é do ROSTER (entrada própria
-# de 20b, como o `guard` já tem), registrada na EMENDA SUGERIDA do relatório.
-#
-# Contado sobre `portao.autorizar_modelo(` e não sobre `autorizar_modelo(`: o serviço do
-# criativo CITA o nome da função em prosa para explicar por que não a chama, e a
-# contagem ingênua lia essa menção como se fosse enforcement — um guarda-corpo que se
-# deixa satisfazer por um comentário mede a documentação, não o código.
-CHAMADAS_SEM_AUTORIZACAO_HOJE: dict[str, int] = {
-    "atelie_service.py": 3,  # harness do Ateliê: perfil vem do front-matter da skill
-    "criativo_service.py": 1,  # warn de compliance no 20b literal (divergência de roster)
-}
+# A lista de exceções é UMA só, e é a de lá: manter duas listas de isenção de portão em
+# dois arquivos é como a plataforma chegou a ter duas fontes de política (achado 8).
 
 
 def _servicos() -> list[Path]:
@@ -615,32 +1156,4 @@ def test_todo_servico_que_chama_o_llm_passa_pelo_portao() -> None:
     assert quitados == set(), (
         f"{sorted(quitados)} já passam pelo portão — remova de `SEM_PORTAO_HOJE`. "
         "Dívida declarada que não encolhe deixa de ser dívida e vira desculpa."
-    )
-
-
-def test_toda_chamada_ao_llm_confere_o_perfil_contra_a_politica() -> None:
-    """O parâmetro (f) é por CALL SITE — o teste acima, por arquivo, não bastava.
-
-    Um `chat` novo dentro de um serviço já fiado é o furo barato: o `import portao_ia`
-    segue no topo, o teste por arquivo continua verde, e a chamada nova manda o dado a
-    um modelo que a política do tenant não autorizou. Aqui a conta é `chat` menos
-    `autorizar_modelo` por arquivo, e a diferença tem de bater EXATAMENTE com a dívida
-    declarada — nos dois sentidos, para que quitar uma dívida obrigue a declarar isso.
-    """
-    medido = {
-        arquivo.name: (
-            (texto := arquivo.read_text(encoding="utf-8")).count("_llm.chat(")
-            - texto.count("portao.autorizar_modelo(")
-        )
-        for arquivo in _servicos()
-    }
-    desprotegidas = {nome: n for nome, n in medido.items() if n}
-
-    assert desprotegidas == CHAMADAS_SEM_AUTORIZACAO_HOJE, (
-        f"chamadas ao LLM sem `portao.autorizar_modelo` mudaram: {desprotegidas} "
-        f"(declarado: {CHAMADAS_SEM_AUTORIZACAO_HOJE}). Se SUBIU, um call site novo "
-        "escolhe o modelo sem passar pela política do tenant (§7.2 · parâmetro (f)) — "
-        "chame `portao.autorizar_modelo(skill.nome, skill.modelo_perfil)` imediatamente "
-        "antes do `chat`. Se DESCEU, a dívida foi quitada: atualize o dicionário, senão "
-        "ela deixa de encolher de verdade e vira desculpa permanente."
     )

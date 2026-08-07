@@ -31,15 +31,25 @@ from domain.ia_responsavel.erros import DadoBloqueadoParaLlm
 from domain.ia_responsavel.politica import CATEGORIAS_PII
 from domain.privacidade.mascarar import (
     MARCADOR_CARTAO,
+    MARCADOR_CEP,
     MARCADOR_CNPJ,
     MARCADOR_CPF,
+    MARCADOR_DATA_NASCIMENTO,
     MARCADOR_DOCUMENTO,
     MARCADOR_EMAIL,
+    MARCADOR_ENDERECO,
+    MARCADOR_NOME,
+    MARCADOR_RG,
     MARCADOR_TELEFONE,
     mascarar_pii,
 )
 
 # categoria da política → marcador do §10.2 (fonte única).
+#
+# Este mapa é o ACOPLAMENTO estrutural entre o vocabulário da política e o detector:
+# categoria em `CATEGORIAS_PII` sem entrada aqui quebra `categorias_detectadas` no
+# import, e é assim que tem de ser — categoria sem marcador seria regra sem detector,
+# exatamente o que o cabeçalho de `politica.py` proíbe.
 MARCADOR_DA_CATEGORIA: dict[str, str] = {
     "cpf": MARCADOR_CPF,
     "cnpj": MARCADOR_CNPJ,
@@ -47,6 +57,12 @@ MARCADOR_DA_CATEGORIA: dict[str, str] = {
     "telefone": MARCADOR_TELEFONE,
     "cartao": MARCADOR_CARTAO,
     "documento": MARCADOR_DOCUMENTO,
+    # Titular identificado (onda 3c) — detecção por contexto em `mascarar.py`.
+    "nome": MARCADOR_NOME,
+    "endereco": MARCADOR_ENDERECO,
+    "cep": MARCADOR_CEP,
+    "data_nascimento": MARCADOR_DATA_NASCIMENTO,
+    "rg": MARCADOR_RG,
 }
 
 

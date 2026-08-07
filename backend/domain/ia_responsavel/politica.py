@@ -31,7 +31,46 @@ from typing import Any
 # Categorias = marcadores de `domain/privacidade/mascarar.py` (fonte única §10.2).
 # Não há categoria "outros": o que o mascarador não classifica não é PII para a
 # plataforma, e inventar uma categoria aqui criaria regra sem detector.
-CATEGORIAS_PII: tuple[str, ...] = ("cpf", "cnpj", "email", "telefone", "cartao", "documento")
+#
+# ## Por que o conjunto CRESCEU (onda 3c) e por que isso é delicado
+#
+# A auditoria mediu que o detector via apenas run de dígito e e-mail: titular
+# IDENTIFICADO — nome + endereço + data de nascimento — saía INTACTO para o hub, para a
+# coluna `input` do ledger, para o índice `agente_evidence` (de onde REAPARECE como
+# precedente de outro usuário) e para o Langfuse. Numa base de telco esse é o dado mais
+# comum da caixa de texto. Pior que o buraco no detector era o buraco no VOCABULÁRIO: o
+# DPO não conseguia publicar `nome: bloquear` nem que quisesse, porque a categoria não
+# existia. A tela prometia governar uma privacidade que ela não sabia nomear.
+CATEGORIAS_PII_V1: tuple[str, ...] = ("cpf", "cnpj", "email", "telefone", "cartao", "documento")
+
+# Titular identificado — categorias novas, com detector novo em `mascarar.py`. Mesma
+# régua do resto deste arquivo: entram porque MUDAM comportamento (`nome: bloquear`
+# interrompe a chamada), não porque enfeitam a tela.
+CATEGORIAS_PII_TITULAR: tuple[str, ...] = ("nome", "endereco", "cep", "data_nascimento", "rg")
+
+CATEGORIAS_PII: tuple[str, ...] = CATEGORIAS_PII_V1 + CATEGORIAS_PII_TITULAR
+
+# ## Compatibilidade retroativa — a parte que exige cuidado
+#
+# `_erros_dados_llm` exige ação DECLARADA para cada categoria ("omitir é deixar buraco
+# mudo"). Somar categoria a um conjunto fechado com essa regra invalidaria, de um
+# deploy para o outro, TODA política já publicada: a v1 de um tenant traz seis ações e
+# passaria a acusar cinco erros. O efeito prático seria péssimo e silencioso — a tela do
+# DPO abriria o conteúdo vigente, o formulário nasceria em estado inválido e a única
+# saída seria republicar; e enquanto isso a linha antiga continua governando, porque
+# validação é ato de PUBLICAÇÃO, não de leitura.
+#
+# Por isso a obrigatoriedade fica congelada no conjunto V1, e as categorias novas são
+# OPCIONAIS na declaração. Isso é seguro porque omissão não vira permissão: `_acoes`
+# (`dados.py`) devolve `mascarar` para o que a política não disser, e o detector novo
+# roda de qualquer jeito. O que a política antiga perde ao omitir é só o direito de
+# APERTAR — nunca o piso do C02.
+#
+# O default de fábrica (`politica_ia_seed`) declara TODAS as categorias, então quem
+# publicar dali para frente sai com o conjunto completo. Tornar as novas obrigatórias
+# exigiria uma migração que reescrevesse as linhas já publicadas, e reescrever política
+# publicada é adulterar prova de auditoria — não se faz por conveniência de schema.
+CATEGORIAS_PII_OBRIGATORIAS: tuple[str, ...] = CATEGORIAS_PII_V1
 
 # `permitir` NÃO existe de propósito. O piso do C02 (mascarar sempre) é garantia de
 # contrato, não default configurável: uma política capaz de DESLIGAR o mascaramento
@@ -194,7 +233,11 @@ def _erros_dados_llm(bloco: Any) -> list[str]:
         return ["dados_llm deve ser {acoes: {categoria: mascarar|bloquear}}"]
     erros: list[str] = []
     acoes = bloco["acoes"]
-    for categoria in CATEGORIAS_PII:
+    # Só as OBRIGATÓRIAS (conjunto V1) são exigidas: uma categoria acrescentada depois
+    # não pode invalidar política já publicada. Ver a nota de compatibilidade retroativa
+    # em `CATEGORIAS_PII_OBRIGATORIAS` — omitir uma categoria nova cai no piso
+    # `mascarar` de `dados._acoes`, então a omissão nunca AFROUXA nada.
+    for categoria in CATEGORIAS_PII_OBRIGATORIAS:
         if categoria not in acoes:
             erros.append(
                 f"dados_llm.acoes sem a categoria {categoria!r} — todas as categorias "

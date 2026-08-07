@@ -3,6 +3,83 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-06 — Onda 3c · Os bloqueantes de PII real (§10.2, §10.4)
+A auditoria das ondas 2/3/3b provou que **PII real não podia entrar**. Quatro bloqueantes, todos
+fechados. O detector foi **reprovado na primeira entrega** pelo auditor e refeito.
+
+### F05 · O detector de PII enxerga titular identificado
+Até aqui ele via apenas *runs de dígito + e-mail*: nome, endereço, CEP, data de nascimento e RG
+saíam **intactos** — a PII mais comum de caixa de texto numa base de telco, indo para o hub LLM
+(terceiro fora do perímetro), para o ledger, para o índice RAG (de onde **reaparece como precedente
+para outro usuário**) e para o Langfuse. E `CATEGORIAS_PII` era um conjunto fechado de seis
+categorias numéricas: **o DPO não conseguia publicar `nome: bloquear` nem que quisesse**.
+
+Quatro defeitos que o auditor achou na entrega e corrigiu:
+1. **`av.` / `trav.` / `rod.` eram alternativas MORTAS.** O `\b` no fim do padrão exige limite de
+   palavra, e depois do ponto de `av.` vem espaço — ambos não-palavra, logo nunca havia limite ali.
+   Estavam escritas e eram inalcançáveis: `Av. Paulista 1000`, `R. Augusta 1200`,
+   `Rod. Raposo Tavares 12000` vazavam. "Av." é a segunda forma de endereço mais comum do Brasil, e
+   o teste do autor usava só "Rua" por extenso — o caso literal de *passar no teste que você mesmo
+   escreveu*. Pior: não constava dos limites declarados, então o autor **acreditava** ter coberto.
+2. **35% de falso positivo** em briefing legítimo (7 de 20 linhas destruídas): `clientes Fibra
+   Residencial da regiao Sul` → `clientes [NOME] da regiao Sul`; `A avenida de crescimento 2026` →
+   `A [ENDERECO]`. Esse é o número que **desliga o controle** — analista que vê o detector estragar
+   texto de negócio pede para desativá-lo, e controle desligado protege zero. Corrigido por desempate
+   estrutural, sem léxico de nomes: sob âncora fraca o nome exige **conectivo** (`da/de/do/dos/e`),
+   e o endereço exige **topônimo em Caixa Alta Inicial** antes do número. Medido: **0/51 falso
+   positivo, 0/7 falso negativo**.
+3. **Chave em `snake_case` não ancorava** — `_` é caractere de palavra, então em `nome_do_titular`
+   nem `\btitular` existe. Vazavam `nome_do_titular`, `nome_completo`, `cliente_id` (este último
+   medido por rota, com `"cliente_id": "Maria da Conceição dos Santos"` no `POST /criativos/gerar`).
+4. **Dicionário aninhado perdia a âncora** — o valor aninhado era delegado a uma função que por
+   contrato ignora a chave, matando a âncora no primeiro nível.
+
+Ganho colateral: um dos "limites declarados" era **falso**. "CAIXA ALTA sob âncora fraca" não era
+limite fundamental, era sintoma do desempate ruim — `cliente MARIA APARECIDA DA SILVA` (a forma que
+o CRM de telco grita) agora é detectado, e `cliente PRE PAGO` segue intacto.
+
+**O limite intransponível, declarado e não escondido:** nome próprio **sem âncora** não é detectável
+por regex — `"Reativar Maria Aparecida da Silva Santos"` vaza, e não há como distingui-lo de "Vale do
+Silício" sem semântica. Está no bloco `LIMITES DECLARADOS` e, mais importante, **como testes que
+passam afirmando que algo NÃO é detectado**.
+
+Isso obriga uma emenda ao §10.2: a detecção tem **duas naturezas** — por FORMA (CPF, CNPJ, e-mail,
+telefone, cartão, CEP, RG: verificável) e por CONTEXTO (nome, endereço, data de nascimento:
+probabilística, com buracos nomeados). Hoje o §10.2 lê como se fosse binária, e é essa leitura que
+faz o DPO acreditar que `nome: bloquear` fecha a porta. A tela deve exibir os limites **ao lado do
+seletor de ação** — senão é o achado 8 do UAT #5 na granularidade da confiança do detector.
+
+E o falso positivo passa a ser **requisito medido**: a regra "falso positivo é bug" já estava no
+cabeçalho do módulo, e mesmo assim 35% do briefing legítimo era destruído — porque ninguém tinha
+medido. O corpus de texto de negócio virou aceite versionado.
+
+### F06 · O Ateliê entra no portão e no piso de PII
+Único serviço com chamadas ao LLM inteiramente fora: 3 `chat(` e **zero** linhas de mascaramento ou
+portão. Com a política mais restritiva publicada, o dry-run mandava CPF e e-mail **em claro** no
+prompt, usava 120b apesar dos modelos pinados em 20b, e **não gravava invocação** — o Art. 20 não
+alcançava esse caminho. Não era regressão das ondas: vão herdado do M12. Agora passa pelo portão,
+grava ledger, e o perfil do modelo — que vinha do front-matter escrito pelo próprio usuário, ou
+seja, escolha de modelo por entrada não confiável — é conferido contra a política. Junto entrou o
+**vigia**: teste que falha se aparecer `self._llm.chat(` sem autorização antes, com exceções
+declaradas por escrito.
+
+### F07 · A retenção alcança as evidências
+Com `reter_resposta: false`, o ledger gravava `[SUPRIMIDO POR POLITICA]` no campo principal **e o
+texto com e-mail intacto na lista de evidências ao lado** — saindo igual pela API de auditoria. Dois
+furos: a coluna `evidencias` nunca era oferecida à redação, e dentro do `output` a chave estava nas
+exceções técnicas, atravessando inteira sem recursão. O comentário que justificava a exceção dizia
+que evidências são "ids e refs" — premissa **falsa**: o agente as monta como texto livre do modelo.
+Fechada também a latência de `*_id` não-escalar.
+
+### F04 · O purge tem agendador de verdade
+O cron do §10.4 existia **só como comentário** — nenhum `Dockerfile`, CI ou script o instalava — e a
+linha documentada apontava para uma porta que o serviço não publica, com um token que não existia no
+repositório. Agora `deploy/deploy.sh` escreve `/etc/cron.d/jornada-purge` e confere se há daemon
+vivo; `scripts/purge_retencao.sh` executa. A credencial é token de **máquina**, aceito só pela rota
+do purge e só com ≥32 caracteres — vazio significa porta **fechada** (volta a exigir humano), nunca
+aberta. O comentário do compose agora avisa que ali não mora cron nenhum, porque *um comentário que
+parece um controle é pior que controle nenhum: a auditoria o conta como existente*.
+
 ## 2026-08-06 — Onda 3b · A IA Responsável sai do domínio e GOVERNA a plataforma (§10.2 · F03)
 A onda 3 entregou o domínio com enforcement provado por inversão e **zero call sites** — os
 parâmetros governavam funções puras que ninguém chamava. Esta onda fez a fiação: persistência

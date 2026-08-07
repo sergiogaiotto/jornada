@@ -12,6 +12,12 @@ Erros: mapa RFC-7807 do M1 + traduções próprias: SkillMdInvalido→422 (com a
 `erros` do parser) · LLMIndisponivel→503 degraded (§10.6 — harness/dry-run não são
 caminho crítico). RBAC (§8-M0): CRUD/harness/dry-run exigem analista|lider;
 PUBLICAR exige lider (portão de plataforma; admin sempre passa).
+
+Harness e dry-run passam pelo portão de IA Responsável (§10.2) desde a auditoria que
+mediu este router mandando CPF em claro ao modelo: `DadoBloqueadoParaLlm`→422 e
+`ModeloNaoPermitido`→409 chegam pelo mapa de domínio já existente, sem tradução própria
+— a recusa por política tem de ser distinguível do 503 de hub fora, senão a decisão do
+DPO passaria por queda de infraestrutura.
 """
 
 import uuid
@@ -23,6 +29,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
 from adapters.atelie_seeds import semear_atelie
+from adapters.publicacoes import publicacoes_vigentes
 from adapters.relogio import RelogioSistema
 from api.v1.intake import get_llm, get_tracer
 from api.v1.os_governanca import (
@@ -36,6 +43,7 @@ from app.auth import Usuario, require_role
 from app.config import get_settings
 from app.errors import problem_response
 from application.ports.llm import LLMIndisponivel
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_atelie import RepositorioAtelie
 from application.services.atelie_service import ServicoAtelie
 from domain.atelie.erros import SkillMdInvalido
@@ -91,11 +99,16 @@ def get_repositorio_atelie(request: Request) -> RepositorioAtelie:
 
 
 def get_servico_atelie(request: Request) -> ServicoAtelie:
+    repositorio = get_repositorio_atelie(request)
     return ServicoAtelie(
-        get_repositorio_atelie(request),
+        repositorio,
         _relogio,
         get_llm(request),
         get_tracer(request),
+        # Política de IA PUBLICADA (§10.2) pela fábrica ÚNICA — montar o adapter na mão
+        # aqui seria o achado 8 do UAT #5 entrando pelo wiring, que é como ele entrou da
+        # primeira vez (`test_achado8_nenhuma_rota_monta_o_adapter_de_publicacoes_na_mao`).
+        cast(PublicacoesIaPort, publicacoes_vigentes(repositorio)),
     )
 
 
@@ -198,8 +211,12 @@ async def rodar_harness(
     skill_id: uuid.UUID, tenant: Tenant, servico: Servico, user: Escritor
 ) -> dict[str, Any]:
     """Roda o golden dataset (§4.1 harness_case) com judge 120b (rubrica fixa §7.1)
-    e grava `harness_run` com score POR DIMENSÃO — o portão da publicação (A1)."""
-    return servico.rodar_harness(tenant, skill_id, actor=user.email)
+    e grava `harness_run` com score POR DIMENSÃO — o portão da publicação (A1).
+
+    Sob a política de IA (§10.2): perfil da skill E do judge conferidos, entrada saneada,
+    saída retida conforme §10.4. `portador_id` é quem RESPONDE pela invocação no ledger
+    via_ai (Art. 20) — sem ele a linha existiria sem dono."""
+    return servico.rodar_harness(tenant, skill_id, actor=user.email, portador_id=user.id)
 
 
 @router.post("/skills/{skill_id}/publicar")
@@ -218,8 +235,11 @@ async def dry_run(
     payload: DryRunIn,
     tenant: Tenant,
     servico: Servico,
-    _user: Escritor,
+    user: Escritor,
 ) -> dict[str, Any]:
     """Lado a lado (§8-M12): MESMA entrada na versão publicada atual e na candidata;
-    nada persiste; a decisão de publicar continua humana (§1.1.3)."""
-    return servico.dry_run(tenant, skill_id, entrada=payload.entrada)
+    nada do DOMÍNIO persiste; a decisão de publicar continua humana (§1.1.3).
+
+    A `entrada` é digitada na tela: passa pelo portão (§10.2) antes de chegar ao modelo,
+    e a invocação vai ao ledger via_ai — o Art. 20 não dispensa comparação lado a lado."""
+    return servico.dry_run(tenant, skill_id, entrada=payload.entrada, portador_id=user.id)

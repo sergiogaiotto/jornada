@@ -473,7 +473,11 @@ class ServicoConsultor:
                     **marca_burla,
                 }
             ),
-            evidencias=evidencias,
+            # (b) §10.4: a COLUNA `evidencias` (§4.1) passa pelo portão como o resto. Ela
+            # é TEXTO LIVRE do modelo (`agents/consultor.py` monta com `str(e).strip()`),
+            # não ref versionada: sem isto a auditoria lia `[SUPRIMIDO...]` no `output` e
+            # o trecho da conversa intacto aqui do lado.
+            evidencias=portao.reter_evidencias(evidencias),
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

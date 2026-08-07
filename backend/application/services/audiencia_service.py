@@ -407,7 +407,11 @@ class ServicoAudiencia:
                     "evidencias": list(saida.evidencias),
                 }
             ),
-            evidencias=list(saida.evidencias),
+            # (b) §10.4: a COLUNA `evidencias` (§4.1) passa pelo portão como o resto. Ela
+            # é TEXTO LIVRE (`agents/engineer.py` monta com `str(e).strip()`, e o teor
+            # vem do corpus RAG), não ref versionada — sem isto o mesmo texto que sai
+            # redigido do `output` voltava inteiro pela coluna vizinha.
+            evidencias=portao.reter_evidencias(saida.evidencias),
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

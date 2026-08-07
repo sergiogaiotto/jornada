@@ -23,7 +23,7 @@ Contrato (mesmo espírito de `mascarar_pii` — robustez é lei):
 
 from typing import Any, TypeVar
 
-from domain.privacidade.mascarar import mascarar_pii
+from domain.privacidade.mascarar import mascarar_pii, mascarar_pii_em_campo
 
 T = TypeVar("T")
 
@@ -82,8 +82,54 @@ def mascarar_campos(mapa: dict[str, Any]) -> dict[str, Any]:
     Colisão após o mascaramento (`"CPF 111.111.111-11"` e `"CPF 222.222.222-22"` viram a
     mesma chave) resolve pelo ÚLTIMO — perder um campo de nome forjado é aceitável;
     devolver a PII não é. Completude e faltantes são recalculados por código depois.
+
+    ## A chave também é ÂNCORA (onda 3c)
+
+    Nome, endereço e data de nascimento não têm formato: o que os denuncia é o contexto
+    (`domain/privacidade/mascarar.py`). Num formulário esse contexto está na CHAVE, não
+    no valor — `{"nome do titular": "Maria Aparecida da Silva Santos"}` tem a âncora de
+    um lado e o dado do outro. Mascarar as duas strings isoladamente perderia
+    exatamente o sinal que torna o nome reconhecível, e o titular identificado sairia
+    intacto para o hub, o ledger e o índice RAG. Por isso o VALOR de texto passa por
+    `mascarar_pii_em_campo(chave, valor)`, que usa a chave como contexto; a chave em si
+    continua indo por `mascarar_pii`, que é o que o achado 9 exige.
+
+    A âncora desce com a RECURSÃO. `conteudo` é `dict[str, Any]` aberto: o solicitante
+    pode digitar `{"dados do titular": {"nome completo": "Maria ..."}}` — forma natural
+    de um cadastro de telco. Delegar o valor aninhado a `mascarar_estrutura` (que por
+    contrato ignora chave) perdia a âncora no primeiro nível de profundidade e o nome
+    saía em claro. Aqui a recursão mantém `mascarar_campos` enquanto houver dicionário
+    digitado, inclusive dentro de listas.
     """
-    return {mascarar_pii(chave): mascarar_estrutura(valor) for chave, valor in mapa.items()}
+    return _mascarar_campos(mapa, 0)
+
+
+def _mascarar_campos(mapa: dict[str, Any], profundidade: int) -> dict[str, Any]:
+    return {
+        mascarar_pii(chave): _mascarar_valor(chave, valor, profundidade)
+        for chave, valor in mapa.items()
+    }
+
+
+def _mascarar_valor(chave: str, valor: Any, profundidade: int) -> Any:
+    """Valor de um campo DIGITADO, com a chave servindo de âncora de contexto.
+
+    O mesmo fundo de poço de `mascarar_estrutura`, pelo mesmo motivo: estrutura vinda de
+    JSON não tem ciclo, mas recursão sem freio vira `RecursionError` e sanitização nunca
+    pode derrubar a requisição. Abaixo do limite o ramo cai em `mascarar_estrutura`, que
+    tem o seu próprio freio — degrada para "mascara sem âncora", nunca para "não mascara".
+    """
+    if isinstance(valor, str):
+        return mascarar_pii_em_campo(chave, valor)
+    if profundidade >= PROFUNDIDADE_MAXIMA:
+        return mascarar_estrutura(valor)
+    if isinstance(valor, dict) and all(isinstance(c, str) for c in valor):
+        return _mascarar_campos(valor, profundidade + 1)
+    if isinstance(valor, list):
+        # A lista não tem chave própria: o item herda a do campo que a contém
+        # (`{"titulares": ["Maria ...", ...]}`) — que é exatamente a âncora certa.
+        return [_mascarar_valor(chave, item, profundidade + 1) for item in valor]
+    return mascarar_estrutura(valor)
 
 
 def contem_pii_estrutura(valor: Any) -> bool:

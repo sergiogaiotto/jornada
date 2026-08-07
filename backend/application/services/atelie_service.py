@@ -18,16 +18,47 @@
   candidata; nada persiste; decisão é humana (§1.1.3).
 - `versao_para_os`: resolução da versão efetiva por OS — frozen.agent_versions (§4.1)
   quando a OS está em voo; senão a publicada atual (base da A2).
+
+## Portão de IA Responsável (§10.2) — por que ele chegou tarde aqui
+
+O Ateliê nasceu no M12 e ficou fora da fiação da onda 3: era o ÚNICO serviço com
+`LLMPort.chat` sem `portao_ia`. A auditoria mediu os três controles caindo juntos com a
+política mais restritiva PUBLICADA — CPF e e-mail em claro no prompt do dry-run, o perfil
+vindo do front-matter (que o próprio usuário escreve) sem conferência, e
+`harness_run.resultados` guardando saída de modelo sem passar por retenção; zero linhas no
+ledger `invocacao`, então o Art. 20 não alcançava este caminho.
+
+O que faz este serviço diferente dos outros sete — e o que a fiação teve de responder:
+
+* **a entrada é ÁRVORE, não string**: `harness_case.input` e a `entrada` do dry-run são
+  `dict` que viram `json.dumps` no prompt. Daí `portao.sanear_estrutura`, que vive no
+  PORTÃO e não aqui — caminhamento de árvore duplicado por serviço é exatamente como o
+  `kv_master` (dicionário aninhado) escapou inteiro da retenção na onda 3.
+* **o perfil vem de ENTRADA NÃO CONFIÁVEL**: nos outros serviços a skill é arquivo de
+  disco revisado em PR; aqui o `modelo_perfil` está no front-matter do SKILL.md que o
+  analista digita na tela do T16. Escolha de modelo por texto de usuário é precisamente
+  o que o parâmetro (f) existe para governar.
+* **o JUDGE lê o dado do agente julgado**: `judge.PERFIL_JUDGE` é constante de código
+  (120b), mas o dado que ele vê é do agente sob teste. A conferência do judge é feita
+  contra `modelos_permitidos[agente.nome]` pelo mesmo motivo — a pergunta que a política
+  responde é "que modelo pode ver o dado deste tenant", e quem vê é o 120b do judge.
+  Restringir um agente a 20b passa a recusar o harness dele, e essa é a resposta certa:
+  a alternativa é o dado ir ao 120b logo depois de o DPO o ter proibido.
+
 """
 
 import uuid
-from typing import Any
+from datetime import datetime
+from typing import Any, Protocol, cast
 
 from agents.harness import judge
 from application.ports.clock import ClockPort
 from application.ports.llm import LLMPort
 from application.ports.observabilidade import TracerPort
+from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_atelie import RepositorioAtelie
+from application.services import portao_ia
+from domain.agentes.modelos import Invocacao, agente_uuid
 from domain.atelie import harness as regras_harness
 from domain.atelie.erros import (
     AgenteDuplicado,
@@ -43,6 +74,19 @@ from domain.campanha.erros import NaoEncontrado
 from domain.campanha.modelos import EventoDominio
 
 
+class _LedgerInvocacoes(Protocol):
+    """`adicionar_invocacao` é do ledger via_ai (§4.1) e não está em `RepositorioAtelie`.
+
+    O repositório é UM objeto que implementa todas as portas (tipagem estrutural §2.1) —
+    este Protocol só informa o mypy no cast, no mesmo padrão de
+    `otimizacao_service._RepositorioComLaunches`. O lugar DEFINITIVO do método é a porta
+    do Ateliê; declará-lo lá vai como EMENDA SUGERIDA porque `ports/repositorio_atelie.py`
+    está fora dos arquivos desta frente — e o Art. 20 não podia esperar por uma porta.
+    """
+
+    def adicionar_invocacao(self, invocacao: Invocacao) -> None: ...
+
+
 class ServicoAtelie:
     def __init__(
         self,
@@ -50,11 +94,13 @@ class ServicoAtelie:
         relogio: ClockPort,
         llm: LLMPort,
         tracer: TracerPort,
+        publicacoes_ia: PublicacoesIaPort,
     ) -> None:
         self._repo = repositorio
         self._relogio = relogio
         self._llm = llm
         self._tracer = tracer
+        self._publicacoes_ia = publicacoes_ia  # política de IA PUBLICADA (§10.2)
 
     # ------------------------------------------------------------ GET/POST /agentes
     def listar_agentes(self, tenant_id: str) -> list[dict[str, Any]]:
@@ -182,10 +228,18 @@ class ServicoAtelie:
         return _skill_out(skill, self._repo.listar_harness_runs(skill.id))
 
     # ------------------------------------------------------ POST /skills/{id}/harness
-    def rodar_harness(self, tenant_id: str, skill_id: uuid.UUID, *, actor: str) -> dict[str, Any]:
+    def rodar_harness(
+        self, tenant_id: str, skill_id: uuid.UUID, *, actor: str, portador_id: uuid.UUID
+    ) -> dict[str, Any]:
         """Roda o golden dataset com judge (docstring do módulo). LLM indisponível →
         `LLMIndisponivel` sobe e a API responde 503 degraded (§10.6 — harness não é
-        caminho crítico)."""
+        caminho crítico).
+
+        Sob o portão de IA Responsável (§10.2): corpo da skill, `input`/`esperado` de cada
+        caso e a saída que vai ao judge são SANEADOS; os DOIS perfis são conferidos contra
+        a política do tenant; a saída gravada em `harness_run.resultados` passa por
+        retenção; e o run inteiro vira linha do ledger `invocacao` (Art. 20).
+        """
         skill, agente = self._skill_do_tenant(tenant_id, skill_id)
         casos = self._repo.listar_harness_cases(agente.id)
         if not casos:
@@ -193,30 +247,55 @@ class ServicoAtelie:
                 f"Agente {agente.nome!r} sem golden dataset (`harness_case` §4.1) — "
                 "harness exige casos (seeds §11.4: 3 por agente-chave)."
             )
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
         perfil = str(skill.execution_profile.get("modelo_perfil") or "20b")
-        corpo = parse_skill_md(skill.skill_md).corpo
+        # §10.2 (C02): o corpo da skill é texto DIGITADO na tela do T16 e vira o system
+        # prompt — sanear uma vez aqui cobre os N casos do golden dataset.
+        corpo = portao.sanear(parse_skill_md(skill.skill_md).corpo)
         inicio = self._relogio.agora()
         avaliacoes: list[dict[str, Any]] = []
         for caso in casos:
+            # `harness_case.input` é ÁRVORE, não string: quem sanea árvore é o portão
+            # (`sanear_estrutura`), senão este serviço teria detector próprio de PII.
+            entrada = portao.sanear_estrutura(caso.input)
+            esperado = portao.sanear_estrutura(caso.esperado)
+            # (f) §7.2: `perfil` veio do FRONT-MATTER — entrada não confiável escolhendo
+            # modelo. Conferido DENTRO do laço, imediatamente antes do `chat`, para que a
+            # revisão (e o vigia de CI) veja que nenhuma chamada ficou sem par.
+            portao.autorizar_modelo(agente.nome, perfil)
             saida = self._llm.chat(
-                judge.montar_mensagens_execucao(corpo, caso.input),
+                judge.montar_mensagens_execucao(corpo, entrada),
                 perfil=perfil,  # type: ignore[arg-type]  # validado pelo parser §7.1
             )
+            # O judge é 120b por constante de código, mas o dado que ele lê é do agente
+            # JULGADO — quem autoriza é `modelos_permitidos[agente]` (docstring do módulo).
+            portao.autorizar_modelo(agente.nome, judge.PERFIL_JUDGE)
             veredito = self._llm.chat(
                 judge.montar_mensagens_judge(
-                    entrada=caso.input,
-                    esperado=caso.esperado,
-                    saida=saida,
+                    entrada=entrada,
+                    esperado=esperado,
+                    # saída de modelo é texto NÃO confiável que vira prompt de outro
+                    # modelo: este é o único ponto em que ela pode ser saneada.
+                    saida=portao.sanear(saida),
                     dimensoes=caso.dimensoes,
                 ),
                 perfil=judge.PERFIL_JUDGE,
             )
+            # (b) §10.4: `reter_resposta: false` redige a saída do modelo na GRAVAÇÃO —
+            # e SÓ ela. `skill_md_hash` e os scores ficam FORA da retenção de propósito:
+            # redigir o hash faria todo run parecer eternamente obsoleto e travaria o
+            # portão A1 da publicação, e nem hash nem nota são texto de titular.
+            #
+            # `or {}` é estreitamento de tipo, não fallback: `reter_output` devolve
+            # `dict | None` porque `invocacao.output` é anulável no §4.1, e aqui o payload
+            # nunca é `None`.
+            gravavel = portao.reter_output({"saida": saida}) or {}
             avaliacoes.append(
                 {
                     "case_id": str(caso.id),
                     "dimensoes": caso.dimensoes,
                     "notas": judge.interpretar_notas(veredito, caso.dimensoes),
-                    "saida": saida,
+                    **gravavel,
                 }
             )
         consolidado = regras_harness.consolidar(avaliacoes)
@@ -235,6 +314,24 @@ class ServicoAtelie:
             created_at=fim,
         )
         self._repo.adicionar_harness_run(run)
+        self._registrar_invocacao(  # Art. 20: o ledger via_ai não pode ter buraco
+            tenant_id,
+            agente=agente,
+            skill=skill,
+            portador_id=portador_id,
+            portao=portao,
+            input={
+                "proposito": "harness",
+                "agente": agente.nome,
+                "skill_versao": skill.versao,
+                "casos": len(casos),  # número: atravessa a retenção intacto (é métrica)
+                "modelo_perfil": perfil,
+            },
+            output={"harness_run_id": str(run.id), "score": run.score, "passou": run.passou},
+            judge_notas=dict(consolidado["score_por_dimensao"]),
+            inicio=inicio,
+            fim=fim,
+        )
         self._evento(
             tenant_id,
             "harness.run",
@@ -315,11 +412,28 @@ class ServicoAtelie:
 
     # ------------------------------------------------------ POST /skills/{id}/dry-run
     def dry_run(
-        self, tenant_id: str, skill_id: uuid.UUID, *, entrada: dict[str, Any]
+        self,
+        tenant_id: str,
+        skill_id: uuid.UUID,
+        *,
+        entrada: dict[str, Any],
+        portador_id: uuid.UUID,
     ) -> dict[str, Any]:
-        """Lado a lado (§8-M12): MESMA entrada na versão publicada ATUAL e na
-        candidata. Nada persiste; nenhuma decisão automática (§1.1.3)."""
+        """Lado a lado (§8-M12): MESMA entrada na versão publicada ATUAL e na candidata.
+        Nenhuma decisão automática (§1.1.3).
+
+        "Nada persiste" segue valendo para o DOMÍNIO — nenhuma skill muda de estado,
+        nenhum `harness_run` nasce. O ledger `invocacao` passa a ser gravado, e isso não
+        é exceção à regra: o Art. 20 não tem cláusula de dispensa para comparação lado a
+        lado, e era por esta rota que a auditoria mediu `invocacoes gravadas = 0` com CPF
+        em claro no prompt.
+        """
         candidata, agente = self._skill_do_tenant(tenant_id, skill_id)
+        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
+        # §10.2 (C02): a `entrada` é o corpo do POST — texto que alguém digitou na tela.
+        # Saneada UMA vez e usada nos dois lados: lado a lado só é comparação se as duas
+        # versões receberem exatamente o mesmo texto.
+        entrada = portao.sanear_estrutura(entrada)
         publicadas = [
             s
             for s in self._repo.listar_skills(agente.id)
@@ -333,9 +447,25 @@ class ServicoAtelie:
             )
         return {
             "agente": agente.nome,
+            # a entrada devolvida é a SANEADA: a tela tem de mostrar o que de fato foi ao
+            # modelo, senão o lado a lado mentiria sobre o texto que foi comparado.
             "entrada": entrada,
-            "atual": self._executar_lado(atual, entrada),
-            "candidata": self._executar_lado(candidata, entrada),
+            "atual": self._executar_lado(
+                atual,
+                entrada,
+                agente=agente,
+                portao=portao,
+                tenant_id=tenant_id,
+                portador_id=portador_id,
+            ),
+            "candidata": self._executar_lado(
+                candidata,
+                entrada,
+                agente=agente,
+                portao=portao,
+                tenant_id=tenant_id,
+                portador_id=portador_id,
+            ),
             "avisos": avisos,
         }
 
@@ -357,14 +487,48 @@ class ServicoAtelie:
 
     # ----------------------------------------------------------------- privados
     def _executar_lado(
-        self, skill: SkillVersao | None, entrada: dict[str, Any]
+        self,
+        skill: SkillVersao | None,
+        entrada: dict[str, Any],
+        *,
+        agente: Agente,
+        portao: portao_ia.PortaoIa,
+        tenant_id: str,
+        portador_id: uuid.UUID,
     ) -> dict[str, Any] | None:
         if skill is None:
             return None
         parseada = parse_skill_md(skill.skill_md)
+        # §10.2 (C02): o corpo da skill é texto digitado na tela do T16. Saneado em linha
+        # PRÓPRIA, e não dentro dos argumentos do `chat`, porque o vigia de CI lê ordem de
+        # linha: saneamento escondido no argumento é indistinguível, para quem revisa e
+        # para o teste, de saneamento nenhum.
+        corpo = portao.sanear(parseada.corpo)
+        inicio = self._relogio.agora()
+        # (f) §7.2: o perfil vem do front-matter que o USUÁRIO escreveu (docstring do
+        # módulo). Sem esta linha, publicar `modelos_permitidos` não muda nada aqui — que
+        # foi exatamente o que a auditoria mediu ("perfis usados = ['120b']").
+        portao.autorizar_modelo(agente.nome, parseada.modelo_perfil)
         saida = self._llm.chat(
-            judge.montar_mensagens_execucao(parseada.corpo, entrada),
+            judge.montar_mensagens_execucao(corpo, entrada),
             perfil=parseada.modelo_perfil,  # type: ignore[arg-type]  # validado §7.1
+        )
+        fim = self._relogio.agora()
+        self._registrar_invocacao(
+            tenant_id,
+            agente=agente,
+            skill=skill,
+            portador_id=portador_id,
+            portao=portao,
+            input={
+                "proposito": "dry_run",
+                "agente": agente.nome,
+                "skill_versao": skill.versao,
+                "entrada": entrada,  # já saneada (C02); a retenção decide se é gravada
+            },
+            output={"saida": saida},
+            inicio=inicio,
+            fim=fim,
         )
         return {
             "skill_id": str(skill.id),
@@ -372,6 +536,43 @@ class ServicoAtelie:
             "estado": skill.estado,
             "saida": saida,
         }
+
+    def _registrar_invocacao(
+        self,
+        tenant_id: str,
+        *,
+        agente: Agente,
+        skill: SkillVersao,
+        portador_id: uuid.UUID,
+        portao: portao_ia.PortaoIa,
+        input: dict[str, Any],
+        output: dict[str, Any],
+        inicio: datetime,
+        fim: datetime,
+        judge_notas: dict[str, Any] | None = None,
+    ) -> None:
+        """Ledger via_ai (§4.1 `invocacao`) do Ateliê — o Art. 20 não pode ter buraco.
+
+        `os_id` NULL porque o Ateliê é de PLATAFORMA, não de uma OS (mesma escolha do
+        `ajuda_service`). Ponto ÚNICO de gravação do serviço, pelo mesmo motivo que o
+        `criativo_service` tem o seu: a retenção (§10.4) é aplicada aqui, então nem o
+        harness nem o dry-run escapam dela por esquecimento em um call site.
+        """
+        cast(_LedgerInvocacoes, self._repo).adicionar_invocacao(
+            Invocacao(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                os_id=None,  # Ateliê é PLATAFORMA, não OS (§4.1: os_id NULL)
+                agente_id=agente_uuid(agente.nome),
+                skill_versao=skill.versao,
+                usuario_portador=portador_id,
+                input=portao.reter_input(input),
+                output=portao.reter_output(output),
+                judge=judge_notas,
+                latencia_ms=int((fim - inicio).total_seconds() * 1000),
+                created_at=fim,
+            )
+        )
 
     def _parse_para_agente(self, agente: Agente, skill_md: str) -> SkillMd:
         parseada = parse_skill_md(skill_md)

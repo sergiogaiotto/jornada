@@ -45,6 +45,8 @@ estrito de propósito e o preço é este comentário; a alternativa (checar só 
 voltaria a governar sem ninguém ver.
 """
 
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +60,12 @@ from domain.ia_responsavel import (
     pode_aplicar_sozinho,
     sanear_para_llm,
 )
+
+# Import do SUBMÓDULO porque `domain/ia_responsavel/__init__.py` não é arquivo desta
+# frente e a re-exportação não foi feita — ver EMENDA SUGERIDA. Funciona igual; a única
+# perda é a simetria com os outros quatro enforcements, que vêm do pacote.
+from domain.ia_responsavel.retencao import aplicar_retencao_evidencias
+from domain.privacidade.sanitizar import mascarar_campos, mascarar_estrutura
 
 # Ações do Art. 20 que ESTA onda fiou, nomeadas em vez de digitadas no call site.
 #
@@ -115,6 +123,82 @@ class PortaoIa:
         """
         return sanear_para_llm(texto, self.conteudo).texto
 
+    def sanear_estrutura(self, valor: Any) -> Any:
+        """`sanear` para quem manda ÁRVORE ao prompt (dict/list), não texto corrido.
+
+        Existe porque nem todo prompt da plataforma é string: o Ateliê serializa
+        `harness_case.input` e a `entrada` do dry-run com `json.dumps` antes de mandar
+        ao modelo (§8-M12). Sem um método AQUI, cada serviço escreveria o próprio
+        caminhamento da árvore — e caminhamento duplicado é exatamente como o
+        `kv_master` (dicionário aninhado) escapou inteiro da retenção na onda 3.
+
+        São dois passos, nenhum reimplementado neste arquivo:
+
+        1. **detectar e BLOQUEAR sobre o JSON inteiro** — `self.sanear` é a mesma porta
+           de sempre, e serializar garante que nenhuma string do galho escape da
+           varredura. Detectar sobre o texto serializado é MAIS abrangente que detectar
+           string a string (um CPF partido entre dois valores é pego); errar para o lado
+           de bloquear demais é a direção certa num controle de privacidade.
+        2. **mascarar com a CHAVE servindo de âncora** — `mascarar_campos` (§10.2), a
+           MESMA função que o intake usa em `pedido.conteudo`. Ver abaixo por que não é
+           `mascarar_estrutura`.
+
+        `default=str` porque a serialização aqui é MEIO de varredura, não contrato: um
+        `UUID` no galho não pode levantar `TypeError` e derrubar a rota — o portão que
+        quebra com dado exótico vira o portão que alguém desliga.
+
+        ## Por que a árvore do Ateliê é DIGITAÇÃO, e não contrato (auditoria da onda 3c)
+
+        A primeira versão deste método mascarava com `mascarar_estrutura`, que por
+        contrato **não olha a chave e não mascara a chave** — o certo para payload de
+        evento e trace, onde a chave é nome de campo do §4.1. Só que a `entrada` do
+        dry-run e o `harness_case.input` são `dict[str, Any]` ABERTO, digitado na tela
+        do T16: quem escolhe o nome do campo é o analista. É a mesma forma do
+        `pedido.conteudo`, e a auditoria mediu o preço de tratá-la como contrato — 10 de
+        14 árvores de PII brasileira realista chegavam INTEIRAS ao prompt:
+
+        * `{"nome do titular": "Maria da Conceição Souza"}` — a âncora está na CHAVE e o
+          dado no valor; mascarar cada string isolada perde exatamente o sinal que torna
+          o nome reconhecível (é o argumento que `mascarar_campos` já documenta);
+        * `{"cep": "01310100"}`, `{"rg": "1234567"}`, `{"data de nascimento": ...}` —
+          idem, e são a forma REAL do cadastro de telco;
+        * `{"dados do titular": {"nome completo": "..."}}` — aninhado, e `mascarar_campos`
+          desce mantendo a âncora;
+        * `{"contato joao@x.com.br": "10%"}` — PII na CHAVE, que `mascarar_estrutura`
+          devolve intacta. É o achado 9 do UAT #5 renascido nesta rota.
+
+        O piso não mudou para quem manda árvore de CONTRATO: chave não-`str` (ou raiz que
+        não é dicionário) continua indo por `mascarar_estrutura`.
+
+        ## Por que a varredura tira ASPAS e `_` antes de detectar
+
+        Mascarar e BLOQUEAR são dois enforcements do mesmo parâmetro (a), e eles não
+        podem divergir: uma rota que mascara `nome` mas não honra `nome: bloquear` deixa
+        a requisição SEGUIR quando o DPO mandou recusar — menos estrito que o publicado,
+        e em silêncio. A auditoria mediu essa divergência aqui, e a causa é de texto:
+
+        * as âncoras de contexto pedem `[\\s:\\-–—]{1,3}` entre rótulo e dado, e o que
+          `json.dumps` põe ali é `": "` — com ASPAS, que não estão no separador. Então
+          `nome do titular` nunca ficava adjacente a `Maria` e a varredura não via nada;
+        * `_` é caractere de PALAVRA, então em `nome_do_titular` nem `\\btitular` existe.
+          É a mesma normalização que `mascarar_pii_em_campo` já faz do lado do
+          mascaramento — sem ela, a forma DOMINANTE de chave de JSON mascarava e não
+          bloqueava.
+
+        As duas trocas colam `chave: valor` e devolvem a âncora. O texto resultante é
+        MEIO de varredura e nunca é retornado (mesmo argumento do `default=str`), então
+        corromper um valor que contenha aspa ou `_` não tem efeito observável; e o erro
+        que elas podem introduzir é detectar DEMAIS, que é a direção em que este
+        controle deve errar. `-` NÃO é trocado de propósito: ele já está no separador, e
+        removê-lo apagaria as bordas `(?<![-\\w])` que protegem `OS-2026-0457` de virar
+        telefone/CEP (falso positivo do C02 que a suíte cobra).
+        """
+        varredura = json.dumps(valor, ensure_ascii=False, default=str)
+        self.sanear(varredura.replace('"', "").replace("_", " "))
+        if isinstance(valor, dict) and all(isinstance(chave, str) for chave in valor):
+            return mascarar_campos(valor)
+        return mascarar_estrutura(valor)
+
     def sanear_detalhado(self, texto: str) -> Saneamento:
         """Texto saneado + categorias detectadas, para quem alimenta ledger/trace.
 
@@ -150,6 +234,25 @@ class PortaoIa:
     def reter_output(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
         """Redige o `output` da invocação conforme `reter_resposta` (§10.4)."""
         return aplicar_retencao(payload, self.conteudo, tipo="output")
+
+    def reter_evidencias(self, evidencias: Sequence[Any]) -> list[Any]:
+        """Redige a COLUNA `invocacao.evidencias` (§4.1) conforme a retenção (§10.4).
+
+        Terceiro método porque `evidencias` é a TERCEIRA coluna de conteúdo do ledger, e
+        era a única que política nenhuma alcançava: `reter_output` embrulha o dicionário
+        `output`, e o serviço atribuía `evidencias=` ao lado, FORA do portão. Com
+        `reter_* = false` publicado, a auditoria lia `[SUPRIMIDO...]` no `output` e o
+        texto livre do modelo intacto na coluna vizinha — supressão em que se acredita e
+        que não aconteceu.
+
+        Alternativa considerada e recusada: `reter_output` passar a receber o registro
+        inteiro. Ela obrigaria os seis serviços a mudar de forma no mesmo commit e faria
+        o portão conhecer o dataclass `Invocacao` — hoje ele só vê payloads, e é isso
+        que o mantém em uma linha por enforcement, sem regra própria. Uma coluna de
+        conteúdo, um método: a ausência do terceiro é o que a revisão do próximo serviço
+        consegue ver, que é o mesmo argumento pelo qual o portão existe.
+        """
+        return aplicar_retencao_evidencias(evidencias, self.conteudo)
 
 
 def de(publicacoes: PublicacoesIaPort, tenant_id: str | None = None) -> PortaoIa:
