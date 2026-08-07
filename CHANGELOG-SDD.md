@@ -3,6 +3,18 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-07 — I06 · Workflow `configurar-vps` (§13)
+
+O deploy da onda 4 estava travado num impasse: o compose exige `APP_ENV` no `.env` da VPS
+(decisão deliberada da onda 4), gravar a variável exige SSH, e a máquina de operação nova
+não tem a chave — só o CI tem. `configurar-vps.yml` resolve sem trair o desenho: roda SÓ
+por `workflow_dispatch`, com o ambiente escolhido explicitamente por quem dispara (a
+decisão continua humana, agora auditável no histórico do Actions), nunca sobrescreve
+variável existente e não imprime valores. Primeiro uso: `app_env=dev` + `demo_mode=true`
+— o `DEMO_MODE` explícito porque o default do compose virou `false` na onda 4, e sem a
+linha o deploy desligaria a demo em silêncio. Serve também ao corte §8.2 (prod + demo
+off), depois do TLS e junto dele.
+
 ## 2026-08-07 — Onda 5 · O contrato passa a valer por valor (§5, §5.2, §5.3, §10.2, §10.8)
 
 Cinco frentes dos achados abertos do handoff, escolhidas pela relação conserto/dano. O fio

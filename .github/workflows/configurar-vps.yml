@@ -1,0 +1,53 @@
+# Configuração DELIBERADA do ambiente da VPS (§13 — ver CHANGELOG-SDD.md).
+#
+# Por que existe: a onda 4 tornou `APP_ENV` obrigatório no `.env` do servidor — o
+# compose parou de decidir o ambiente sozinho, e essa decisão é HUMANA. Este workflow
+# não devolve o default silencioso: ele só roda por `workflow_dispatch`, com o valor
+# escolhido EXPLICITAMENTE por quem dispara, e fica auditável no histórico do Actions.
+# Ele existe porque a máquina de operação pode não ter a chave SSH da VPS (o caso da
+# troca de máquina de 2026-08-07) — o CI é o único caminho com acesso nessas horas.
+#
+# Idempotente e conservador: NUNCA sobrescreve variável existente — se `APP_ENV` já
+# está no `.env`, mantém e reporta. Nenhum VALOR de variável é impresso no log; a
+# verificação lista só os NOMES (mesmo comando do HANDOFF §4.3).
+#
+# Para o corte de produção (§8.2 do HANDOFF): dispare com app_env=prod +
+# demo_mode=false — DEPOIS do TLS e junto dele, como o comentário do compose exige.
+name: configurar-vps
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_env:
+        description: "APP_ENV do servidor (decisão consciente — ver docker-compose.prod.yml)"
+        required: true
+        type: choice
+        options: [dev, homolog, prod]
+      demo_mode:
+        description: "DEMO_MODE (true = demo pública com seeds §11.4; false = produção)"
+        required: true
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  configurar:
+    runs-on: ubuntu-latest
+    concurrency: deploy-vps  # mesma trava do deploy: nunca os dois mexendo na VPS juntos
+    steps:
+      - name: Gravar APP_ENV/DEMO_MODE no .env da VPS (só se ausentes)
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          APP_ENV_ALVO: ${{ inputs.app_env }}
+          DEMO_MODE_ALVO: ${{ inputs.demo_mode }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@vps.falagaiotto.com.br \
+            "cd /opt/jornada && touch .env \
+             && if grep -q '^APP_ENV=' .env; then echo 'APP_ENV: ja definido no servidor — MANTIDO (este workflow nunca sobrescreve)'; \
+                else printf 'APP_ENV=%s\n' '$APP_ENV_ALVO' >> .env && echo 'APP_ENV: adicionado ($APP_ENV_ALVO)'; fi \
+             && if grep -q '^DEMO_MODE=' .env; then echo 'DEMO_MODE: ja definido no servidor — MANTIDO'; \
+                else printf 'DEMO_MODE=%s\n' '$DEMO_MODE_ALVO' >> .env && echo 'DEMO_MODE: adicionado ($DEMO_MODE_ALVO)'; fi \
+             && echo '--- variaveis presentes no .env (nomes, sem valores):' \
+             && cut -d= -f1 .env | sort"
