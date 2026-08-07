@@ -1,0 +1,5 @@
+# Forca LF no checkout para todo arquivo texto, independente de core.autocrlf.
+# Motivo: (1) scripts/*.sh rodam no bash do container (CRLF quebra `set -o pipefail`);
+# (2) os golden de backend/tests/contract/golden/ sao comparados byte a byte com a
+# saida do compilador, que emite \n.
+* text=auto eol=lf
