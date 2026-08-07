@@ -23,6 +23,11 @@ zeep~=4.2
 # lançamento (§1.1.2) dependia de uma dependência acidental. Fixado no caminho
 # recomendado do §6 (binomial exata vetorizada), igual em dev, CI e produção.
 numpy~=1.26
+# Validação REAL do jgc.schema.json (onda 5 — I01, o P2 do UAT #5). O schema era a
+# "fonte da verdade" que ninguém executava: toda restrição de valor (faixas, enums,
+# tipos, additionalProperties) era decorativa, e a VPS aceitou STO de -72h, metrica
+# "telepatia" e throttle "mil" com 201. Draft 2020-12, o mesmo declarado no schema.
+jsonschema~=4.23
 langfuse~=2.53
 python-jose[cryptography]~=3.3
 # Hash de senha argon2id (emenda G01 — identidade real por trás do RBAC §8-M0). Vencedor

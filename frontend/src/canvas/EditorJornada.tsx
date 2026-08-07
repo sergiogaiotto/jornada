@@ -98,8 +98,12 @@ function condParaConexao(grafo: GrafoJgc, origem: string): string | null {
     return bracos.map((b) => String(b.id ?? "")).find((id) => id && !usadas.has(id)) ?? null;
   }
   if (no.type === "frequencySplit") {
-    const classes = (no.data?.["classes"] ?? []) as string[];
-    return classes.find((c) => !usadas.has(String(c))) ?? null;
+    // D05/I01: classe pode ser objeto {id, min/max} — o cond da aresta é o id,
+    // nunca o objeto (cond-objeto levava 422 tipo_invalido anônimo no save).
+    const classes = (no.data?.["classes"] ?? []) as (string | { id?: string })[];
+    const rotulos = classes.map((c) =>
+      typeof c === "object" && c !== null ? String(c.id ?? "") : String(c));
+    return rotulos.find((r) => r && !usadas.has(r)) ?? null;
   }
   return null;
 }
@@ -351,6 +355,15 @@ function EditorInterno({ jornada, problemasServidor, salvando, onSalvar, onSelec
   const aoConectar = useCallback(
     (conexao: Connection) => {
       if (!conexao.source || !conexao.target) return;
+      // I02 (roteamento_ambiguo §5.3): um decisionSplit roteado por `regras[].to`
+      // não pode ganhar aresta real — era exatamente assim que o híbrido nascia na
+      // UI (as arestas tracejadas das regras não são editáveis; a manual duplicaria
+      // a saída na adjacência). O destino se edita nas regras, pelo Inspetor.
+      const origem = estado.grafo.nodes.find((n) => n.id === conexao.source);
+      if (origem?.type === "decisionSplit") {
+        const regras = (origem.data?.["regras"] ?? []) as { to?: string }[];
+        if (regras.some((r) => r.to)) return;
+      }
       const cond = condParaConexao(estado.grafo, conexao.source);
       const nova: ArestaJgc = {
         id: proximoIdAresta(estado.grafo.edges.map((a) => a.id)),

@@ -53,7 +53,7 @@ from typing import Any, Protocol, cast
 
 from agents.harness import judge
 from application.ports.clock import ClockPort
-from application.ports.llm import LLMPort
+from application.ports.llm import LLMPort, soma_tokens
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_atelie import RepositorioAtelie
@@ -254,6 +254,7 @@ class ServicoAtelie:
         corpo = portao.sanear(parse_skill_md(skill.skill_md).corpo)
         inicio = self._relogio.agora()
         avaliacoes: list[dict[str, Any]] = []
+        tokens_uso: int | None = None  # I04: um run soma execução+judge de TODOS os casos
         for caso in casos:
             # `harness_case.input` é ÁRVORE, não string: quem sanea árvore é o portão
             # (`sanear_estrutura`), senão este serviço teria detector próprio de PII.
@@ -263,14 +264,14 @@ class ServicoAtelie:
             # modelo. Conferido DENTRO do laço, imediatamente antes do `chat`, para que a
             # revisão (e o vigia de CI) veja que nenhuma chamada ficou sem par.
             portao.autorizar_modelo(agente.nome, perfil)
-            saida = self._llm.chat(
+            saida, tokens_exec = self._llm.chat(
                 judge.montar_mensagens_execucao(corpo, entrada),
                 perfil=perfil,  # type: ignore[arg-type]  # validado pelo parser §7.1
             )
             # O judge é 120b por constante de código, mas o dado que ele lê é do agente
             # JULGADO — quem autoriza é `modelos_permitidos[agente]` (docstring do módulo).
             portao.autorizar_modelo(agente.nome, judge.PERFIL_JUDGE)
-            veredito = self._llm.chat(
+            veredito, tokens_judge = self._llm.chat(
                 judge.montar_mensagens_judge(
                     entrada=entrada,
                     esperado=esperado,
@@ -281,6 +282,7 @@ class ServicoAtelie:
                 ),
                 perfil=judge.PERFIL_JUDGE,
             )
+            tokens_uso = soma_tokens(tokens_uso, tokens_exec, tokens_judge)
             # (b) §10.4: `reter_resposta: false` redige a saída do modelo na GRAVAÇÃO —
             # e SÓ ela. `skill_md_hash` e os scores ficam FORA da retenção de propósito:
             # redigir o hash faria todo run parecer eternamente obsoleto e travaria o
@@ -331,6 +333,7 @@ class ServicoAtelie:
             judge_notas=dict(consolidado["score_por_dimensao"]),
             inicio=inicio,
             fim=fim,
+            tokens=tokens_uso,
         )
         self._evento(
             tenant_id,
@@ -509,7 +512,7 @@ class ServicoAtelie:
         # módulo). Sem esta linha, publicar `modelos_permitidos` não muda nada aqui — que
         # foi exatamente o que a auditoria mediu ("perfis usados = ['120b']").
         portao.autorizar_modelo(agente.nome, parseada.modelo_perfil)
-        saida = self._llm.chat(
+        saida, tokens_uso = self._llm.chat(
             judge.montar_mensagens_execucao(corpo, entrada),
             perfil=parseada.modelo_perfil,  # type: ignore[arg-type]  # validado §7.1
         )
@@ -529,6 +532,7 @@ class ServicoAtelie:
             output={"saida": saida},
             inicio=inicio,
             fim=fim,
+            tokens=tokens_uso,
         )
         return {
             "skill_id": str(skill.id),
@@ -550,6 +554,7 @@ class ServicoAtelie:
         inicio: datetime,
         fim: datetime,
         judge_notas: dict[str, Any] | None = None,
+        tokens: int | None = None,
     ) -> None:
         """Ledger via_ai (§4.1 `invocacao`) do Ateliê — o Art. 20 não pode ter buraco.
 
@@ -569,6 +574,7 @@ class ServicoAtelie:
                 input=portao.reter_input(input),
                 output=portao.reter_output(output),
                 judge=judge_notas,
+                tokens=tokens,  # I04: usage do provedor (harness soma exec+judge) — §10.8
                 latencia_ms=int((fim - inicio).total_seconds() * 1000),
                 created_at=fim,
             )

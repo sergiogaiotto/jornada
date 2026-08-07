@@ -264,7 +264,33 @@ function CamposDoTipo({
   }
 
   if (tipo === "decisionSplit") {
-    const regras = ((d["regras"] ?? []) as { expr?: string; to?: string }[]).map((r) => ({
+    const brutas = (d["regras"] ?? []) as
+      { expr?: string; to?: string; id?: string; cond?: string | null }[];
+    // Auditoria da onda 5: o editor abaixo COAGE toda regra para {expr, to} — numa
+    // regra da forma clássica {id, cond} (D07, a que o Flow real gera) qualquer
+    // edição descartava id/cond em silêncio e o nó chegava MUDO ao Journey Builder.
+    // Forma clássica é somente-leitura aqui: o destino se edita nas ARESTAS.
+    if (brutas.some((r) => r.id && !r.to)) {
+      return (
+        <>
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-[.06em] text-faint">
+            Regras (forma clássica — destino nas arestas)
+          </div>
+          {brutas.map((r, i) => (
+            <div key={i} className="mb-1 rounded-md border border-line bg-white p-1.5 text-[11px]">
+              <span className="font-mono font-bold">{String(r.id ?? "?")}</span>
+              <span className="ml-2 font-mono text-faint">{r.cond ?? "senão"}</span>
+            </div>
+          ))}
+          <div className="mt-1 text-[10px] text-faint">
+            Este nó roteia pela forma clássica (D07): cada regra casa com a aresta cujo
+            cond = id da regra. Edite as arestas no canvas — reescrever as regras aqui
+            destruiria os ids/conds.
+          </div>
+        </>
+      );
+    }
+    const regras = brutas.map((r) => ({
       expr: String(r.expr ?? ""),
       to: String(r.to ?? ""),
     }));
@@ -342,7 +368,34 @@ function CamposDoTipo({
     );
 
   if (tipo === "frequencySplit") {
-    const classes = (d["classes"] ?? []) as string[];
+    const brutas = (d["classes"] ?? []) as (string | { id?: string })[];
+    const fonte = String(d["fonte"] ?? "governor");
+    const soGovernor =
+      fonte === "governor" &&
+      brutas.every((c) => typeof c === "string" && ["saturado", "ok", "sub"].includes(c));
+    // D05/I01 (auditoria da onda 5): classes-objeto {id, min/max} e fonte livre
+    // ('DE_freq' do grafo v5 real) são LEGAIS — o toggle abaixo as destruiria (e
+    // sobrescrevia a fonte com 'governor' em silêncio). Fora do caso governor
+    // puro, o painel vira leitura: cada classe roteia pela aresta com cond = id.
+    if (!soGovernor) {
+      const rotulos = brutas.map((c) =>
+        typeof c === "object" && c !== null ? String(c.id ?? "?") : String(c));
+      return (
+        <>
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-[.06em] text-faint">
+            Classes (fonte = {fonte})
+          </div>
+          <div className="rounded-md border border-line bg-white p-1.5 font-mono text-[11px]">
+            {rotulos.join(" · ")}
+          </div>
+          <div className="mt-1 text-[10px] text-faint">
+            Classes na forma D05 (objeto com faixas e/ou rótulo livre) — editá-las aqui
+            as reescreveria; cada classe precisa de aresta de saída com cond = id.
+          </div>
+        </>
+      );
+    }
+    const classes = brutas as string[];
     return (
       <>
         <div className="mb-1 text-[10px] font-bold uppercase tracking-[.06em] text-faint">

@@ -11,12 +11,14 @@
     "meta": {
       "type": "object",
       "required": ["osCodigo", "tenant", "reentrada"],
+      "additionalProperties": false,
       "properties": {
         "osCodigo": { "type": "string" },
         "tenant": { "type": "string" },
         "reentrada": { "enum": ["nao", "apos_saida", "qualquer_momento"] },
         "quietHours": {
           "type": ["object", "null"],
+          "additionalProperties": false,
           "properties": {
             "inicio": { "type": "string" },
             "fim": { "type": "string" }
@@ -38,6 +40,7 @@
     "edge": {
       "type": "object",
       "required": ["id", "from", "to"],
+      "additionalProperties": false,
       "properties": {
         "id": { "type": "string" },
         "from": { "type": "string" },
@@ -48,6 +51,7 @@
     "node": {
       "type": "object",
       "required": ["id", "type", "data"],
+      "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "type": {
@@ -91,6 +95,7 @@
       "entrySource": {
         "type": "object",
         "required": ["deRef", "modo"],
+        "additionalProperties": false,
         "properties": {
           "deRef": { "type": "string" },
           "modo": { "enum": ["fire_once", "scheduled"] },
@@ -101,6 +106,7 @@
       "randomSplit": {
         "type": "object",
         "required": ["braços"],
+        "additionalProperties": false,
         "properties": {
           "braços": {
             "type": "array",
@@ -108,9 +114,11 @@
             "items": {
               "type": "object",
               "required": ["id", "pct"],
+              "additionalProperties": false,
               "properties": {
                 "id": { "type": "string" },
-                "pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+                "pct": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+                "holdout": { "type": "boolean", "description": "marca o braço de controle (§5.3) — alternativa ao id `holdout`" }
               }
             }
           }
@@ -119,17 +127,25 @@
       "decisionSplit": {
         "type": "object",
         "required": ["regras"],
+        "additionalProperties": false,
         "properties": {
           "regras": {
             "type": "array",
             "minItems": 1,
             "items": {
               "type": "object",
-              "required": ["expr", "to"],
+              "description": "Emenda I01 (alinha o schema ao SDD §5.3/D07): DUAS formas legais — nova `{expr, to}` (destino na própria regra) e clássica `{id[, cond]}` (destino na aresta cujo `cond` = id da regra). As formas são mutuamente exclusivas POR NÓ (§5.3 roteamento_ambiguo). Auditoria da onda 5: minLength 1 em expr/to/id — `to: \"\"` satisfazia `required` e virava regra MORTA silenciosa (o dataDefault do catálogo fabricava exatamente esse estado).",
+              "additionalProperties": false,
               "properties": {
-                "expr": { "type": "string" },
-                "to": { "type": "string" }
-              }
+                "expr": { "type": "string", "minLength": 1 },
+                "to": { "type": "string", "minLength": 1 },
+                "id": { "type": "string", "minLength": 1 },
+                "cond": { "type": ["string", "null"] }
+              },
+              "anyOf": [
+                { "required": ["expr", "to"] },
+                { "required": ["id"] }
+              ]
             }
           }
         }
@@ -137,6 +153,7 @@
       "engagementSplit": {
         "type": "object",
         "required": ["metrica", "janela"],
+        "additionalProperties": false,
         "properties": {
           "metrica": { "enum": ["open", "click"] },
           "janela": { "type": "string" }
@@ -145,18 +162,38 @@
       "frequencySplit": {
         "type": "object",
         "required": ["classes", "fonte"],
+        "additionalProperties": false,
         "properties": {
           "classes": {
             "type": "array",
             "minItems": 1,
-            "items": { "enum": ["saturado", "ok", "sub"] }
+            "items": {
+              "description": "Emenda I01 (alinha o schema ao SDD §5.2/D05): classe como string livre (o 120b real emite 'baixa'/'alta') OU objeto {id, min/max} com faixas — o enum antigo [saturado, ok, sub] descrevia só a seed.",
+              "anyOf": [
+                { "type": "string", "minLength": 1 },
+                {
+                  "type": "object",
+                  "required": ["id"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "min": { "type": "number" },
+                    "max": { "type": "number" }
+                  }
+                }
+              ]
+            }
           },
-          "fonte": { "const": "governor" }
+          "fonte": {
+            "type": "string",
+            "description": "Emenda I01: era `const governor`, mas o grafo v5 REAL em produção usa 'DE_freq' — restrição relaxada para string; a semântica da fonte é do compilador."
+          }
         }
       },
       "sto": {
         "type": "object",
         "required": ["janelaHoras", "fallback"],
+        "additionalProperties": false,
         "properties": {
           "janelaHoras": { "type": "number", "exclusiveMinimum": 0 },
           "fallback": { "type": "string" }
@@ -164,6 +201,7 @@
       },
       "wait": {
         "type": "object",
+        "additionalProperties": false,
         "anyOf": [{ "required": ["duracao"] }, { "required": ["ate"] }],
         "properties": {
           "duracao": { "type": "string", "description": "ISO 8601 (ex.: P2D, PT12H)" },
@@ -173,6 +211,7 @@
       "channel": {
         "type": "object",
         "required": ["assetRef"],
+        "additionalProperties": false,
         "properties": {
           "assetRef": { "type": "string" },
           "throttlePorHora": { "type": "number", "exclusiveMinimum": 0 },
@@ -183,6 +222,7 @@
       "updateContact": {
         "type": "object",
         "required": ["deRef", "valores"],
+        "additionalProperties": false,
         "properties": {
           "deRef": { "type": "string" },
           "valores": { "type": "object" }
@@ -191,6 +231,7 @@
       "goal": {
         "type": "object",
         "required": ["metrica", "deRef"],
+        "additionalProperties": false,
         "properties": {
           "metrica": { "type": "string" },
           "deRef": { "type": "string" }
@@ -199,11 +240,13 @@
       "exit": {
         "type": "object",
         "required": ["motivo"],
+        "additionalProperties": false,
         "properties": { "motivo": { "type": "string" } }
       },
       "exception": {
         "type": "object",
         "required": ["payloadOriginal"],
+        "additionalProperties": false,
         "properties": { "payloadOriginal": {} }
       }
     }

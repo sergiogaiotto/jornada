@@ -22,10 +22,10 @@ Quatro parâmetros governam nesta onda:
 | `modelos_permitidos` | `modelos_llm.py` | perfil fora da lista não é chamado |
 
 Ficaram FORA, por decisão registrada em `politica.py`: teto de custo/tokens (a métrica
-não é medida — `invocacao.tokens` é sempre NULL) e rótulo de conteúdo gerado por IA (o
-enforcement é a UI de ~10 telas). Ambos voltam junto do teste que provar que mudam
-comportamento — a mesma régua que este módulo aplica ao resto da plataforma vale para
-ele próprio.
+passou a ser medida na onda 5 — I04 — mas o enforcement que soma o gasto e recusa a
+chamada ainda não existe) e rótulo de conteúdo gerado por IA (o enforcement é a UI de
+~10 telas). Ambos voltam junto do teste que provar que mudam comportamento — a mesma
+régua que este módulo aplica ao resto da plataforma vale para ele próprio.
 """
 
 from domain.ia_responsavel.dados import Saneamento, categorias_detectadas, sanear_para_llm

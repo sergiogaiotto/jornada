@@ -105,7 +105,7 @@ class ServicoAudiencia:
         inicio = self._relogio.agora()
         # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-        texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
+        texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
         fim = self._relogio.agora()
         saida = agente_engineer.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         if saida.sql is None:  # guarda-corpo §1.3.5: nada é inventado
@@ -129,7 +129,7 @@ class ServicoAudiencia:
         self._repo.adicionar_segmento(segmento)
 
         invocacao = self._registrar_invocacao(
-            os_, skill, instrucoes, saida, portador_id, inicio, fim, portao
+            os_, skill, instrucoes, saida, portador_id, inicio, fim, portao, tokens=tokens_uso
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -389,6 +389,7 @@ class ServicoAudiencia:
         inicio: datetime,
         fim: datetime,
         portao: portao_ia.PortaoIa,
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). SEM PII,
         e com a RETENÇÃO da política (§10.4) decidindo se o texto chega a ser gravado."""
@@ -412,6 +413,7 @@ class ServicoAudiencia:
             # vem do corpus RAG), não ref versionada — sem isto o mesmo texto que sai
             # redigido do `output` voltava inteiro pela coluna vizinha.
             evidencias=portao.reter_evidencias(saida.evidencias),
+            tokens=tokens,  # I04: usage do provedor — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

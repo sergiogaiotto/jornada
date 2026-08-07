@@ -3,6 +3,122 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-07 — Onda 5 · O contrato passa a valer por valor (§5, §5.2, §5.3, §10.2, §10.8)
+
+Cinco frentes dos achados abertos do handoff, escolhidas pela relação conserto/dano. O fio
+comum é o P2 do UAT #5: restrições que existiam no papel — o schema, a exclusividade de
+roteamento, o determinismo do hash, a promessa dos tokens, o limite do detector — passam a
+valer por código, ou têm o limite declarado no contrato. (A onda 4 — `36c4f52` — não
+registrou entrada aqui; o corte para produção dela está descrito no `docs/HANDOFF.md`.)
+
+### I01 · O jsonschema roda — a fonte da verdade deixa de ser decorativa
+O `jgc.schema.json` era lido para DUAS coisas (enum de tipos e `required` de `$defs.data.*`);
+toda restrição de VALOR era letra morta. Provado na VPS: 201 para STO de **-72h**, metrica
+**"telepatia"**, throttle **-5000**; e `throttlePorHora: "mil"` salvava e derrubava o
+simulador com 500 — a jornada 34309e21 ficou travada assim. Agora o `Draft202012Validator`
+roda INTEIRO dentro do `_validar_estrutura` (funil único dos seis chamadores), com os erros
+mapeados para o contrato `{no, regra, mensagem}` que alimenta o retry §7.3 e a âncora A1.
+
+A ordem do conserto importou: **primeiro a emenda do schema, depois a chave na ignição.** O
+schema estava DESATUALIZADO em relação às emendas D05/D07 do §5.3 — ligar o validador sem
+emendá-lo rejeitaria o golden do M9, três fixtures de teste e grafos reais em produção
+(`fonte: "DE_freq"` no v5). O schema agora aceita as duas formas do decisionSplit
+(anyOf `{expr,to}` | `{id[,cond]}`), classe de frequencySplit como string livre ou
+`{id,min/max}`, e `fonte` como string. Dependência nova: `jsonschema~=4.23` (lock
+recompilado com pip-compile). Aceite: `test_I01_jsonschema_governa.py`, com os quatro
+exemplos literais da VPS e inversão verificada.
+
+### I02 · `roteamento_ambiguo` — o híbrido do decisionSplit é recusado
+A decisão que a entrada do E05 deixou registrada ("recusar no §5.3, nunca deduplicar na
+adjacência") está implementada. Nó com regra que traz `to` E aresta real saindo dele (ou
+regras mistas com e sem `to`) leva erro bloqueante nomeando o nó, com mensagem prescritiva
+para o retry do Flow convergir. A adjacência única (D07) segue defensiva e não julga — o
+teste `test_I02_a_duplicacao_existe_de_verdade` documenta a doença (3 saídas para 2 braços
+lógicos, +33% no braço duplicado) e continua verde de propósito: ele prova o porquê da
+regra, não a regra. Espelhos: o lint local do canvas ganhou a MESMA regra — e perdeu um
+vício contrário que este mapeamento expôs: ele exigia `to` em toda regra, reprovando
+localmente a forma clássica que o D07 legalizou no servidor. E o editor deixa de criar o
+híbrido na origem: `aoConectar` recusa aresta manual a partir de decisionSplit roteado por
+regras. Guarda-corpo por grep (padrão do F04 bloco IV) prende os dois espelhos ao CI.
+Limites declarados: a recusa do `aoConectar` é silenciosa (o arrasto "não cola" sem aviso —
+não há canal de toast no canvas hoje); e para grafo híbrido JÁ persistido na VPS a regra só
+morde no próximo save/simulação — export/plan/drift não validam e seguem emitindo os
+outcomes duplicados do dado antigo até alguém corrigir o grafo (nenhum grafo do repositório
+dispara a regra; o gatilho é dado de usuário).
+
+### I03 · O hash é do grafo, não da ordem das listas
+`canonicalizar` (RFC 8785) ordena chaves, não arrays — e `nodes`/`edges` são conjuntos.
+O mesmo grafo permutado gerava hash → externalKey diferentes, e o plan §5.4 propunha
+**destruir e recriar tudo** no SFMC ("reinicia contatos em espera") para um grafo idêntico.
+`normalizar_grafo` ordena as duas listas do topo por `id` — escolha deliberada: o JGC golden
+(n1..n8, e1..e7) já está nessa ordem, então `HASH_GOLDEN` e os golden files do M9-A2 não
+mudam um byte. A normalização roda na PERSISTÊNCIA (`_normalizar_meta`, aprovação do
+optimize, seed demo) além do hash: grafo armazenado torto compilaria activities fora de
+ordem — falso drift e falso `alterar` destrutivo. `data.*` NUNCA é reordenado (precedência
+do `senao`). Consequências declaradas: em banco NOVO a seed demo nasce canônica ('n13' <
+'n2' lexicográfico); em banco JÁ semeado o guard do semear é no-op e a demo segue com o par
+grafo+hash legado — consistente, porque plan/drift/preview compilam sempre com o hash
+ARMAZENADO. O aceite do esqueleto com holdout passou a conferir tipos por CONJUNTO — a
+posição na lista deixou de ser contrato. Registros antigos não precisam de migração:
+snapshots são imutáveis (§1.1.1) e `restaurar` copia grafo+hash da origem.
+
+### I04 · O `usage` chega ao ledger — a metade descumprida do §10.8
+`LLMPort.chat` devolvia `str` e o `usage` do provedor morria na linha 207 do adapter;
+`invocacao.tokens` era NULL em TODA linha desde a migração 0001 (a persistência sempre
+funcionou — o round-trip com tokens=321 estava provado; faltava a produção do valor).
+`chat()` agora devolve `RespostaLLM(texto, tokens)` — NamedTuple, mantendo o NOME do método
+porque o vigia F03 identifica call sites por `attr == "chat"` (método novo escaparia dele);
+o valor viaja no RETORNO, nunca em estado do adapter (um adapter por aplicação, threads
+concorrentes). Os 14 call sites nos 8 serviços desempacotam e passam `tokens=` às suas
+construções de `Invocacao`; linha que cobre várias chamadas (retry §7.3 do Flow e do
+consultor, exec+judge por caso do harness) grava a SOMA (`soma_tokens` — todos None → None,
+ausência de medida não vira medida zero). O fake conta palavras (determinístico, §1.3.5);
+o adapter real usa `getattr` defensivo nos dois níveis — hub sem `usage` degrada para NULL,
+jamais para exceção (§10.6). A API da T16 já expunha o campo (`_invocacao_out`) e agora o
+payload traz valor; **a tela ainda não o renderiza** — consumidor de UI pendente, declarado.
+`teto_tokens` continua FORA do conjunto fechado — a medição chegou, o enforcement não; as
+justificativas em `politica.py` e nos testes F03 foram atualizadas para o motivo novo.
+
+### Auditoria da onda · o que o cético achou, e a onda consertou antes do commit
+Seis auditores independentes (um por frente + varredura P1 de consumidores), todos com
+reproduções EXECUTADAS. Nenhum reprovou; nenhum aprovou limpo. O que mudou por causa deles:
+(1) **o fechamento do schema valia só na raiz** — `throtlePorHora` (typo) passava limpo e o
+cap da política não o via, a doença da VPS de volta pela porta do lado; `additionalProperties:
+false` agora fecha meta, node, edge e todos os `data.*` (o braço de randomSplit ganhou a
+propriedade `holdout` que o esqueleto D01 sempre usou). (2) **`meta: null` e `jgcVersion:
+null` atravessavam as duas camadas** — o filtro de dedupe assumia cobertura artesanal que
+tolerava null; alcançável hoje pelo ensaiar_grafo do M11, que valida o grafo cru. (3) **o
+teto de erros por nó tinha um balde None** — 3 erros de aresta escondiam o erro de meta da
+mesma resposta; o teto passou a ser por localização. (4) **`to: ""` era regra morta legal**
+(e o dataDefault do catálogo fabricava exatamente esse estado): minLength no schema, default
+do catálogo sem o campo. (5) **o braço clássico morto não tinha acusador** — o vício antigo
+do lint o cobria por acidente e a onda o tinha removido sem substituto; o check análogo ao
+do randomSplit entrou no backend E no lint. (6) **id de aresta duplicado nunca foi recusado**
+— duas arestas de mesmo id duplicam a saída (a família do +33%) e o diff por id as colapsa;
+recusado na estrutura. (7) **a proposta do optimize persistia sem normalizar** — pré-simulação
+e versão aprovada davam P50 diferente com a mesma seed (o motor consome RNG na ordem das
+edges); a normalização foi para a ORIGEM (o `_normalizar_meta` do M11). (8) **a inversão
+declarada do I03 apontava para um aceite que não existia** — o teste de persistência canônica
+via HTTP foi escrito. (9) **o adapter REAL ficou com `-> str`** — o mypy do CI teria
+reprovado o commit; P1 na sua forma mais pura. (10) **o Inspetor destruía a forma clássica**
+que a própria onda legalizou (qualquer edição coagia {id, cond} para {expr:'', to:''} e
+salvava limpo): forma clássica agora é somente-leitura no painel, com o destino editado nas
+arestas; idem as classes-objeto D05 do frequencySplit, que o painel sobrescrevia com
+`fonte: governor`. Aberto e DECLARADO (não fechado nesta onda): o motor §6 aloca volume ZERO
+para classes de frequencySplit fora do trio do governor — as classes D05 que o schema agora
+aceita simulam com funil zerado a jusante; registrado no HANDOFF §8.3.
+
+### I05 · Emenda §10.2 — as duas naturezas da detecção, e o handoff corrigido
+A dívida documental da Onda 3c está paga: o §10.2 registra que a detecção tem natureza por
+FORMA (verificável) e por CONTEXTO (probabilística, buracos nomeados), aponta a fonte única
+(`DETECCAO_DA_CATEGORIA`) sem redigitar a lista — que envelheceria — e nomeia só o limite
+intransponível (nome sem âncora). O código dessa frente já estava TODO entregue na onda 4
+(detector, payload da API, tela do DPO com o chip de natureza ao lado do seletor, aceite
+F04 nas duas direções) — o mapeamento desta onda flagrou o `docs/HANDOFF.md` desatualizado
+("a tela ainda não o exibe") e ele foi corrigido junto, incluindo o estado do CI (a cota
+voltou no mesmo dia em que o handoff foi escrito; o deploy da onda 4 falha por `APP_ENV`
+ausente no `.env` da VPS, não por cota).
+
 ## 2026-08-06 — Onda 3c · Os bloqueantes de PII real (§10.2, §10.4)
 A auditoria das ondas 2/3/3b provou que **PII real não podia entrar**. Quatro bloqueantes, todos
 fechados. O detector foi **reprovado na primeira entrega** pelo auditor e refeito.

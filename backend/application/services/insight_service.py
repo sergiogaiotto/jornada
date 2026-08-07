@@ -67,6 +67,7 @@ class ServicoInsight:
 
         spans: list[dict[str, Any]] = []
         consulta_executada: dict[str, Any] | None = None
+        tokens_uso: int | None = None  # I04: recusa A4 não chama LLM — ledger fica None
         # A pré-guarda A4 examina a pergunta ORIGINAL — é ela que precisa VER a PII
         # para recusar. Só depois o texto é saneado (§10.2/C02): daqui para baixo
         # nem prompt nem ledger tocam no original. `sanear` mantém o piso do C02 e
@@ -87,7 +88,7 @@ class ServicoInsight:
             mensagens = agente_insight.montar_mensagens(skill, pergunta)
             # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
             portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-            texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # indisponível → 503
+            texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
             spans.append({"nome": "generate", "modelo_perfil": skill.modelo_perfil})
             saida = agente_insight.interpretar_saida(texto)
             if saida.recusa is not None:
@@ -112,7 +113,16 @@ class ServicoInsight:
 
         fim = self._relogio.agora()
         invocacao = self._registrar_invocacao(
-            os_, skill, pergunta, saida, consulta_executada, portador_id, inicio, fim, portao
+            os_,
+            skill,
+            pergunta,
+            saida,
+            consulta_executada,
+            portador_id,
+            inicio,
+            fim,
+            portao,
+            tokens=tokens_uso,
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -194,6 +204,8 @@ class ServicoInsight:
         inicio: datetime,
         fim: datetime,
         portao: portao_ia.PortaoIa,
+        *,
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3). Pergunta
         entra MASCARADA (runs de dígitos ≥11 — §10.2: PII nunca em log/ledger) e a
@@ -219,6 +231,7 @@ class ServicoInsight:
                 if consulta_executada is None
                 else [f"{consulta_executada['nome']}@{consulta_executada['versao']}"]
             ),
+            tokens=tokens,  # I04: usage do provedor — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

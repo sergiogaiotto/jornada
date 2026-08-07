@@ -11,11 +11,11 @@ descreve; o guarda-corpo de CI (`test_nenhum_servico_importa_a_seed_direto`, em
 ## Por que o conjunto é FECHADO (e por que isso é o antídoto do achado 8)
 
 `validar_conteudo` REJEITA campo desconhecido. Isso não é purismo de schema: é o que
-impede alguém de publicar um parâmetro bonito e inerte. Enquanto o enforcement de
-`teto_tokens` não existir (hoje `invocacao.tokens` é sempre NULL — ver `retencao.py` e
-o relatório da onda), o campo não pode ser aceito; aceitá-lo criaria exatamente a tela
-que promete governar e não governa. **Campo novo entra junto com o teste de
-enforcement que prova que ele muda comportamento, nunca antes.**
+impede alguém de publicar um parâmetro bonito e inerte. `teto_tokens` segue de fora:
+a MEDIÇÃO chegou na onda 5 (I04 — `invocacao.tokens` recebe o usage do provedor), mas
+o ENFORCEMENT ainda não existe (nenhum portão soma o gasto e recusa chamada); aceitá-lo
+criaria exatamente a tela que promete governar e não governa. **Campo novo entra junto
+com o teste de enforcement que prova que ele muda comportamento, nunca antes.**
 
 ## Defaults conservadores (§10.2)
 
@@ -323,10 +323,12 @@ PERFIL_DO_ROSTER: dict[str, tuple[str, ...]] = {
 # Conjunto FECHADO. Quatro campos, não seis — e a ausência dos outros dois é a parte
 # mais importante deste arquivo:
 #
-# * `teto_tokens`/`teto_custo` (pedido (d)) NÃO entra porque `invocacao.tokens` é
-#   SEMPRE NULL: `LLMPort.chat` devolve `str` e descarta `resposta.usage`. Um teto
-#   sobre uma métrica que ninguém mede não é um teto, é um número numa tela. Entra na
-#   onda em que a porta passar a devolver o `usage` (detalhe no relatório).
+# * `teto_tokens`/`teto_custo` (pedido (d)) NÃO entra AINDA. A pré-condição que faltava
+#   caiu na onda 5 (I04): `LLMPort.chat` devolve `RespostaLLM(texto, tokens)` e o
+#   `usage` do provedor chega a `invocacao.tokens` — a métrica agora É medida. O que
+#   segue faltando é o ENFORCEMENT: nenhum portão soma o gasto por OS/tenant e recusa a
+#   chamada que estourar o teto. Campo publicável sem consumidor é o achado 8 de novo —
+#   entra na onda que trouxer o enforcement COM o teste de inversão dele.
 # * `rotulo_ia` (pedido (e)) NÃO entra porque o enforcement dele é a UI marcar a saída
 #   de agente em ~10 telas — arquivos fora desta frente. A regra sem as telas seria um
 #   booleano que ninguém lê.

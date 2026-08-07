@@ -31,7 +31,7 @@ from typing import Any
 
 from agents import flow
 from application.ports.clock import ClockPort
-from application.ports.llm import LLMPort
+from application.ports.llm import LLMPort, soma_tokens
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes import PublicacoesPort, politica_vigente
 from application.ports.publicacoes_ia import PublicacoesIaPort
@@ -44,7 +44,7 @@ from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import experimento_travado
 from domain.jornada import exportacao, taximetro
-from domain.jornada.canonico import hash_jgc
+from domain.jornada.canonico import hash_jgc, normalizar_grafo
 from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido, SaidaDoFlowInvalida
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
@@ -100,7 +100,7 @@ class ServicoJornada:
         inicio = self._relogio.agora()
         # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-        texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se hub fora
+        texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
         saida = flow.interpretar_saida(texto)
         # §7.3: gerar → validar → retry≤max_retries com o veredito DETERMINÍSTICO do
         # validador como feedback. O LLM propõe; o código continua dando o veredito.
@@ -123,7 +123,10 @@ class ServicoJornada:
                     },
                 ]
                 portao.autorizar_modelo(skill.nome, skill.modelo_perfil)  # (f) idem no retry
-                texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+                texto, tokens_retry = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+                # I04: uma linha de ledger cobre TODAS as chamadas do retry §7.3 — soma,
+                # para a métrica de custo não subrepresentar.
+                tokens_uso = soma_tokens(tokens_uso, tokens_retry)
                 saida = flow.interpretar_saida(texto)
             if saida.grafo is None:  # guarda-corpo §1.3.5: nada é inventado
                 raise SaidaDoFlowInvalida(
@@ -164,6 +167,7 @@ class ServicoJornada:
             fim=fim,
             span="generate",
             portao=portao,
+            tokens=tokens_uso,
         )
         self._evento(
             os_,
@@ -354,7 +358,7 @@ class ServicoJornada:
         inicio = self._relogio.agora()
         # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-        texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+        texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
         fim = self._relogio.agora()
         saida = flow.interpretar_saida(texto)
         if saida.grafo is None:
@@ -379,6 +383,7 @@ class ServicoJornada:
             fim=fim,
             span="ajustar",
             portao=portao,
+            tokens=tokens_uso,
         )
         # (c) LGPD Art. 20 — a POLÍTICA decide o modo, não um literal.
         #
@@ -534,7 +539,9 @@ class ServicoJornada:
     def _normalizar_meta(grafo: dict[str, Any], os_: OS) -> dict[str, Any]:
         """Escopo NUNCA vem do LLM/cliente (§1.3.5): meta.osCodigo/tenant = valores da OS.
         Arestas com aliases `source`/`target` (A13 — UAT com o 120b real) são
-        normalizadas para `from`/`to` ANTES do `jgc_validate` (gerar/ajustar/PUT)."""
+        normalizadas para `from`/`to` ANTES do `jgc_validate` (gerar/ajustar/PUT).
+        Emenda I03: nodes/edges ordenados por id na MESMA borda — o grafo persiste
+        canônico, então hash, compilador e drift enxergam sempre a mesma ordem."""
         grafo = dict(normalizar_arestas(grafo))
         grafo.setdefault("jgcVersion", "1.0")
         meta = dict(grafo.get("meta") or {})
@@ -542,7 +549,7 @@ class ServicoJornada:
         meta["tenant"] = os_.tenant_id
         meta.setdefault("reentrada", "nao")
         grafo["meta"] = meta
-        return grafo
+        return normalizar_grafo(grafo)
 
     def _validar(self, grafo: dict[str, Any], os_id: uuid.UUID, politica: dict[str, Any]) -> None:
         erros = validar_grafo(
@@ -600,6 +607,7 @@ class ServicoJornada:
         fim: datetime,
         span: str,
         portao: portao_ia.PortaoIa,
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8).
 
@@ -615,6 +623,7 @@ class ServicoJornada:
             input=portao.reter_input({"os_id": str(os_.id), **input}),
             output=portao.reter_output(output),
             evidencias=[],
+            tokens=tokens,  # I04: usage do provedor (somado no retry §7.3) — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

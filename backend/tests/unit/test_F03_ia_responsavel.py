@@ -798,10 +798,11 @@ def test_f_agente_desconhecido_nao_ganha_modelo_por_omissao() -> None:
 def test_conjunto_fechado_recusa_parametro_sem_enforcement() -> None:
     """O antídoto do achado 8 aplicado ao próprio módulo.
 
-    `teto_tokens` é o exemplo VIVO: parece responsável, e seria inerte, porque
-    `invocacao.tokens` é sempre NULL (`LLMPort.chat` devolve `str` e descarta o
-    `usage`). Enquanto a medição não existir, publicar o campo é proibido pela
-    validação — não por convenção, por código.
+    `teto_tokens` é o exemplo VIVO: parece responsável, e seria inerte. A MEDIÇÃO
+    chegou na onda 5 (I04: `invocacao.tokens` recebe o usage do provedor), mas o
+    ENFORCEMENT não — nenhum portão soma o gasto por OS/tenant e recusa a chamada que
+    estourar. Enquanto ele não existir, publicar o campo é proibido pela validação —
+    não por convenção, por código.
     """
     conteudo = politica_ia_seed()
     conteudo["teto_tokens"] = {"por_os": 100_000}

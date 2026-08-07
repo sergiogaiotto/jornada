@@ -38,7 +38,7 @@ from typing import Any
 
 from agents import consultor as agente_consultor
 from application.ports.clock import ClockPort
-from application.ports.llm import LLMPort
+from application.ports.llm import LLMPort, soma_tokens
 from application.ports.observabilidade import TracerPort
 from application.ports.publicacoes_ia import PublicacoesIaPort
 from application.ports.repositorio_intake import RepositorioIntake
@@ -159,7 +159,7 @@ class ServicoConsultor:
         inicio = self._relogio.agora()
         # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-        texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # LLMIndisponivel → 503
+        texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
         saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         # §7.3: modelo que conversa sem preencher `inferencias` recebe reforço de
         # contrato (achado da validação com o hub real — FakeLLM nunca exercitava).
@@ -188,11 +188,16 @@ class ServicoConsultor:
                 },
             ]
             portao.autorizar_modelo(skill.nome, skill.modelo_perfil)  # (f) idem no retry
-            texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+            texto, tokens_retry = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+            tokens_uso = soma_tokens(tokens_uso, tokens_retry)  # I04: linha única soma o retry
             saida = agente_consultor.interpretar_saida(texto, exige_evidencia=skill.exige_evidencia)
         if tentativa and not saida.inferencias:
             # A4 (fix vazamento): reforço esgotado SEM inferências → preserva a resposta
             # original da 1ª chamada; a resposta ao reprompt "SISTEMA:" jamais vaza.
+            # I04: os tokens do retry DESCARTADO ficam somados no ledger de propósito —
+            # é custo real cobrado pelo provedor (`soma_tokens` nunca subrepresenta);
+            # `output` preservar a 1ª resposta e `tokens` incluir a descartada não é
+            # inconsistência, é a diferença entre resposta exibida e custo incorrido.
             saida = saida_original
         if burla:
             # C01: a recusa é CARIMBADA por código na frente da resposta — o solicitante
@@ -216,7 +221,16 @@ class ServicoConsultor:
         self._repo.salvar_pedido(pedido)
 
         invocacao = self._registrar_invocacao(
-            pedido, skill, mensagem, saida, portador_id, inicio, fim, portao, burla=burla
+            pedido,
+            skill,
+            mensagem,
+            saida,
+            portador_id,
+            inicio,
+            fim,
+            portao,
+            burla=burla,
+            tokens=tokens_uso,
         )
         self._tracer.trace(  # §10.8: fire-and-forget, trace_id = invocacao.id
             trace_id=str(invocacao.id),
@@ -436,6 +450,7 @@ class ServicoConsultor:
         fim: Any,
         portao: portao_ia.PortaoIa,
         burla: Sequence[str] = (),
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` (§2.3).
 
@@ -478,6 +493,7 @@ class ServicoConsultor:
             # não ref versionada: sem isto a auditoria lia `[SUPRIMIDO...]` no `output` e
             # o trecho da conversa intacto aqui do lado.
             evidencias=portao.reter_evidencias(evidencias),
+            tokens=tokens,  # I04: usage do provedor (somado no reforço §7.3) — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

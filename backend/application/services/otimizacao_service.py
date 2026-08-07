@@ -51,7 +51,7 @@ from domain.experimento import apuracao
 from domain.experimento.modelos import Experimento, experimento_travado
 from domain.governanca.modelos import Snapshot
 from domain.jornada import taximetro
-from domain.jornada.canonico import hash_jgc
+from domain.jornada.canonico import hash_jgc, normalizar_grafo
 from domain.jornada.diff import diff_grafos
 from domain.jornada.erros import GrafoInvalido
 from domain.jornada.modelos import JornadaVersao
@@ -215,7 +215,7 @@ class ServicoOtimizacao(_Base):
         # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
         try:
-            texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
+            texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)
         except LLMIndisponivel as exc:  # leitura degrada — nunca 503 num GET (§10.6)
             return {
                 "os_id": str(os_.id),
@@ -260,6 +260,7 @@ class ServicoOtimizacao(_Base):
             inicio=inicio,
             fim=fim,
             portao=portao,
+            tokens=tokens_uso,
         )
         self._evento(
             os_.tenant_id,
@@ -302,13 +303,17 @@ class ServicoOtimizacao(_Base):
         if erros:
             raise GrafoInvalido(erros)
         agora = self._relogio.agora()
-        custo, _, _ = self._taximetro(proposta.grafo_proposto, os_.id)
+        # Emenda I03: a versão nasce com o grafo em ordem canônica (nodes/edges por id)
+        # — o hash normaliza sozinho, mas o COMPILADOR itera o grafo armazenado; grafo
+        # torto persistido = activities fora de ordem = falso `alterar` no plan.
+        grafo_canonico = normalizar_grafo(proposta.grafo_proposto)
+        custo, _, _ = self._taximetro(grafo_canonico, os_.id)
         jornada = JornadaVersao(
             id=uuid.uuid4(),
             os_id=os_.id,
             versao=self._repo.proxima_versao(os_.id),
-            grafo=proposta.grafo_proposto,
-            hash=hash_jgc(proposta.grafo_proposto),
+            grafo=grafo_canonico,
+            hash=hash_jgc(grafo_canonico),
             premissas=[f"origem: proposta do optimize {proposta.id} — {proposta.titulo}"],
             custo_projetado=float(custo),
         )
@@ -794,6 +799,7 @@ class ServicoOtimizacao(_Base):
         inicio: datetime,
         fim: datetime,
         portao: portao_ia.PortaoIa,
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1) + evento `agent.invoked` + trace Langfuse (§10.8).
 
@@ -811,6 +817,7 @@ class ServicoOtimizacao(_Base):
             input=portao.reter_input({"os_id": str(os_.id), **input}),
             output=portao.reter_output(output),
             evidencias=[],
+            tokens=tokens,  # I04: usage do provedor — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )
@@ -1142,7 +1149,14 @@ def _p50s(simulacao: dict[str, Any]) -> dict[str, Any]:
 
 def _normalizar_meta(grafo: dict[str, Any], os_: OS) -> dict[str, Any]:
     """Escopo NUNCA vem do LLM (§1.3.5): meta.osCodigo/tenant = valores da OS
-    (mesmo guarda-corpo do M7)."""
+    (mesmo guarda-corpo do M7).
+
+    Emenda I03 (auditoria da onda 5): a normalização de ordem acontece AQUI, na
+    ORIGEM da proposta — não só no aprovar. O motor §6 consome RNG na ordem das
+    `edges` de cada nó: proposta pré-simulada torta e versão aprovada canônica
+    davam P50s diferentes com a MESMA seed, quebrando a reprodutibilidade
+    (M8-A1/§8-M11) que o `impacto` gravado promete — e um "grafo igual, listas
+    permutadas" ganhava lift fantasma. O normalizar do aprovar vira idempotente."""
     grafo = dict(grafo)
     grafo.setdefault("jgcVersion", "1.0")
     meta = dict(grafo.get("meta") or {})
@@ -1150,7 +1164,7 @@ def _normalizar_meta(grafo: dict[str, Any], os_: OS) -> dict[str, Any]:
     meta["tenant"] = os_.tenant_id
     meta.setdefault("reentrada", "nao")
     grafo["meta"] = meta
-    return grafo
+    return normalizar_grafo(grafo)
 
 
 def _altera_entrada(grafo_base: dict[str, Any], diff: dict[str, Any]) -> bool:

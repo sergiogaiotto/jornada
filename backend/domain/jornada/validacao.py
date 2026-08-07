@@ -1,8 +1,9 @@
 """Serviço `jgc_validate` (§5.3) — executa a cada save; CÓDIGO PURO, zero LLM/I-O.
 
-Fonte da verdade estrutural: `jgc.schema.json` (§5) — este módulo LÊ o schema (tipos
-fechados de `$defs.node.properties.type.enum` e campos obrigatórios de `$defs.data.*`)
-e o aplica; nenhum tipo/campo é duplicado em código.
+Fonte da verdade estrutural: `jgc.schema.json` (§5) — desde a onda 5 (I01, o P2 do
+UAT #5) o schema roda INTEIRO via Draft202012Validator: tipo, faixa, enum, forma e
+chaves desconhecidas valem por VALOR. As mensagens artesanais de presença continuam
+(alimentam melhor o reprompt §7.3); nenhum tipo/campo é duplicado em código.
 
 Erros BLOQUEANTES (§5.3), cada um `{no, regra, mensagem}` apontando o nó (A1):
 nó órfão/braço sem destino · `channel.*` sem opt-in configurado · soma de pcts ≠ 100 ·
@@ -17,6 +18,9 @@ import re
 from functools import cache
 from pathlib import Path
 from typing import Any
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 from domain.jornada.adjacencia import saidas_do_grafo as _saidas
 
@@ -95,6 +99,192 @@ def _erro(no: str | None, regra: str, mensagem: str) -> dict[str, Any]:
     return {"no": no, "regra": regra, "mensagem": mensagem}
 
 
+# ------------------------------------------------- Valor/tipo/faixa (I01 — P2)
+# Até esta onda o schema era lido SÓ para o enum de tipos e os `required` de
+# `$defs.data.*`: toda restrição de VALOR (faixas de pct, janelaHoras > 0, enums de
+# metrica/modo, tipos escalares, additionalProperties) era decorativa. Provado na VPS:
+# 201 para STO de -72h, metrica "telepatia" e throttle -5000 — e `throttlePorHora:
+# "mil"` salvava e derrubava o simulador com 500. Agora o Draft202012Validator roda
+# INTEIRO; as checagens de PRESENÇA artesanais continuam (mensagem melhor para o
+# reprompt §7.3) e os erros do schema que as duplicariam são filtrados.
+
+
+@cache
+def _validador_schema() -> Draft202012Validator:
+    """Validador compilado uma vez (@cache) — grafos têm dezenas de nós, custo ínfimo."""
+    return Draft202012Validator(_schema())
+
+
+_REGRA_DO_KEYWORD: dict[str, str] = {
+    "type": "tipo_invalido",
+    "pattern": "tipo_invalido",
+    "enum": "valor_fora_do_enum",
+    "const": "valor_fora_do_enum",
+    "maximum": "valor_fora_da_faixa",
+    "minimum": "valor_fora_da_faixa",
+    "exclusiveMaximum": "valor_fora_da_faixa",
+    "exclusiveMinimum": "valor_fora_da_faixa",
+    "minItems": "valor_fora_da_faixa",
+    "minLength": "valor_fora_da_faixa",
+    "required": "campo_obrigatorio",
+    "additionalProperties": "campo_desconhecido",
+    "anyOf": "forma_invalida",
+}
+
+# Um grafo muito quebrado gera dezenas de erros em cascata; o reprompt §7.3 só precisa
+# dos primeiros de cada nó para convergir.
+_MAX_ERROS_SCHEMA_POR_NO = 3
+
+
+def _ja_coberto_pelas_artesanais(
+    caminho: tuple[Any, ...], keyword: str, no: dict[str, Any] | None
+) -> bool:
+    """Erros de PRESENÇA/forma que `_validar_estrutura`/`_validar_no` já reportam com
+    mensagem artesanal — o schema não os duplica; requireds PROFUNDOS (ex.: braço sem
+    `pct`) não têm cobertura artesanal e passam."""
+    if caminho == () and keyword in ("required", "type"):
+        return True
+    if caminho == ("jgcVersion",) and keyword in ("const", "enum"):
+        return True
+    if caminho == ("meta",) and keyword in ("required", "type"):
+        return True
+    if caminho == ("meta", "reentrada") and keyword == "enum":
+        return True
+    if len(caminho) == 2 and caminho[0] == "nodes" and keyword in ("required", "type"):
+        return True
+    if len(caminho) == 3 and caminho[0] == "nodes" and caminho[2] == "type" and keyword == "enum":
+        return True
+    if (
+        len(caminho) == 3
+        and caminho[0] == "nodes"
+        and caminho[2] == "data"
+        and keyword in ("required", "type")
+    ):
+        return True
+    if len(caminho) == 2 and caminho[0] == "edges" and keyword in ("required", "type"):
+        return True
+    # wait exige `duracao` OU `ate` — mensagem artesanal em _validar_no
+    if keyword == "anyOf" and no is not None and no.get("type") == "wait":
+        return True
+    return False
+
+
+def _repr_curto(valor: Any, limite: int = 80) -> str:
+    texto = repr(valor)
+    return texto if len(texto) <= limite else texto[: limite - 1] + "…"
+
+
+def _mensagem_schema(erro: ValidationError, caminho: tuple[Any, ...], keyword: str) -> str:
+    local = ".".join(str(p) for p in caminho) or "raiz"
+    valor = erro.instance
+    if keyword == "type":
+        return (
+            f"`{local}` = {_repr_curto(valor)} com tipo inválido — o §5.2 exige "
+            f"{erro.validator_value!r}."
+        )
+    if keyword in ("enum", "const"):
+        aceitos = erro.validator_value if keyword == "enum" else [erro.validator_value]
+        return f"`{local}` = {_repr_curto(valor)} fora do conjunto permitido {aceitos!r} (§5.2)."
+    if keyword in ("maximum", "minimum", "exclusiveMaximum", "exclusiveMinimum"):
+        return (
+            f"`{local}` = {_repr_curto(valor)} fora da faixa do §5.2 "
+            f"(viola `{keyword}: {erro.validator_value}`)."
+        )
+    if keyword in ("minItems", "minLength"):
+        return f"`{local}` abaixo do mínimo do §5.2 (`{keyword}: {erro.validator_value}`)."
+    if keyword == "required":
+        presentes = valor if isinstance(valor, dict) else {}
+        faltantes = [c for c in erro.validator_value if c not in presentes]
+        return f"`{local}` sem campo obrigatório {faltantes} (§5.2)."
+    if keyword == "additionalProperties":
+        conhecidos = set((erro.schema or {}).get("properties", {}))
+        extras = sorted(set(valor) - conhecidos) if isinstance(valor, dict) else []
+        return (
+            f"Campos fora do contrato em `{local}`: {extras} — o JGC fecha os objetos "
+            "em todo nível (§5.1/§5.2); remova-os ou use os campos do tipo."
+        )
+    return f"`{local}` = {_repr_curto(valor)} não casa com nenhuma forma aceita (§5.2)."
+
+
+def _mensagem_anyof(no: dict[str, Any] | None, local: str, valor: Any) -> str | None:
+    """Mensagens PRESCRITIVAS para os dois anyOf das emendas D05/D07 — o retry §7.3
+    converge com instrução de forma, não com o despejo do jsonschema."""
+    tipo = str((no or {}).get("type", ""))
+    if tipo == "decisionSplit":
+        return (
+            f"Regra do decisionSplit em `{local}` deve ter (`expr` e `to`) — forma nova — "
+            f"OU (`id`, com `cond` opcional) — forma clássica, destino na aresta (§5.2/D07). "
+            f"Recebido: {_repr_curto(valor)}."
+        )
+    if tipo == "frequencySplit":
+        return (
+            f"Classe do frequencySplit em `{local}` deve ser string ou objeto "
+            f"{{id, min/max}} (§5.2/D05). Recebido: {_repr_curto(valor)}."
+        )
+    return None
+
+
+def _erros_do_schema(grafo: dict[str, Any]) -> list[dict[str, Any]]:
+    """Camada de VALOR do `jgc.schema.json` (I01): tipo, faixa, enum, forma e chaves
+    desconhecidas — mapeada para o contrato de erro `{no, regra, mensagem}` (A1)."""
+    nos_brutos = grafo.get("nodes")
+    lista_nos: list[Any] = nos_brutos if isinstance(nos_brutos, list) else []
+    coletados: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    for erro in _validador_schema().iter_errors(grafo):
+        caminho = tuple(erro.absolute_path)
+        no_dict: dict[str, Any] | None = None
+        no_id: str | None = None
+        if (
+            len(caminho) >= 2
+            and caminho[0] == "nodes"
+            and isinstance(caminho[1], int)
+            and caminho[1] < len(lista_nos)
+            and isinstance(lista_nos[caminho[1]], dict)
+        ):
+            no_dict = lista_nos[caminho[1]]
+            no_id = str(no_dict["id"]) if no_dict.get("id") else None
+        keyword = str(erro.validator)
+        if _ja_coberto_pelas_artesanais(caminho, keyword, no_dict):
+            continue
+        local = ".".join(str(p) for p in caminho) or "raiz"
+        if keyword == "anyOf":
+            mensagem = _mensagem_anyof(no_dict, local, erro.instance) or _mensagem_schema(
+                erro, caminho, keyword
+            )
+        else:
+            mensagem = _mensagem_schema(erro, caminho, keyword)
+        regra = _REGRA_DO_KEYWORD.get(keyword, "schema")
+        coletados.append((caminho, _erro(no_id, regra, mensagem)))
+    # Ordem determinística (§1.3.5) + dedupe + teto por LOCALIZAÇÃO. O teto era por
+    # `no`, e todos os erros fora de nodes (raiz, meta.*, edges.*) compartilhavam o
+    # balde None: 3 erros de aresta escondiam qualquer erro de meta da MESMA resposta
+    # (auditoria da onda 5). O balde agora é a localização de topo — cada aresta,
+    # o meta e a raiz contam separado, como cada nó já contava.
+    coletados.sort(key=lambda item: tuple(str(p) for p in item[0]))
+    vistos: set[tuple[str | None, str, str]] = set()
+    contagem_por_balde: dict[str, int] = {}
+    finais: list[dict[str, Any]] = []
+    for caminho, erro_dict in coletados:
+        chave = (erro_dict["no"], erro_dict["regra"], erro_dict["mensagem"])
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        if erro_dict["no"] is not None:
+            balde = str(erro_dict["no"])
+        elif len(caminho) >= 2 and isinstance(caminho[1], int):
+            balde = f"{caminho[0]}[{caminho[1]}]"
+        elif caminho:
+            balde = str(caminho[0])
+        else:
+            balde = "raiz"
+        quantos = contagem_por_balde.get(balde, 0)
+        if quantos >= _MAX_ERROS_SCHEMA_POR_NO:
+            continue
+        contagem_por_balde[balde] = quantos + 1
+        finais.append(erro_dict)
+    return finais
+
+
 # ------------------------------------------------------------------- Estrutura
 def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
     erros: list[dict[str, Any]] = []
@@ -103,7 +293,11 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
     for campo in ("jgcVersion", "meta", "nodes", "edges"):
         if campo not in grafo:
             erros.append(_erro(None, "estrutura", f"Campo obrigatório ausente: {campo} (§5.1)."))
-    if grafo.get("jgcVersion") not in (None, "1.0"):
+    # Auditoria da onda 5: `jgcVersion: null` PRESENTE não é "ausente" — o tolerar (o
+    # `not in (None, "1.0")` antigo) deixava null atravessar as duas camadas, porque o
+    # filtro do schema assume cobertura artesanal e o `setdefault` do save não toca
+    # chave presente. Presença com valor errado (incluindo null) agora recusa.
+    if "jgcVersion" in grafo and grafo["jgcVersion"] != "1.0":
         erros.append(
             _erro(None, "estrutura", f"jgcVersion não suportada: {grafo['jgcVersion']!r}.")
         )
@@ -117,7 +311,10 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
             erros.append(
                 _erro(None, "estrutura", f"meta.reentrada inválida: {meta['reentrada']!r} (§5.1).")
             )
-    elif meta is not None:
+    elif "meta" in grafo:
+        # Inclui `meta: null` — o `elif meta is not None` antigo deixava null passar
+        # SEM meta nenhum ser exigido (auditoria da onda 5: alcançável hoje pelo
+        # ensaiar_grafo do M11, que valida o grafo CRU sem _normalizar_meta).
         erros.append(_erro(None, "estrutura", "meta deve ser objeto (§5.1)."))
 
     vistos: set[str] = set()
@@ -130,6 +327,11 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
             erros.append(_erro(no_id, "estrutura", f"Id de nó duplicado: {no_id}."))
         vistos.add(no_id)
         erros.extend(_validar_no(no_id, no))
+    # Auditoria da onda 5: aresta com id duplicado nunca foi recusada — duas arestas
+    # de mesmo id duplicam a saída na adjacência (a MESMA família do +33% que o
+    # roteamento_ambiguo recusa) e o diff por id as colapsa numa só, subreportando a
+    # mudança. O I03 ordena edges por id assumindo unicidade; agora ela é garantida.
+    arestas_vistas: set[str] = set()
     for aresta in grafo.get("edges") or []:
         if not isinstance(aresta, dict):
             erros.append(
@@ -139,6 +341,11 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
         # A13: from/to são OBRIGATÓRIOS (aliases source/target já foram normalizados
         # na entrada) — mensagem clara por campo alimenta o retry do flow (§7.3).
         rotulo = f"Aresta {aresta.get('id')!r}" if aresta.get("id") else f"Aresta {aresta!r}"
+        if aresta.get("id"):
+            aresta_id = str(aresta["id"])
+            if aresta_id in arestas_vistas:
+                erros.append(_erro(None, "estrutura", f"Id de aresta duplicado: {aresta_id}."))
+            arestas_vistas.add(aresta_id)
         for campo in ("id", "from", "to"):
             if not aresta.get(campo):
                 erros.append(
@@ -161,6 +368,9 @@ def _validar_estrutura(grafo: Any) -> list[dict[str, Any]]:
                         "`from`/`to` deve referenciar o `id` de um nó do grafo (§5.1).",
                     )
                 )
+    # I01 (P2 do UAT #5): o schema passa a valer por VALOR, não só por presença.
+    # INVERSÃO: remover a linha abaixo deixa test_I01_jsonschema_governa vermelho.
+    erros.extend(_erros_do_schema(grafo))
     return erros
 
 
@@ -317,6 +527,52 @@ def _validar_semantica(
                             "destino (braço órfão — §5.3).",
                         )
                     )
+        if tipo == "decisionSplit":
+            # I02 (achado "roteamento híbrido" — CHANGELOG-SDD.md, achado novo do E05):
+            # um MESMO nó roteado por regra (`regras[].to`) E por aresta duplica a saída
+            # na adjacência única (D07) — o taxímetro dividia o volume pelas saídas
+            # DUPLICADAS (+33% no braço repetido), o motor §6 idem, e o compilador
+            # emitia dois outcomes para o mesmo destino no Journey Builder. A decisão
+            # registrada é RECUSAR aqui — nunca deduplicar mudo na adjacência, que é
+            # defensiva e não julga (mudaria o payload compilado em silêncio).
+            regras = [r for r in no.get("data", {}).get("regras") or [] if isinstance(r, dict)]
+            com_to = [r for r in regras if r.get("to")]
+            sem_to = [r for r in regras if not r.get("to")]
+            arestas_reais = [
+                a
+                for a in grafo.get("edges") or []
+                if isinstance(a, dict) and str(a.get("from")) == no_id
+            ]
+            if com_to and (arestas_reais or sem_to):
+                erros.append(
+                    _erro(
+                        no_id,
+                        "roteamento_ambiguo",
+                        f"decisionSplit {no_id} mistura roteamento por regra (`regras[].to`) "
+                        "com roteamento por aresta — as duas formas são mutuamente "
+                        "exclusivas POR NÓ (§5.3). Use `regras[{expr, to}]` SEM arestas "
+                        "saindo do nó, OU `regras[{id, cond}]` com o destino nas arestas "
+                        "`cond` — nunca ambos.",
+                    )
+                )
+            elif not com_to:
+                # Auditoria da onda 5 — o vizinho descoberto do I02: braço MORTO da
+                # forma clássica. Regra {id} sem aresta `cond` correspondente não
+                # roteia ninguém e o journey compila com a regra sem outcome; o
+                # randomSplit e o frequencySplit sempre tiveram o check análogo —
+                # o decisionSplit clássico nunca teve (e o lint antigo o cobria só
+                # por acidente, pelo vício que exigia `to` em toda regra).
+                for regra in sem_to:
+                    rotulo_regra = regra.get("id")
+                    if rotulo_regra and str(rotulo_regra) not in conds:
+                        erros.append(
+                            _erro(
+                                no_id,
+                                "braco_sem_destino",
+                                f"Regra {rotulo_regra!r} do decisionSplit {no_id} sem aresta "
+                                f"de destino (nenhuma aresta com cond={rotulo_regra!r} — §5.3).",
+                            )
+                        )
         if tipo == "frequencySplit":
             for classe in no.get("data", {}).get("classes") or []:
                 # Emenda D05 (UAT #4): comparava `str(classe)` — a repr do dict inteiro

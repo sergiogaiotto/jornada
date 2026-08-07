@@ -105,7 +105,7 @@ class ServicoCriativo:
             inicio = self._relogio.agora()
             # (f) §7.2: perfil do roster CONFERIDO contra a política antes da chamada.
             portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-            texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
+            texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
             fim = self._relogio.agora()
             contexto_anterior[nome] = texto
             texto_content = texto  # a matriz sai da ÚLTIMA etapa (content)
@@ -121,6 +121,7 @@ class ServicoCriativo:
                     fim=fim,
                     span="generate",
                     portao=portao,
+                    tokens=tokens_uso,
                 )
             )
 
@@ -296,7 +297,7 @@ class ServicoCriativo:
         mensagens = agentes_t6.montar_mensagens_compliance(textos)
         inicio = self._relogio.agora()
         try:
-            texto = self._llm.chat(mensagens, perfil="20b")
+            texto, tokens_uso = self._llm.chat(mensagens, perfil="20b")
         except LLMIndisponivel:
             return []  # warn é acessório — nunca bloqueia nem depende de LLM
         fim = self._relogio.agora()
@@ -313,6 +314,7 @@ class ServicoCriativo:
             fim=fim,
             span="compliance_warn",
             portao=portao,
+            tokens=tokens_uso,
         )
         return avisos
 
@@ -329,6 +331,7 @@ class ServicoCriativo:
         fim: datetime,
         span: str,
         portao: portao_ia.PortaoIa,
+        tokens: int | None = None,
     ) -> Invocacao:
         """Ledger via_ai (§4.1 `invocacao`) + evento `agent.invoked` + trace (§10.8).
 
@@ -345,6 +348,7 @@ class ServicoCriativo:
             input=portao.reter_input({"os_id": str(os_.id), **input}),
             output=portao.reter_output(output),
             evidencias=list(evidencias),
+            tokens=tokens,  # I04: usage do provedor — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

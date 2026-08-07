@@ -31,7 +31,7 @@ from adapters.embedding.hubgpu import EmbeddingHubGPU
 from adapters.llm.hubgpu import DisjuntorHub, LLMHubGPU
 from app.config import Settings
 from application.ports.embedding import EmbeddingIndisponivel
-from application.ports.llm import LLMIndisponivel
+from application.ports.llm import LLMIndisponivel, RespostaLLM
 
 MENSAGENS = [{"role": "user", "content": "oi"}]
 
@@ -81,6 +81,12 @@ class ClientDublê:
 
     def _create_chat(self, **_: Any) -> Any:
         item = self._proximo()
+        if isinstance(item, tuple):  # (texto, total_tokens) — hub que manda `usage` (I04)
+            texto, total = item
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=str(texto)))],
+                usage=SimpleNamespace(total_tokens=total),
+            )
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=str(item)))]
         )
@@ -194,7 +200,7 @@ def test_llm_disjuntor_meio_abre_depois_de_60s_e_fecha_no_sucesso() -> None:
 
     relogio.avancar(1)  # 60 s completos → meio-aberto
     assert adapter.disponivel() is True
-    assert adapter.chat(MENSAGENS) == "hub voltou"
+    assert adapter.chat(MENSAGENS).texto == "hub voltou"  # I04: retorno é RespostaLLM
     assert dublê.chamadas == 4  # a sonda FOI à rede
     assert adapter.disjuntor.estado() == "fechado"  # sucesso fecha
 
@@ -227,12 +233,31 @@ def test_llm_sucesso_zera_a_contagem_de_falhas() -> None:
     for _ in range(2):
         with pytest.raises(LLMIndisponivel):
             adapter.chat(MENSAGENS)
-    assert adapter.chat(MENSAGENS) == "ok"
+    assert adapter.chat(MENSAGENS).texto == "ok"  # I04: retorno é RespostaLLM
     for _ in range(2):
         with pytest.raises(LLMIndisponivel):
             adapter.chat(MENSAGENS)
     assert adapter.disjuntor.estado() == "fechado"
     assert dublê.chamadas == 5  # todas foram à rede: o circuito nunca abriu
+
+
+def test_llm_extrai_total_tokens_do_usage_quando_o_hub_manda() -> None:
+    """I04 (§10.8): o `usage` do provedor deixou de morrer no adapter — `total_tokens`
+    viaja no RETORNO de `chat()` até `invocacao.tokens`.
+
+    INVERSÃO: reverter `hubgpu.chat` para `return resposta.choices[0].message.content`
+    (o código anterior à onda 5) deixa esta asserção vermelha."""
+    relogio = RelogioFixo()
+    adapter, _ = llm_com_dublê([("resposta do hub", 321)], relogio)
+    assert adapter.chat(MENSAGENS) == RespostaLLM("resposta do hub", 321)
+
+
+def test_llm_sem_usage_degrada_para_none_nunca_para_falha() -> None:
+    """Hub/proxy que suprime `usage` (acontece em streaming e em proxies): o texto flui
+    e `tokens` fica None — usage ausente JAMAIS vira exceção (§10.6)."""
+    relogio = RelogioFixo()
+    adapter, _ = llm_com_dublê(["sem usage"], relogio)
+    assert adapter.chat(MENSAGENS) == RespostaLLM("sem usage", None)
 
 
 def test_embedding_disjuntor_abre_na_3a_falha_e_a_4a_nao_vai_a_rede() -> None:

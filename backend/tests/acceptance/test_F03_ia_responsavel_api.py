@@ -245,8 +245,9 @@ def test_campo_fora_do_conjunto_fechado_e_422_apontando_o_campo(
     Os dois typos (`jornada.ajusta`, `enginer`) são o caso que mais importa: aceitos em
     silêncio, o DPO acreditaria ter autorizado/restringido algo que segue como estava —
     falha silenciosa na direção errada da auditoria, o pior modo de errar num controle
-    de governança. E `teto_tokens` continua fora porque `invocacao.tokens` é sempre
-    NULL: teto sobre métrica que ninguém mede é número numa tela.
+    de governança. E `teto_tokens` continua fora: a medição chegou (I04, onda 5 — o
+    usage flui até `invocacao.tokens`), mas o ENFORCEMENT não — teto que nenhum portão
+    aplica é número numa tela.
     """
     conteudo = _conservador(client)
     mutacao(conteudo)

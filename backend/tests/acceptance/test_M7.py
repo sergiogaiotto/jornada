@@ -659,8 +659,13 @@ def test_M7_D01_comecar_do_zero_em_os_com_experimento(client: TestClient, app: F
     assert resposta.status_code == 201, resposta.text  # era 422 holdout_ausente
 
     grafo = resposta.json()["jornada"]["grafo"]
-    assert [n["type"] for n in grafo["nodes"]] == ["entrySource", "randomSplit", "goal", "exit"]
-    bracos = {b["id"]: b["pct"] for b in grafo["nodes"][1]["data"]["braços"]}
+    # Emenda I03: `nodes` persiste em ordem CANÔNICA (por id), não na ordem de
+    # montagem — o conjunto de tipos é o contrato; a posição na lista não é.
+    assert sorted(n["type"] for n in grafo["nodes"]) == sorted(
+        ["entrySource", "randomSplit", "goal", "exit"]
+    )
+    divisao = next(n for n in grafo["nodes"] if n["type"] == "randomSplit")
+    bracos = {b["id"]: b["pct"] for b in divisao["data"]["braços"]}
     assert bracos["holdout"] == holdout_pct, "o controle tem de espelhar o experimento"
     assert sum(bracos.values()) == 100.0
 

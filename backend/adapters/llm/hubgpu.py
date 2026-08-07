@@ -33,7 +33,7 @@ from typing import Any
 from adapters.relogio import RelogioSistema
 from app.config import Settings
 from application.ports.clock import ClockPort
-from application.ports.llm import LLMIndisponivel, PerfilModelo
+from application.ports.llm import LLMIndisponivel, PerfilModelo, RespostaLLM
 
 # §10.7: "circuit breaker por 60s após 3 falhas".
 LIMIAR_FALHAS = 3
@@ -180,7 +180,7 @@ class LLMHubGPU:
             )
         return self._clients[perfil]
 
-    def chat(self, mensagens: list[dict[str, str]], *, perfil: PerfilModelo = "20b") -> str:
+    def chat(self, mensagens: list[dict[str, str]], *, perfil: PerfilModelo = "20b") -> RespostaLLM:
         if self._settings.llm_degraded_mode == "forced_off":
             raise LLMIndisponivel(
                 "LLM em modo degradado (LLM_DEGRADED_MODE=forced_off — §10.6); "
@@ -204,4 +204,11 @@ class LLMHubGPU:
                 f"Hub LLM inacessível ({type(erro).__name__}); use o modo manual da UI."
             ) from erro
         self._disjuntor.registrar_sucesso()
-        return resposta.choices[0].message.content or ""
+        # I04: o `usage` deixa de morrer aqui — total_tokens flui até invocacao.tokens
+        # (§10.8). getattr defensivo nos DOIS níveis: hub/proxy sem usage e o duble de
+        # teste sem o atributo degradam para None, nunca para exceção (§10.6).
+        uso = getattr(resposta, "usage", None)
+        return RespostaLLM(
+            resposta.choices[0].message.content or "",
+            getattr(uso, "total_tokens", None),
+        )

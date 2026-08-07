@@ -93,23 +93,54 @@ export function lintarGrafo(grafo: GrafoJgc): ProblemaLint[] {
             `Braço "${b.id}" do randomSplit ${no.id} sem aresta com cond="${b.id}" (§5.3).`);
     }
     if (tipo === "frequencySplit") {
-      for (const classe of (no.data?.["classes"] ?? []) as string[])
-        if (!conds.has(String(classe)))
+      // D05/I01: classe pode ser string OU objeto {id, min/max} — casar por id,
+      // como o backend (a comparação por String(classe) virava "[object Object]"
+      // e o lint reprovava localmente um grafo que o servidor aceita).
+      for (const classe of (no.data?.["classes"] ?? []) as
+        (string | { id?: string })[]) {
+        const rotulo = typeof classe === "object" && classe !== null ? classe.id : classe;
+        if (!conds.has(String(rotulo)))
           erro(no.id, "braco_sem_destino",
-            `Classe "${classe}" do frequencySplit ${no.id} sem aresta com cond="${classe}".`);
+            `Classe "${rotulo}" do frequencySplit ${no.id} sem aresta com cond="${rotulo}".`);
+      }
     }
     if (tipo === "engagementSplit" && arestasDoNo.length < 2)
       erro(no.id, "braco_sem_destino",
         `engagementSplit ${no.id} exige os dois braços (engajou/não) com destino.`);
     if (tipo === "decisionSplit") {
-      const regras = (no.data?.["regras"] ?? []) as { expr?: string; to?: string }[];
+      const regras = (no.data?.["regras"] ?? []) as
+        { expr?: string; to?: string; id?: string; cond?: string | null }[];
       if (regras.length === 0)
         erro(no.id, "campo_obrigatorio", `decisionSplit ${no.id} sem regras (§5.2).`);
+      // I02 — espelho da regra bloqueante `roteamento_ambiguo` do §5.3: regra com `to`
+      // (forma nova) e aresta real saindo do MESMO nó (forma clássica) duplicariam a
+      // saída na adjacência única (D07) — taxímetro, motor §6 e compilador contavam o
+      // braço repetido (+33%). Antes deste espelho o lint tinha o vício CONTRÁRIO:
+      // exigia `to` em toda regra, reprovando localmente a forma clássica {id, cond}
+      // que o D07 legalizou — o painel acusava erro num grafo que o servidor aceita.
+      const comTo = regras.filter((r) => r.to);
+      const semTo = regras.filter((r) => !r.to);
+      const arestasReais = arestas.filter((a) => a.from === no.id);
+      if (comTo.length > 0 && (arestasReais.length > 0 || semTo.length > 0))
+        erro(no.id, "roteamento_ambiguo",
+          `decisionSplit ${no.id} mistura roteamento por regra (regras[].to) com ` +
+          `roteamento por aresta — as duas formas são mutuamente exclusivas por nó ` +
+          `(§5.3). Use regras[{expr, to}] SEM arestas saindo do nó, OU regras[{id, ` +
+          `cond}] com o destino nas arestas — nunca ambos.`);
       for (const [i, r] of regras.entries()) {
-        if (!r.to) erro(no.id, "braco_sem_destino",
-          `Regra ${i + 1} do decisionSplit ${no.id} sem destino (to).`);
-        else if (!ids.has(r.to)) erro(no.id, "braco_sem_destino",
+        if (r.to && !ids.has(r.to)) erro(no.id, "braco_sem_destino",
           `Regra ${i + 1} do decisionSplit ${no.id} aponta para nó inexistente: ${r.to}.`);
+        // regra incompleta: nem destino (forma nova) nem id (forma clássica) — o
+        // estado que o "+ regra" do Inspetor cria antes de o usuário preencher.
+        if (!r.to && !r.id) erro(no.id, "braco_sem_destino",
+          `Regra ${i + 1} do decisionSplit ${no.id} sem destino: preencha o "to" ` +
+          `(forma nova) ou o "id" casando com o cond de uma aresta (forma clássica).`);
+        // braço clássico MORTO (auditoria da onda 5): regra {id} sem aresta com o
+        // cond correspondente não roteia ninguém — espelho do check do backend.
+        if (comTo.length === 0 && !r.to && r.id && !conds.has(String(r.id)))
+          erro(no.id, "braco_sem_destino",
+            `Regra "${r.id}" do decisionSplit ${no.id} sem aresta com cond="${r.id}" ` +
+            `(braço morto — §5.3).`);
       }
     }
     if (tipo.startsWith("channel.")) {

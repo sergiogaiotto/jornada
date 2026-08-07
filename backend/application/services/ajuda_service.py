@@ -71,7 +71,7 @@ class ServicoAjuda:
         # (f) §7.2: o perfil que a skill pede é CONFERIDO contra a política do tenant —
         # imediatamente antes da chamada, para nenhum caminho dinâmico escapar do portão.
         portao.autorizar_modelo(skill.nome, skill.modelo_perfil)
-        texto = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # indisponível → 503
+        texto, tokens_uso = self._llm.chat(mensagens, perfil=skill.modelo_perfil)  # 503 se fora
         resposta = texto.strip()
         if not resposta:  # resposta vazia: fallback determinístico — nada inventado (§1.3.5)
             resposta = (
@@ -98,6 +98,7 @@ class ServicoAjuda:
                 }
             ),
             output=portao.reter_output({"resposta": resposta}),
+            tokens=tokens_uso,  # I04: usage do provedor — §10.8
             latencia_ms=int((fim - inicio).total_seconds() * 1000),
             created_at=fim,
         )

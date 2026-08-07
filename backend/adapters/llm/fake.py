@@ -4,7 +4,7 @@ Devolve respostas enlatadas e registra as chamadas; nenhuma rede. Também serve 
 DEMO_MODE quando o hub não está acessível.
 """
 
-from application.ports.llm import LLMIndisponivel, PerfilModelo
+from application.ports.llm import LLMIndisponivel, PerfilModelo, RespostaLLM
 
 
 class LLMFake:
@@ -12,6 +12,10 @@ class LLMFake:
 
     `respostas` (sequencial) serve aos testes do retry §7.3: cada `chat` consome a
     próxima da lista; esgotada a lista, a ÚLTIMA se repete (simula modelo teimoso).
+
+    I04: o fake também devolve `tokens` — DETERMINÍSTICO (§1.3.5), função pura do
+    texto (contagem de palavras), nunca aleatório: os aceites provam o fluxo até
+    `invocacao.tokens` sem depender de rede nem de mágica.
     """
 
     def __init__(
@@ -31,10 +35,12 @@ class LLMFake:
     def disponivel(self) -> bool:
         return self._disponivel
 
-    def chat(self, mensagens: list[dict[str, str]], *, perfil: PerfilModelo = "20b") -> str:
+    def chat(self, mensagens: list[dict[str, str]], *, perfil: PerfilModelo = "20b") -> RespostaLLM:
         if not self._disponivel:
             raise LLMIndisponivel("LLMFake configurado como indisponível (simula §10.6).")
         self.chamadas.append({"perfil": perfil, "mensagens": mensagens})
         if self._fila:
-            return self._fila.pop(0) if len(self._fila) > 1 else self._fila[0]
-        return self._por_perfil.get(perfil, self._resposta)
+            texto = self._fila.pop(0) if len(self._fila) > 1 else self._fila[0]
+        else:
+            texto = self._por_perfil.get(perfil, self._resposta)
+        return RespostaLLM(texto, len(texto.split()))

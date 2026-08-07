@@ -74,9 +74,13 @@ export const CATALOGO: TipoDeAtividade[] = [
     grupo: "Flow Control",
     icone: "?",
     tooltip:
-      "§5.2 decisionSplit — data: regras[{expr sobre atributos/eventos, to}]. " +
-      "Compila para Decision Split.",
-    dataDefault: () => ({ regras: [{ expr: "perfil == 'heavy_user'", to: "" }] }),
+      "§5.2 decisionSplit — DUAS formas, mutuamente exclusivas por nó (I02): " +
+      "regras[{expr, to}] (destino na regra) OU regras[{id, cond}] (destino nas " +
+      "arestas). Compila para Decision Split.",
+    // to omitido de propósito: o default antigo (to: "") satisfazia o `required` do
+    // schema e virava regra MORTA silenciosa (auditoria da onda 5); sem o campo, o
+    // lint e o save acusam "regra sem destino" até o usuário escolher um.
+    dataDefault: () => ({ regras: [{ expr: "perfil == 'heavy_user'" }] }),
   },
   {
     tipo: "engagementSplit",
@@ -96,8 +100,9 @@ export const CATALOGO: TipoDeAtividade[] = [
     grupo: "Flow Control",
     icone: "f",
     tooltip:
-      "§5.2 frequencySplit — data: classes (saturado/ok/sub), fonte=governor. Cada classe " +
-      "precisa de aresta com cond igual ao nome. Einstein Frequency ou twin-emulado.",
+      "§5.2 frequencySplit — data: classes (string livre ou {id, min/max} — D05), " +
+      "fonte (ex.: governor, DE_freq). Cada classe precisa de aresta com cond igual " +
+      "ao id/nome. Einstein Frequency ou twin-emulado.",
     dataDefault: () => ({ classes: ["saturado", "ok", "sub"], fonte: "governor" }),
   },
   {

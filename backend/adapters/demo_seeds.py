@@ -34,7 +34,7 @@ from domain.experimento.modelos import Experimento
 from domain.governanca.modelos import Snapshot
 from domain.governanca.politicas import POLITICA_SEED
 from domain.governanca.snapshot import hash_composto
-from domain.jornada.canonico import hash_jgc
+from domain.jornada.canonico import hash_jgc, normalizar_grafo
 from domain.jornada.diff import diff_grafos
 from domain.jornada.modelos import JornadaVersao, SyncRun
 from domain.lancamento.modelos import Launch, TelemetryEvent
@@ -596,7 +596,12 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
     )
 
     # ---------------------------------------- twin (JGC) + Ensaio + Previsto (§6)
-    grafo = _grafo_demo()
+    # Emenda I03: a seed persiste o grafo já em ordem canônica ('n13' < 'n2'
+    # lexicográfico — a ordem serializada muda). Em banco JÁ semeado nada muda: o
+    # guard lá em cima retorna antes daqui, e a demo antiga segue com o par
+    # grafo+hash legado — consistente entre si, porque plan/drift/preview compilam
+    # sempre com o hash ARMAZENADO. A ordem canônica vale para semeaduras novas.
+    grafo = normalizar_grafo(_grafo_demo())
     executada_em = agora - timedelta(days=21)
     simulacao = _simulacao_demo(segmento.id, executada_em)
     jornada = JornadaVersao(

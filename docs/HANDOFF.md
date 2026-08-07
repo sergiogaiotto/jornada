@@ -30,20 +30,27 @@ inversa e é a melhor porta de entrada para entender a história.
 
 | Item | Estado |
 |---|---|
-| **Repositório** | `main` em `36c4f52`, local e remoto pareados, **branch única** |
-| **VPS** | roda `8e21341` (uma onda atrás — a onda 4 ainda não foi deployada) |
-| **Suíte** | **744 passed**, 1 skipped, 23 deselected, 1 xfailed |
+| **Repositório** | `main` com a **onda 5** (I01–I05 + auditoria); antes dela, `0ad7d8c` |
+| **VPS** | containers rodam `8e21341`; o repo em `/opt/jornada` já está adiante (o CI fez `git reset --hard` antes de falhar no compose — ver o box abaixo) |
+| **Suíte** | **777 passed** (a onda 5 somou 33 testes aos 744), 1 skipped, 23 deselected, 1 xfailed |
 | **Gates** | ruff, ruff format, mypy e `npm run build` verdes |
 | **Ambiente** | `APP_ENV=dev` na VPS, `DEMO_MODE=true` — ainda **demo pública**, dado sintético |
 | **PII real** | **NÃO liberado.** Faltam TLS, backup aplicado e o corte de ambiente |
 
-### ⚠️ O CI está sem cota
+### ⚠️ ~~O CI está sem cota~~ — a cota VOLTOU (2026-08-07); o deploy falha por outro motivo
 
-O GitHub Actions parou de disparar runs (cota de minutos esgotada). O último run bem-sucedido foi
-`b8591b5`. Desde então os deploys foram feitos manualmente reproduzindo o job — ver §7.
+Atualização de 2026-08-07 (verificado na máquina nova): a cota do Actions voltou no mesmo dia em
+que este handoff foi escrito — os pushes de `36c4f52` e `0ad7d8c` dispararam runs, e os três gates
+(backend, frontend, compose-validate) passaram VERDES. O job `deploy` falhou por outra razão: a
+onda 4 tornou `APP_ENV` **obrigatório** no `docker-compose.prod.yml` e o `.env` da VPS ainda não o
+tem (`required variable APP_ENV is missing a value`). Efeito colateral: o `git reset --hard` do job
+JÁ rodou — o repositório da VPS está em `0ad7d8c` com os containers ainda servindo `8e21341`.
 
-**Antes de qualquer coisa na máquina nova:** confira em Settings → Billing se a cota voltou. Se
-voltou, o deploy da onda 4 sai sozinho no próximo push.
+**Para destravar o deploy da onda 4** (com a chave SSH em mãos): adicionar ao `/opt/jornada/.env`
+`APP_ENV=dev` **e** `DEMO_MODE=true` explícito — o default do compose agora é `false`; sem a linha,
+o deploy desliga a demo em silêncio — e re-rodar o job (`gh run rerun <id> --failed`). Ou fazer
+logo o corte completo do §8.2, que o comentário do compose recomenda ir junto (prod + TLS +
+DEMO_MODE=false no MESMO deploy).
 
 ---
 
@@ -390,8 +397,9 @@ ssh -i ~/.ssh/id_ed25519_jornada root@187.77.46.137 \
 
 ### 8.1 Imediato
 
-1. **Deployar a onda 4** (§7.3 ou §7.4). A VPS está uma onda atrás.
-2. **Verificar a cota do Actions.**
+1. **Deployar a onda 4** (§7.3 ou §7.4). A VPS está uma onda atrás — e o deploy exige antes
+   `APP_ENV=dev` + `DEMO_MODE=true` no `.env` da VPS (ver o box do §2).
+2. ~~**Verificar a cota do Actions.**~~ Feito em 2026-08-07: a cota voltou; gates verdes.
 
 ### 8.2 Antes de PII real — bloqueantes
 
@@ -415,26 +423,27 @@ o middleware protege a aplicação, não a máquina.
 
 | Achado | O quê |
 |---|---|
-| **P2** | Nenhum jsonschema roda; o `jgc.schema.json` é lido só para `required` |
+| ~~**P2**~~ | **Fechado na onda 5 (I01):** o jsonschema roda inteiro no `jgc_validate`; schema emendado às formas D05/D07 antes de ligar |
 | **Camada 2 do Guard** | Inerte: o read model é fixture e **ignora** o `sql_publico` |
 | **Ação inerte na IA Responsável** | `decisao_automatizada` governa 1 das 7 ações; travado por teste, não escondido |
 | **`blackout` e `precedencia`** | No conjunto fechado, na tela, **sem consumidor** |
-| **Roteamento híbrido** | `decisionSplit` por regra **e** por aresta duplica saída (+33% no taxímetro) |
+| ~~**Roteamento híbrido**~~ | **Fechado na onda 5 (I02):** regra bloqueante `roteamento_ambiguo` no §5.3 + espelho no lint + editor recusa criar o híbrido |
 | **D06** | Editar o grafo sobrescreve a versão, sem histórico |
 | **D04 / throttle** | Regras implementadas que nenhum chamador ativa |
-| **Nome sem âncora** | Limite **declarado** do detector; a tela ainda não o exibe |
-| **Teto de tokens** | Fora do escopo: `invocacao.tokens` é sempre nulo (`LLMPort.chat` descarta o `usage`) |
+| ~~**Nome sem âncora**~~ | **Fechado:** o código (detector+API+tela) já estava na onda 4 — esta linha do handoff estava stale; a emenda §10.2 entrou na onda 5 (I05) |
+| ~~**Teto de tokens**~~ | **Meio fechado na onda 5 (I04):** o `usage` flui até `invocacao.tokens` (medição feita); falta o ENFORCEMENT do teto — só então o campo entra na política |
 | **e2e Playwright** | Job comentado no CI; não existe |
 | **Reconciliação diária / drift 30min** | Sem scheduler |
-| **Hash sensível à ordem** | Mesmo grafo em ordem diferente → `externalKey` diferente |
+| **Motor §6 × classes D05** | frequencySplit com classes fora de saturado/ok/sub (legais desde a onda 5) simula com alocação ZERO — o funil a jusante zera sem aviso (achado da auditoria da onda 5) |
+| **Tela T16 × tokens** | `invocacao.tokens` agora tem valor (I04) e a API o expõe; nenhuma tela renderiza ainda |
+| ~~**Hash sensível à ordem**~~ | **Fechado na onda 5 (I03):** nodes/edges ordenados por id na persistência e no hash; golden intacto por construção |
 
-### 8.4 Emenda pendente ao SDD
+### 8.4 ~~Emenda pendente ao SDD~~ — APLICADA na onda 5 (I05)
 
-O §10.2 precisa registrar que a detecção de PII tem **duas naturezas**: por **forma** (CPF, CNPJ,
-e-mail, telefone, cartão, CEP, RG — verificável) e por **contexto** (nome, endereço, data de
-nascimento — probabilística, com buracos nomeados). Hoje a seção lê como se fosse binária, e é essa
-leitura que faz o DPO acreditar que marcar `nome: bloquear` fecha a porta. **A tela deve exibir o
-limite ao lado do seletor** — senão é o achado 8 na granularidade da confiança do detector.
+O §10.2 registra as **duas naturezas** da detecção (forma verificável × contexto probabilístico com
+buracos nomeados), aponta a fonte única (`DETECCAO_DA_CATEGORIA`) sem redigitar a lista, e nomeia o
+limite intransponível (nome sem âncora). A tela do DPO já exibia os limites ao lado do seletor
+desde a onda 4 (`36c4f52`) — a linha desta tabela que dizia o contrário estava desatualizada.
 
 ---
 
