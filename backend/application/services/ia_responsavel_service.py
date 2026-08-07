@@ -48,6 +48,9 @@ from domain.campanha.modelos import EventoDominio
 from domain.ia_responsavel import (
     ACOES_VIA_AI,
     CATEGORIAS_PII,
+    DETECCAO_DA_CATEGORIA,
+    NATUREZA_CONTEXTO,
+    NATUREZA_FORMA,
     PERFIL_DO_ROSTER,
     PoliticaIa,
     PoliticaIaInvalida,
@@ -65,7 +68,42 @@ _ROTULO_PII: dict[str, str] = {
     "email": "E-mail",
     "telefone": "Telefone",
     "cartao": "Cartão de crédito",
-    "documento": "Documento (RG/passaporte)",
+    "documento": "Documento (identificador longo)",
+    # Titular identificado (onda 3c). Sem estes rótulos a tela mostrava a CHAVE crua
+    # (`data_nascimento`) para cinco das onze categorias — o fallback de `_ROTULO_PII`
+    # impede que sumam, não as torna legíveis.
+    "nome": "Nome do titular",
+    "endereco": "Endereço",
+    "cep": "CEP",
+    "data_nascimento": "Data de nascimento",
+    "rg": "RG",
+}
+
+# Como a categoria é detectada, em português do DPO (F04). É APRESENTAÇÃO: a natureza em
+# si (`forma`/`contexto`) e os buracos concretos vêm do domínio, junto do detector; aqui
+# fica só a frase que explica a natureza na tela.
+#
+# A frase de `contexto` diz a coisa desconfortável na cara: escolher `bloquear` numa
+# categoria de contexto só bloqueia quando a detecção dispara. Sem isso a tela continua
+# dizendo "INTERROMPE a chamada" com a mesma firmeza para `cpf` (que sempre dispara) e
+# para `nome` (que dispara às vezes) — e a firmeza igual sobre confianças diferentes é a
+# forma que o achado 8 assume aqui.
+_NATUREZA_ROTULO: dict[str, str] = {
+    NATUREZA_FORMA: "detecta por forma",
+    NATUREZA_CONTEXTO: "detecta por contexto — cobertura parcial",
+}
+_NATUREZA_TEXTO: dict[str, str] = {
+    NATUREZA_FORMA: (
+        "O formato basta para reconhecer o dado, e onde ele é ambíguo há um código que "
+        "confirma (dígito verificador de CPF/CNPJ, Luhn do cartão). O que tem a forma é "
+        "encontrado sempre, no texto livre e nos campos."
+    ),
+    NATUREZA_CONTEXTO: (
+        "Este dado NÃO tem formato próprio: o que o denuncia é como ele aparece escrito "
+        "(a palavra que vem antes, a maiúscula, a pontuação). A cobertura é PARCIAL e os "
+        "buracos abaixo são conhecidos — nesses casos o dado sai em claro, e escolher "
+        "“bloquear” não interrompe chamada nenhuma, porque não houve detecção."
+    ),
 }
 
 _MOTIVO_MIN = 5
@@ -203,19 +241,65 @@ def _iso(valor: Any) -> str | None:
     return valor.isoformat() if isinstance(valor, datetime) else (valor if valor else None)
 
 
+def _categoria_out(categoria: str) -> dict[str, Any]:
+    """Uma linha do seletor de PII: chave técnica, rótulo e a CONFIANÇA do detector."""
+    deteccao = DETECCAO_DA_CATEGORIA[categoria]
+    return {
+        "chave": categoria,
+        "rotulo": _ROTULO_PII.get(categoria, categoria),
+        "natureza": deteccao.natureza,
+        "natureza_rotulo": _NATUREZA_ROTULO[deteccao.natureza],
+        "natureza_texto": _NATUREZA_TEXTO[deteccao.natureza],
+        "exemplo_detectado": deteccao.detecta,
+        "limites": [
+            {"texto": limite.texto, "exemplo": limite.exemplo, "chave": limite.chave}
+            for limite in deteccao.limites
+        ],
+    }
+
+
 def _vocabulario() -> dict[str, Any]:
     """Conjuntos FECHADOS servidos ao formulário — a UI não redigita vocabulário.
 
     Se a tela mantivesse a própria lista de categorias/ações/agentes, ela divergiria do
     domínio na primeira mudança e o DPO veria um formulário que oferece opções que o
     servidor rejeita (ou, pior, esconde opções que existem).
+
+    Cada categoria viaja com a NATUREZA da detecção e, quando há, os LIMITES do detector
+    (F04). Pelo mesmo motivo: escritos no React, os buracos envelhecem na primeira mexida
+    em `mascarar.py` e a tela passa a mentir na direção contrária — avisando de um buraco
+    já fechado, ou calando sobre um novo. Aqui eles descem do domínio, onde um teste roda
+    o detector sobre o exemplo de cada limite a cada CI.
     """
     return {
-        "categorias_pii": [{"chave": c, "rotulo": _ROTULO_PII.get(c, c)} for c in CATEGORIAS_PII],
+        "categorias_pii": [_categoria_out(c) for c in CATEGORIAS_PII],
         "acoes_dado": ["mascarar", "bloquear"],
         "acoes_via_ai": list(ACOES_VIA_AI),
         "agentes": {nome: list(perfis) for nome, perfis in PERFIL_DO_ROSTER.items()},
     }
+
+
+def _efeito_da_categoria(categoria: str, acao: Any) -> str:
+    """A frase de efeito de UMA categoria — com a ressalva de confiança quando cabe.
+
+    Toda frase deste módulo começa com "detectado": era um advérbio invisível quando as
+    seis categorias originais eram todas de FORMA (detectar era garantido). Com as de
+    CONTEXTO, "detectado" virou a palavra que carrega o risco inteiro, e dizer
+    "INTERROMPE a chamada" com a mesma firmeza para `cpf` e para `nome` é prometer ao
+    DPO uma cobertura que só uma das duas tem. A ressalva desfaz isso na mesma frase —
+    não numa nota de rodapé que ninguém lê (F04).
+    """
+    rotulo = _ROTULO_PII.get(categoria, categoria)
+    if acao == "bloquear":
+        frase = f"{rotulo} detectado INTERROMPE a chamada ao modelo: o texto não sai do perímetro."
+    else:
+        frase = f"{rotulo} sai mascarado (o modelo recebe o marcador, nunca o valor real)."
+    if DETECCAO_DA_CATEGORIA[categoria].natureza == NATUREZA_CONTEXTO:
+        frase += (
+            " Detecção por CONTEXTO: vale quando o dado aparece de forma reconhecível — "
+            "o formulário abaixo lista os casos em que ele sai em claro."
+        )
+    return frase
 
 
 def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
@@ -249,13 +333,7 @@ def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
                     "chave": categoria,
                     "rotulo": _ROTULO_PII.get(categoria, categoria),
                     "valor": acoes.get(categoria, "—"),
-                    "efeito": (
-                        f"{_ROTULO_PII.get(categoria, categoria)} detectado INTERROMPE a "
-                        "chamada ao modelo: o texto não sai do perímetro."
-                        if acoes.get(categoria) == "bloquear"
-                        else f"{_ROTULO_PII.get(categoria, categoria)} sai mascarado "
-                        "(o modelo recebe o marcador, nunca o valor real)."
-                    ),
+                    "efeito": _efeito_da_categoria(categoria, acoes.get(categoria)),
                 }
                 for categoria in CATEGORIAS_PII
             ],

@@ -47,12 +47,45 @@ services:
     command: sh -c "alembic upgrade head && uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://jornada:${JORNADA_DB_PASSWORD:-jornada}@db:5432/jornada
-      # Demo pública: APP_ENV=dev habilita as seeds da OS-2026-0457 e o Bearer de
-      # demonstração (sem IdP). Dados 100% sintéticos — nenhum dado real na VPS.
-      APP_ENV: dev
+      # ------------------------------------------------------------------------
+      # MODO DO AMBIENTE — a decisão que este arquivo NÃO toma mais sozinho
+      # ------------------------------------------------------------------------
+      # Era `APP_ENV: dev` fixo, com o comentário "demo pública, dados sintéticos".
+      # Enquanto isso é verdade, o custo é conhecido e aceito: em `dev` os tokens
+      # `dev-<papel>`/`portal-dev` VALEM (app/auth.py `tokens_dev_ativos`), e eles são
+      # seis strings publicadas neste repositório. Num host aberto à internet isso é
+      # uma credencial de ADMINISTRADOR de conhecimento público — não uma senha fraca,
+      # uma senha divulgada. O front já não as usa (a SPA entra por sessão desde a
+      # emenda E04): quem as usa é quem souber montar um curl.
+      #
+      # Por isso o valor deixa de ter default: quem sobe DECLARA o modo no `.env` do
+      # servidor, do mesmo jeito que já declara o APP_SECRET. Ambiente permissivo por
+      # omissão é como se chega em produção sem perceber que se chegou.
+      #
+      # Ordem recomendada da virada (ver o relatório da frente 3):
+      #   `APP_ENV=prod` + `SESSION_COOKIE_SECURE=true` + TLS na frente + `DEMO_MODE=false`
+      # entram no MESMO deploy, ANTES do primeiro dado real. Separá-los só troca um
+      # buraco por outro: prod sem TLS troca a credencial publicada por uma credencial
+      # que viaja em claro; TLS sem prod deixa a credencial publicada valendo, agora
+      # sobre um canal cifrado. A demo, se tiver de sobreviver, sobrevive num deploy
+      # SEPARADO que nunca vê PII — não mantendo a caixa de produção em `dev`.
+      APP_ENV: ${APP_ENV:?defina APP_ENV no .env do servidor (dev|homolog|prod) — ver o bloco acima}
       APP_SECRET: ${APP_SECRET:?defina APP_SECRET no .env (openssl rand -hex 32)}
       DEFAULT_TENANT: torre-movel
-      DEMO_MODE: "true"
+      # Base pública do FRONT — é o que vai DENTRO do link mágico de aprovação
+      # (api/v1/portoes.py monta `${WEB_BASE_URL}/aprovacao/{token}`). Sem esta linha o
+      # backend usava o default de `config.py`, `http://localhost:5173`: todo link
+      # gerado na VPS apontava para a máquina de quem clicou. Ajustar junto com o TLS
+      # (vira https:// e sai a porta).
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://vps.falagaiotto.com.br:8050}
+      # Cookie de sessão só com `Secure` DEPOIS do TLS: antes dele o navegador
+      # simplesmente não envia o cookie e o login some (ver a nota em config.py).
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # Default FECHADO: as seeds §11.4 são dado sintético de demonstração, e o lugar
+      # errado para elas é um tenant que vai conter PII real. Em `APP_ENV=prod` são
+      # ignoradas de qualquer jeito (app/main.py), mas o default aqui não pode depender
+      # disso — a demo liga explicitamente `DEMO_MODE=true` no `.env`.
+      DEMO_MODE: ${DEMO_MODE:-false}
       # Bootstrap do root (§8-M0 · G01). Os valores vivem SÓ no `.env` do servidor —
       # nunca no repositório, nunca no CI. Idempotente: se a conta já existe, o boot não
       # toca na senha (quem já trocou não é resetado). Sem as duas variáveis, o boot

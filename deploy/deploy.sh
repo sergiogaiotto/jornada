@@ -99,6 +99,85 @@ ROT
   fi
 }
 
+# ------------------------------------------------------------ §10.2 · backup e restauração
+# Mesmo padrão do cron do purge, pelo mesmo motivo: INSTALADO, não documentado. A onda
+# anterior provou que um controle descrito no README e ausente do host é contado como
+# existente pela auditoria e não protege nada.
+#
+# Três agendamentos, três perguntas diferentes:
+#   · o backup diário                     — "existe uma cópia de ontem?"
+#   · o `--status` (em outro horário)     — "o cron do backup ainda está vivo?"
+#   · o teste de RESTAURAÇÃO semanal      — "essa cópia volta?"
+# O terceiro é o que separa backup de teatro. Os dois primeiros passariam felizes por
+# meses com arquivos que não restauram.
+CRON_BACKUP=/etc/cron.d/jornada-backup
+BACKUP_DIR="${JORNADA_BACKUP_DIR:-/var/backups/jornada}"
+
+instalar_cron_backup() {
+  # 1) Chave da cifra. O dump é PII de telco em claro (§10.2) e vai para o disco de uma
+  #    VPS que hospeda outros seis projetos. Gerada aqui como o APP_SECRET e o
+  #    JORNADA_PURGE_TOKEN: o repositório conhece o NOME, nunca o valor.
+  local passphrase_nova=0
+  grep -q '^JORNADA_BACKUP_PASSPHRASE=' .env 2>/dev/null || passphrase_nova=1
+  garantir_env JORNADA_BACKUP_PASSPHRASE "$(openssl rand -hex 32)"
+  chmod 600 .env
+  if [ "$passphrase_nova" = 1 ]; then
+    # Avisar ALTO e uma vez só. Uma passphrase que existe apenas no host que ela protege
+    # não sobrevive ao desastre contra o qual o backup foi feito: perdido o disco,
+    # perde-se a chave junto e as cópias remotas viram lixo cifrado.
+    echo "  ###############################################################"
+    echo "  # JORNADA_BACKUP_PASSPHRASE foi GERADA agora no .env.         #"
+    echo "  # COPIE-A PARA FORA DESTA VPS (cofre/gerenciador de senhas)   #"
+    echo "  # AGORA. Sem ela, todo backup cifrado é irrecuperável — e ela #"
+    echo "  # mora no mesmo disco que o backup deveria sobreviver.        #"
+    echo "  #   grep '^JORNADA_BACKUP_PASSPHRASE=' /opt/jornada/.env      #"
+    echo "  ###############################################################"
+  fi
+
+  chmod +x scripts/backup_bancos.sh scripts/restaura_teste.sh scripts/cert_status.sh 2>/dev/null || true
+
+  mkdir -p "$BACKUP_DIR" /var/lib/jornada
+  chmod 700 "$BACKUP_DIR" # dump de PII: nem group, nem others
+  touch /var/log/jornada-backup.log /var/log/jornada-restore-teste.log
+  chmod 640 /var/log/jornada-backup.log /var/log/jornada-restore-teste.log
+
+  # Horários: backup às 02:20 (antes do purge das 03:15 — a cópia do dia registra o
+  # estado ANTES da destruição por retenção, senão o backup mais novo já vem sem o que
+  # o purge apagou e um erro de política se torna irreversível em 24h). Teste de
+  # restauração aos domingos 04:10, depois de a cópia da madrugada existir. Vigias às
+  # 09:40/09:50, em horário de gente acordada e SEPARADOS do job que vigiam.
+  cat >"$CRON_BACKUP" <<CRON
+# /etc/cron.d/jornada-backup — INSTALADO por deploy/deploy.sh (SDD §10.2). Não editar à
+# mão: o próximo deploy sobrescreve.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=$FUSO_CRON
+MAILTO=${JORNADA_CRON_MAILTO:-root}
+
+20 2 * * * root /opt/jornada/scripts/backup_bancos.sh
+10 4 * * 0 root /opt/jornada/scripts/restaura_teste.sh
+40 9 * * * root /opt/jornada/scripts/backup_bancos.sh --status
+50 9 * * * root /opt/jornada/scripts/restaura_teste.sh --status
+15 9 * * * root /opt/jornada/scripts/cert_status.sh
+CRON
+  chmod 644 "$CRON_BACKUP"
+  chown root:root "$CRON_BACKUP" 2>/dev/null || true
+  echo "  cron instalado: $CRON_BACKUP (backup 02:20, restauração dom 04:10, vigias 09:40/09:50, cert 09:15)"
+
+  if [ -d /etc/logrotate.d ]; then
+    cat >/etc/logrotate.d/jornada-backup <<'ROT'
+/var/log/jornada-backup.log /var/log/jornada-restore-teste.log {
+  weekly
+  rotate 12
+  compress
+  missingok
+  notifempty
+  create 640 root root
+}
+ROT
+  fi
+}
+
 verificar_cron_ativo() {
   # /etc/cron.d só significa alguma coisa se existir um daemon de cron rodando. Sem esta
   # checagem o deploy escreveria o arquivo, imprimiria sucesso, e o purge nunca rodaria —
@@ -173,6 +252,7 @@ local_main() {
   # injetá-lo no serviço `api` nesta mesma subida (JORNADA_PURGE_TOKEN).
   falhas_pos_deploy=0
   instalar_cron_purge
+  instalar_cron_backup
   if ! verificar_cron_ativo; then
     echo "ERRO §10.4: nenhum daemon de cron ativo neste host — $CRON_FILE é inerte." >&2
     echo "            instale com 'apt-get install -y cron && systemctl enable --now cron'." >&2
@@ -202,6 +282,32 @@ local_main() {
     falhas_pos_deploy=1
   fi
   tail -n 3 /var/log/jornada-purge.log 2>/dev/null || true
+
+  # Smoke do §10.2: roda um backup DE VERDADE agora. É barato (segundos) e prova a
+  # cadeia inteira que o cron das 02:20 vai usar — docker exec, pg_dump nos dois
+  # containers, cifra, checksum, retenção — em vez de descobrir na primeira madrugada.
+  echo "smoke §10.2 (backup real):"
+  if ! scripts/backup_bancos.sh; then
+    echo "ERRO §10.2: o backup falhou agora — o cron das 02:20 falharia igual." >&2
+    falhas_pos_deploy=1
+  else
+    tail -n 3 /var/log/jornada-backup.log 2>/dev/null || true
+  fi
+
+  # E, na PRIMEIRA vez neste host, prova também que o backup RESTAURA. Depois disso
+  # quem cuida é o cron de domingo — restaurar leva minutos e não cabe em todo deploy,
+  # mas subir um host novo e sair confiando num backup nunca restaurado é como esta
+  # frente começou (zero backups, e todo mundo achando que havia).
+  if [ ! -r /var/lib/jornada/restore-teste-ultimo.json ]; then
+    echo "smoke §10.2 (PRIMEIRO teste de restauração neste host — container descartável):"
+    if ! scripts/restaura_teste.sh; then
+      echo "ERRO §10.2: o backup recém-criado NÃO restaura. Não há backup." >&2
+      falhas_pos_deploy=1
+    fi
+  else
+    scripts/restaura_teste.sh --status ||
+      echo "AVISO §10.2: o teste de restauração está atrasado (ver acima)." >&2
+  fi
 
   if [ "$falhas_pos_deploy" -ne 0 ]; then
     echo "DEPLOY COM FALHA: a aplicação subiu, o controle de retenção §10.4 NÃO está garantido." >&2

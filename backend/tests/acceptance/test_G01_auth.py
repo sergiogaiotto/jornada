@@ -283,6 +283,8 @@ def test_troca_de_senha_rotaciona_a_sessao(client: TestClient) -> None:
 def test_email_duplicado_no_tenant_409_e_permitido_em_outro_tenant(
     client: TestClient, tokens_outro_tenant: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import uuid
+
     from app.auth import DEV_TOKENS, Usuario
 
     _criar_usuario(client)
@@ -298,13 +300,17 @@ def test_email_duplicado_no_tenant_409_e_permitido_em_outro_tenant(
     )
     assert repetido.status_code == 409
 
-    # admin do OUTRO tenant: o mesmo e-mail tem de caber lá (unique é por tenant — 0015)
-    base = DEV_TOKENS["dev-admin"]
+    # admin do OUTRO tenant: o mesmo e-mail tem de caber lá (unique é por tenant — 0015).
+    # O id é PRÓPRIO — reaproveitar o do `dev-admin` (como estava) descrevia duas contas
+    # distintas com a MESMA chave primária de `usuario`, coisa que o banco não aceitaria.
+    # Passou despercebido enquanto o portador era um dicionário em memória; desde que a
+    # fixture materializa o portador como linha de verdade (tests/conftest.py), o segundo
+    # token resolvia para a conta do PRIMEIRO tenant e o teste virava um falso vermelho.
     monkeypatch.setitem(
         DEV_TOKENS,
         "dev-admin-outra-torre",
         Usuario(
-            id=base.id,
+            id=uuid.uuid5(uuid.NAMESPACE_URL, "jornada/dev/admin/outra-torre"),
             tenant_id="outra-torre",
             nome="Dev Admin (outra torre)",
             email="admin@outra-torre.local",
@@ -373,23 +379,27 @@ def test_config_recusa_tokens_dev_em_prod() -> None:
 
 
 def test_dev_tokens_recusados_com_app_env_prod(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client_bearer: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`dev-admin` é uma senha PUBLICADA no repositório — em prod não pode valer.
 
     Fecha o achado do UAT #5: até aqui o token estático era aceito em qualquer ambiente.
+
+    `client_bearer` (e não `client`) porque este é O aceite do portador Bearer: o cliente
+    comum troca `dev-admin` por uma sessão real antes de sair (tests/conftest.py), que é
+    justamente o que NÃO se quer medir aqui — o header tem de chegar cru à aplicação.
     """
     import app.auth as modulo_auth
 
     prod = Settings(_env_file=None, app_env="prod", app_secret="segredo-de-vault")
     monkeypatch.setattr(modulo_auth, "get_settings", lambda: prod)
 
-    client.cookies.clear()
-    assert client.get("/api/v1/os", headers=ADMIN).status_code == 401
-    assert client.get("/api/v1/auth/eu", headers=ADMIN).status_code == 401
+    client_bearer.cookies.clear()
+    assert client_bearer.get("/api/v1/os", headers=ADMIN).status_code == 401
+    assert client_bearer.get("/api/v1/auth/eu", headers=ADMIN).status_code == 401
     # e o portal (§8-M3) cai junto
     assert (
-        client.get(
+        client_bearer.get(
             "/api/v1/pedidos", headers=TENANT | {"Authorization": "Bearer portal-dev"}
         ).status_code
         == 401
@@ -397,18 +407,18 @@ def test_dev_tokens_recusados_com_app_env_prod(
 
 
 def test_dev_tokens_valem_em_homolog_so_com_opt_in(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client_bearer: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import app.auth as modulo_auth
 
     homolog = Settings(_env_file=None, app_env="homolog", permitir_tokens_dev=False)
     monkeypatch.setattr(modulo_auth, "get_settings", lambda: homolog)
-    client.cookies.clear()
-    assert client.get("/api/v1/os", headers=ADMIN).status_code == 401
+    client_bearer.cookies.clear()
+    assert client_bearer.get("/api/v1/os", headers=ADMIN).status_code == 401
 
     com_opt_in = Settings(_env_file=None, app_env="homolog", permitir_tokens_dev=True)
     monkeypatch.setattr(modulo_auth, "get_settings", lambda: com_opt_in)
-    assert client.get("/api/v1/os", headers=ADMIN).status_code == 200
+    assert client_bearer.get("/api/v1/os", headers=ADMIN).status_code == 200
 
 
 # ------------------------------------------------------------- bootstrap do root

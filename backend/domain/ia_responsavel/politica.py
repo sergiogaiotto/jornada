@@ -25,7 +25,7 @@ deliberado: publicar a v1 não pode mudar o comportamento de nenhuma OS em voo. 
 política nasce igual ao presente e só aperta a partir daí, por ato humano versionado.
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 
 # ------------------------------------------------------------------ vocabulários
 # Categorias = marcadores de `domain/privacidade/mascarar.py` (fonte única §10.2).
@@ -71,6 +71,196 @@ CATEGORIAS_PII: tuple[str, ...] = CATEGORIAS_PII_V1 + CATEGORIAS_PII_TITULAR
 # exigiria uma migração que reescrevesse as linhas já publicadas, e reescrever política
 # publicada é adulterar prova de auditoria — não se faz por conveniência de schema.
 CATEGORIAS_PII_OBRIGATORIAS: tuple[str, ...] = CATEGORIAS_PII_V1
+
+# ------------------------------------------------- natureza da detecção e LIMITES (F04)
+#
+# ## Por que isto existe: o achado 8 na granularidade da CONFIANÇA do detector
+#
+# A onda 3c provou que `mascarar.py` detecta por DUAS naturezas diferentes, e a tela do
+# DPO mostrava as onze categorias na MESMA linha, com o mesmo seletor, como se todas
+# fechassem a porta do mesmo jeito:
+#
+# * por FORMA — `cpf`, `cnpj`, `email`, `telefone`, `cartao`, `documento`, `cep`, `rg`.
+#   O formato basta, e onde é ambíguo há CÓDIGO verificável (DV de CPF/CNPJ, Luhn de
+#   cartão). Cobertura previsível: o que tem a forma é pego, sempre.
+# * por CONTEXTO — `nome`, `endereco`, `data_nascimento`. Não têm forma; o sinal é como
+#   o dado aparece escrito. Cobertura PARCIAL, com buracos que `mascarar.py` já
+#   NOMEAVA num comentário ("LIMITES DECLARADOS") que nenhum DPO jamais leu.
+#
+# `nome: bloquear` numa tela sem essa distinção é o achado 8 outra vez, um nível mais
+# fundo: o parâmetro MUDA comportamento (o teste de enforcement prova), mas o DPO assina
+# acreditando em uma cobertura que não existe. Parametrização honesta no efeito e
+# desonesta na CONFIANÇA continua sendo teatro auditável — só que mais caro, porque
+# agora tem assinatura.
+#
+# ## Por que os limites moram no DOMÍNIO e não na tela
+#
+# Buraco de detector muda quando o detector muda. Escrito no React, o texto envelhece na
+# primeira mexida em `mascarar.py` e a tela passa a mentir na direção contrária (avisa de
+# um buraco que já foi fechado, ou cala sobre um novo). Aqui, cada limite viaja com um
+# `exemplo` EXECUTÁVEL, e o teste da frente F04
+# (`tests/unit/test_F04_natureza_e_limites.py`) roda o detector sobre ele:
+#
+# * o `exemplo` de um limite tem de sair INTACTO — se alguém fechar o buraco, o teste
+#   quebra e obriga a APAGAR o aviso da tela (limite fechado que continua sendo exibido é
+#   mentira na direção oposta);
+# * o `detecta` de cada categoria tem de sair MASCARADO — se alguém quebrar a detecção,
+#   o teste quebra antes de a tela prometer o que o detector não faz mais.
+#
+# É a mesma régua do resto deste arquivo: nada entra na tela do DPO sem um teste que
+# prove que o que está escrito ali é o que acontece.
+NATUREZA_FORMA = "forma"
+NATUREZA_CONTEXTO = "contexto"
+NATUREZAS: tuple[str, ...] = (NATUREZA_FORMA, NATUREZA_CONTEXTO)
+
+
+class LimiteDeteccao(NamedTuple):
+    """Um buraco CONHECIDO do detector, em português do DPO + prova executável.
+
+    `texto` é o que o DPO lê ao lado do seletor da categoria — frase no presente do
+    indicativo, dizendo o que NÃO acontece. `exemplo` é o trecho que sai em claro hoje;
+    o teste o executa contra `mascarar_pii`. `chave` só é preenchida quando o buraco é
+    de CHAVE de formulário: aí o exemplo é o VALOR e o teste usa
+    `mascarar_pii_em_campo(chave, exemplo)`, que é o caminho real do dado.
+    """
+
+    texto: str
+    exemplo: str
+    chave: str = ""
+
+
+class Deteccao(NamedTuple):
+    """Como uma categoria é detectada — e até onde.
+
+    `detecta` é um exemplo que HOJE é mascarado (a ponta boa da pinça; sem ele, "por
+    forma" seria só um rótulo). `limites` é o que NÃO é pego. Categoria de contexto sem
+    limite declarado é recusada pelo teste da F04: contexto tem buraco por construção, e
+    declarar zero seria a promessa que este bloco existe para desfazer.
+    """
+
+    natureza: str
+    detecta: str
+    limites: tuple[LimiteDeteccao, ...] = ()
+
+
+# Os exemplos são SINTÉTICOS e é o que se espera deles: `111.444.777-35` e
+# `4111 1111 1111 1111` são os valores de teste canônicos (o primeiro é o CPF de exemplo
+# que já circula pelos testes do C02; o segundo é o cartão de teste público da bandeira),
+# e os nomes/endereços são inventados. Exemplo na tela do DPO nunca pode ser dado real.
+DETECCAO_DA_CATEGORIA: dict[str, Deteccao] = {
+    "cpf": Deteccao(NATUREZA_FORMA, "CPF 111.444.777-35"),
+    "cnpj": Deteccao(NATUREZA_FORMA, "CNPJ 11.222.333/0001-81"),
+    "email": Deteccao(NATUREZA_FORMA, "contato joana.silva@exemplo.com.br"),
+    "telefone": Deteccao(
+        NATUREZA_FORMA,
+        "(11) 98765-4321",
+        (
+            LimiteDeteccao(
+                "Telefone de 8 dígitos SEM hífen e sem DDD não é detectado — cru, "
+                "“34567890” é indistinguível de uma contagem ou de um código interno. "
+                "Com hífen (“3456-7890”) ou com DDD, é.",
+                "telefone 34567890 na ficha",
+            ),
+        ),
+    ),
+    "cartao": Deteccao(NATUREZA_FORMA, "4111 1111 1111 1111"),
+    "documento": Deteccao(NATUREZA_FORMA, "protocolo 123456789012"),
+    "nome": Deteccao(
+        NATUREZA_CONTEXTO,
+        "cliente Maria da Silva",
+        (
+            LimiteDeteccao(
+                "Nome SOLTO na frase, sem palavra que anuncie pessoa antes dele, NÃO é "
+                "detectado. Sem essa âncora não há como separar o nome de um titular do "
+                "nome de uma marca, de um bairro ou de um produto.",
+                "Maria Aparecida da Silva Santos aprovou o roteiro",
+            ),
+            LimiteDeteccao(
+                "Depois de “cliente”, “assinante”, “usuário”, “falar com” ou “contato”, "
+                "só é detectado o nome que traz uma partícula (“da”, “de”, “dos”, “e”): "
+                "“cliente Maria DA Silva” é pego, “cliente Joana Silva” NÃO é. A "
+                "exigência existe porque sem ela “clientes Fibra Residencial” e "
+                "“Cliente Vivo Empresas” viravam nome de pessoa. Continuam cobertos "
+                "“titular”, “Sr./Sra.”, “mãe”, “nome completo” e “nome do cliente”, que "
+                "só antecedem pessoa.",
+                "cliente Joana Silva pediu portabilidade",
+            ),
+            LimiteDeteccao(
+                "Em formulário e JSON, a CHAVE só ancora quando as palavras vêm "
+                "separadas por espaço, “_” ou “-” (“nome do titular”, “nome_completo”). "
+                "Chave em camelCase (“nomeDoTitular”) ou em ordem invertida "
+                "(“titular_nome”) NÃO ancora, e o valor sai em claro.",
+                "Maria da Conceição dos Santos",
+                chave="nomeDoTitular",
+            ),
+        ),
+    ),
+    "endereco": Deteccao(
+        NATUREZA_CONTEXTO,
+        "Av. Paulista 1000",
+        (
+            LimiteDeteccao(
+                "Endereço TODO EM MINÚSCULA não é detectado. O nome do logradouro em "
+                "maiúscula inicial (ou em CAIXA ALTA, como sai do CRM) é o que separa "
+                "endereço de figura de linguagem — “estrada de dados: 12 fontes” não "
+                "pode virar endereço.",
+                "rua das flores 123",
+            ),
+            LimiteDeteccao(
+                "Endereço SEM NÚMERO não é detectado: o número é o que separa endereço "
+                "de referência solta.",
+                "Rua das Flores, próximo ao mercado",
+            ),
+            LimiteDeteccao(
+                "Bairro, cidade e UF sozinhos, sem logradouro e sem número, não são detectados.",
+                "Vila Mariana, São Paulo/SP",
+            ),
+        ),
+    ),
+    "cep": Deteccao(
+        NATUREZA_FORMA,
+        "CEP 01310-100",
+        (
+            LimiteDeteccao(
+                "CEP SEM hífen só é detectado quando a palavra “CEP” aparece antes "
+                "(“CEP 01310100”). Solto, “01310100” é oito dígitos como qualquer "
+                "contagem. Com hífen (“01310-100”), é detectado sempre.",
+                "entrega em 01310100",
+            ),
+        ),
+    ),
+    "data_nascimento": Deteccao(
+        NATUREZA_CONTEXTO,
+        "data de nascimento 14/03/1987",
+        (
+            LimiteDeteccao(
+                "Data só vira dado do titular quando vem depois de “nascimento”, "
+                "“nascido em”, “dt. nasc.”. Depois de “aniversário” NÃO — nesta "
+                "plataforma aniversário é palavra de campanha, e mascarar toda data "
+                "apagaria janela de campanha e data de publicação.",
+                "aniversário 14/03/1987",
+            ),
+            LimiteDeteccao(
+                "IDADE não é detectada: “cliente de 38 anos” sai em claro. Idade não "
+                "tem forma de data e, sozinha, não identifica ninguém.",
+                "cliente de 38 anos",
+            ),
+        ),
+    ),
+    "rg": Deteccao(
+        NATUREZA_FORMA,
+        "RG 12.345.678-9",
+        (
+            LimiteDeteccao(
+                "RG SEM pontuação só é detectado quando a palavra “RG” aparece antes "
+                "(“RG 123456789”). Solto, “123456789” é indistinguível de um id de "
+                "sistema — e o RG não tem dígito verificador nacional para desempatar. "
+                "Pontuado (“12.345.678-9”), é detectado sempre.",
+                "documento 123456789 na ficha",
+            ),
+        ),
+    ),
+}
 
 # `permitir` NÃO existe de propósito. O piso do C02 (mascarar sempre) é garantia de
 # contrato, não default configurável: uma política capaz de DESLIGAR o mascaramento

@@ -19,6 +19,11 @@ Decisões visíveis no contrato:
 · **Erros RFC-7807 em tudo**, e login errado NUNCA revela se o e-mail existe (uma só
   `CredencialInvalida` para inexistente/senha errada/inativa/bloqueada — ver
   `domain/identidade/erros.py`).
+· **As rotas que hasheiam são `def`, não `async def`** (frente 1). Ver
+  `_POR_QUE_SINCRONO` logo abaixo — não é descuido, é o conserto de um bug de
+  concorrência que serializava o servidor inteiro.
+· **Limite por IP no login** (frente 1) — `app/middleware_limite.py` explica os dois
+  contadores e os números; aqui fica só o ponto de aplicação.
 """
 
 import uuid
@@ -30,6 +35,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
+from adapters.relogio import RelogioSistema
 from app.auth import (
     Usuario,
     get_current_user,
@@ -39,6 +45,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.errors import problem_response
+from app.middleware_limite import LimiteExcedido, LimitePorIp, ip_do_cliente
 from application.services.identidade_service import ServicoIdentidade
 from domain.campanha.erros import ErroDominio
 from domain.identidade.erros import (
@@ -49,6 +56,32 @@ from domain.identidade.erros import (
     UsuarioNaoEncontrado,
 )
 from domain.identidade.modelos import PAPEIS, ContaUsuario
+
+_POR_QUE_SINCRONO = """Por que `login`, `trocar_senha`, `criar_usuario` e `resetar_senha`
+são `def` e não `async def` (frente 1)
+
+O argon2id desta base custa 64 MiB e 3 passes DE PROPÓSITO (§ domain/identidade/senha.py):
+é ~100 ms de CPU pura, sem um único ponto de espera de I/O. Enquanto essas rotas eram
+`async def`, esses 100 ms rodavam DENTRO do event loop — e o event loop é um só. Não é
+que o login ficava lento: é que TODO o resto da aplicação parava junto. Dez logins
+concorrentes viravam um segundo de servidor congelado, `/healthz` incluído; e como
+`/auth/login` não exige autenticação, qualquer um do lado de fora comprava esse
+congelamento a preço de um POST.
+
+`async def` só paga por si quando o corpo tem `await` em I/O. Estas rotas não têm: o
+repositório de identidade é SÍNCRONO e o hash é CPU. Declará-las `def` faz o FastAPI
+executá-las no threadpool (`run_in_threadpool`, ~40 workers), que é exatamente o lugar
+de trabalho bloqueante — o loop volta a atender os outros requests durante o hash.
+
+Medição (10 logins concorrentes, `tests/unit/test_H01_argon2_fora_do_loop.py`): com
+`async def` o loop fica cego por ~1,0 s (o batimento de 10 ms para de bater); com `def`
+a maior lacuna do batimento cai para a casa dos milissegundos. O teste é a inversão
+verificada dessa afirmação — trocar `def` por `async def` faz a asserção falhar.
+
+NÃO transformar em `async def` sem antes tornar o repositório assíncrono E tirar o hash
+daqui. `logout`, `eu`, `listar_usuarios`, `desativar_usuario` e `listar_papeis` seguem
+`async def` porque não hasheiam nada."""
+
 
 # ----------------------------------------------------------- Erros → problem+json
 _STATUS_POR_ERRO: tuple[tuple[type[ErroDominio], int], ...] = (
@@ -69,6 +102,18 @@ class RotaAutenticacao(APIRoute):
         async def handler(request: Request) -> Response:
             try:
                 return await handler_original(request)
+            except LimiteExcedido as limite:
+                # 429 + Retry-After (frente 1): a requisição foi recusada ANTES de custar
+                # um argon2. `Retry-After` é o tempo real até a janela deslizar, então o
+                # cliente legítimo sabe quando voltar em vez de adivinhar.
+                return problem_response(
+                    429,
+                    _TITULO[429],
+                    detail=limite.motivo,
+                    instance=request.url.path,
+                    extra={"retry_after_s": limite.retry_after},
+                    headers={"Retry-After": str(limite.retry_after)},
+                )
             except ErroDominio as exc:
                 status = next((s for t, s in _STATUS_POR_ERRO if isinstance(exc, t)), 500)
                 extra: dict[str, Any] | None = None
@@ -95,6 +140,7 @@ _TITULO: dict[int, str] = {
     404: "Not Found",
     409: "Conflict",
     422: "Unprocessable Entity",
+    429: "Too Many Requests",
     500: "Internal Server Error",
 }
 
@@ -139,7 +185,27 @@ def get_tenant(request: Request) -> str:
     return request.state.tenant_id  # garantido pelo middleware X-Tenant (app/main.py, §8)
 
 
+def get_limite_login(request: Request) -> LimitePorIp:
+    """Limitador por IP do login (frente 1) — UM por aplicação, em `app.state`.
+
+    Vive no `app.state` e não em global de módulo pelo mesmo motivo que `app.state.llm`:
+    global de módulo é estado COMPARTILHADO entre `create_app()`s do mesmo processo — os
+    testes vazariam orçamento uns para os outros e a suíte ficaria dependente de ordem.
+
+    Estado em MEMÓRIA do processo: com N réplicas de uvicorn o teto efetivo vira N×teto.
+    É aceitável para a topologia de hoje (um container) e não é o caso que decide nada —
+    o teto existe para cortar ordens de grandeza, não para ser exato. EMENDA: com mais de
+    uma réplica, o contador sobe para o Redis ou o `limit_req` do nginx assume a camada.
+    """
+    limite = getattr(request.app.state, "limite_login", None)
+    if limite is None:
+        limite = LimitePorIp(RelogioSistema())
+        request.app.state.limite_login = limite
+    return limite
+
+
 Servico = Annotated[ServicoIdentidade, Depends(get_servico_identidade)]
+Limite = Annotated[LimitePorIp, Depends(get_limite_login)]
 Tenant = Annotated[str, Depends(get_tenant)]
 Autenticado = Annotated[Usuario, Depends(get_current_user)]
 Admin = Annotated[Usuario, Depends(require_role("admin"))]
@@ -229,21 +295,41 @@ router = APIRouter(route_class=RotaAutenticacao, tags=["auth"])
 
 
 @router.post("/auth/login", response_model=EuOut)
-async def login(
-    payload: LoginEntrada, request: Request, resposta: Response, tenant: Tenant, servico: Servico
+def login(
+    payload: LoginEntrada,
+    request: Request,
+    resposta: Response,
+    tenant: Tenant,
+    servico: Servico,
+    limite: Limite,
 ) -> EuOut:
     """E-mail + senha → sessão (cookie httpOnly). Recusa SEMPRE 401 com o mesmo corpo.
 
+    `def` e não `async def`: ver `_POR_QUE_SINCRONO` no topo — esta rota hasheia.
+
     `ip`/`user_agent` entram na linha de `sessao` para a trilha por pessoa que o
     tratamento de PII real exige (§10.2) — não são usados para decidir acesso.
+
+    A ORDEM importa (frente 1): `consumir` vem ANTES de `autenticar`, porque o ponto do
+    limite é justamente não pagar o argon2 do request recusado. Depois, só o desfecho
+    alimenta a janela anti-spraying — recusa conta, acerto ZERA. Nenhuma dessas chamadas
+    olha o e-mail: o limite é por IP e não sabe (nem pode saber) que conta foi tentada,
+    senão ele mesmo viraria um oráculo de existência.
     """
-    token, conta = servico.autenticar(
-        tenant,
-        email=payload.email,
-        senha=payload.senha,
-        ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-    )
+    ip = ip_do_cliente(request)
+    limite.consumir(ip)  # LimiteExcedido → 429 + Retry-After (RotaAutenticacao)
+    try:
+        token, conta = servico.autenticar(
+            tenant,
+            email=payload.email,
+            senha=payload.senha,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except CredencialInvalida:
+        limite.registrar_falha(ip)
+        raise
+    limite.registrar_sucesso(ip)
     _gravar_cookie(resposta, token)
     return EuOut(
         id=conta.id,
@@ -285,7 +371,7 @@ async def eu(usuario: Autenticado) -> EuOut:
 
 
 @router.post("/auth/trocar-senha", response_model=EuOut)
-async def trocar_senha(
+def trocar_senha(
     payload: TrocaSenha,
     request: Request,
     resposta: Response,
@@ -293,6 +379,11 @@ async def trocar_senha(
     servico: Servico,
 ) -> EuOut:
     """Exige a senha ATUAL, aplica a política, limpa `senha_expirada` e rotaciona a sessão.
+
+    `def` e não `async def`: ver `_POR_QUE_SINCRONO` — esta rota paga TRÊS argon2
+    (confere a atual, confere que a nova é diferente, gera o hash novo), ~300 ms. Sem
+    limite por IP porque `Autenticado` já barrou o anônimo antes do corpo rodar: a
+    superfície anônima é só o `/auth/login`.
 
     A rotação revoga TODAS as sessões (inclusive a de quem está trocando) e emite uma
     nova: se a troca aconteceu porque a senha vazou, deixar os cookies antigos vivos
@@ -322,11 +413,13 @@ async def trocar_senha(
 
 
 @router.post("/auth/usuarios", status_code=201, response_model=UsuarioOut)
-async def criar_usuario(
+def criar_usuario(
     payload: UsuarioCriar, tenant: Tenant, servico: Servico, admin: Admin
 ) -> UsuarioOut:
     """Criação PELA APLICAÇÃO (não há e-mail de convite — o `SMTP_URL` do §3.1 nunca
-    teve consumidor). A conta nasce com senha provisória e `senha_expirada=True`."""
+    teve consumidor). A conta nasce com senha provisória e `senha_expirada=True`.
+
+    `def` e não `async def`: ver `_POR_QUE_SINCRONO` — gera hash argon2."""
     conta = servico.criar_usuario(
         tenant,
         email=payload.email,
@@ -353,7 +446,7 @@ async def desativar_usuario(
 
 
 @router.post("/auth/usuarios/{usuario_id}/resetar-senha", response_model=UsuarioOut)
-async def resetar_senha(
+def resetar_senha(
     usuario_id: uuid.UUID,
     payload: SenhaProvisoria,
     tenant: Tenant,
@@ -361,7 +454,9 @@ async def resetar_senha(
     admin: Admin,
 ) -> UsuarioOut:
     """Senha provisória nova + `senha_expirada=True` + sessões revogadas. É também o
-    caminho de destravar quem estourou as tentativas antes da janela vencer."""
+    caminho de destravar quem estourou as tentativas antes da janela vencer.
+
+    `def` e não `async def`: ver `_POR_QUE_SINCRONO` — gera hash argon2."""
     return _usuario_out(
         servico.resetar_senha(
             tenant, usuario_id, senha_provisoria=payload.senha_provisoria, ator=admin.email

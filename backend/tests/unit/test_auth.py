@@ -5,13 +5,24 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.auth import DEV_TOKENS, PAPEIS, Usuario, require_role
+from app.config import Settings
 
 TENANT = {"X-Tenant": "torre-movel"}
 _exige_analista_ou_lider = require_role("analista", "lider")
 
 
 @pytest.fixture()
-def client(app: FastAPI) -> TestClient:
+def client(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # TestClient CRU e ambiente FIXADO em dev: este arquivo é o unit do portador Bearer
+    # estático, e ele só existe em dev (§10.3). Como a suíte roda também com
+    # `APP_ENV=prod` (frente 3), o teste declara o ambiente de que precisa em vez de
+    # herdá-lo do processo — herdar era o que fazia estes três casos caírem em prod.
+    import app.auth as modulo_auth
+
+    monkeypatch.setattr(
+        modulo_auth, "get_settings", lambda: Settings(_env_file=None, app_env="dev")
+    )
+
     # Rota exclusiva de teste (não faz parte do contrato §8) para exercitar o RBAC.
     @app.get("/api/v1/_rbac-probe")
     async def _probe(user: Usuario = Depends(_exige_analista_ou_lider)) -> dict[str, str]:

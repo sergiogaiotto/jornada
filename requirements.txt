@@ -12,7 +12,7 @@ langgraph~=0.2
 langgraph-checkpoint-postgres~=2.0
 deepagents
 openai~=1.50
-httpx~=0.27
+httpx[http2]~=0.27
 tenacity~=9.0
 zeep~=4.2
 # numpy NÃO é opcional (emenda F01 — UAT #5 onda 1). O §6/M8-A1 promete que a mesma

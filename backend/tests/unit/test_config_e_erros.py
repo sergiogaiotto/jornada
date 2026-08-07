@@ -9,7 +9,10 @@ from app.config import Settings
 from app.errors import PROBLEM_CONTENT_TYPE
 
 
-def test_defaults_espelham_env_example() -> None:
+def test_defaults_espelham_env_example(ambiente_sem_config: None) -> None:
+    # `ambiente_sem_config`: `_env_file=None` desliga o ARQUIVO, não o `os.environ` — sem
+    # a limpeza, com a suíte rodando em `APP_ENV=prod` (frente 3) este teste mediria o
+    # ambiente do processo e não o default do código. Ver tests/conftest.py.
     s = Settings(_env_file=None)
     assert s.app_env == "dev"
     assert s.default_tenant == "torre-movel"
@@ -21,8 +24,12 @@ def test_defaults_espelham_env_example() -> None:
     assert s.langfuse_enabled is True  # §10.8
 
 
-def test_prod_com_secret_default_falha() -> None:
-    """§10.3: APP_SECRET obrigatório ≠ default em APP_ENV=prod (startup falha)."""
+def test_prod_com_secret_default_falha(ambiente_sem_config: None) -> None:
+    """§10.3: APP_SECRET obrigatório ≠ default em APP_ENV=prod (startup falha).
+
+    Sem `ambiente_sem_config` o `APP_SECRET` do processo entrava por baixo e o
+    fail-fast "passava" sem nunca ter sido exercitado — o teste do guarda-corpo
+    dependendo do ambiente que o guarda-corpo existe para não confiar."""
     with pytest.raises(ValidationError):
         Settings(_env_file=None, app_env="prod")
 

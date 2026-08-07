@@ -9,6 +9,7 @@ Portal: token `portal-dev` (link com token, sem login pleno — §8-M3).
 import json
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -124,12 +125,14 @@ def test_M3_A2(client: TestClient) -> None:
     )
     assert de_novo.status_code == 409
 
-    # RBAC: token de portal NÃO converte (converter exige login pleno analista|lider)
+    # RBAC: portador de portal NÃO converte (converter exige analista|lider). 403 e não
+    # 401 desde que o portador de portal é uma conta `solicitante` com sessão real — a
+    # recusa vem do PAPEL, que é a regra que existe em prod (ver tests/conftest.py).
     outro = _criar_pedido(client, CONTEUDO_COMPLETO)
     portal = client.post(
         f"/api/v1/pedidos/{outro['id']}/converter", json={}, headers=_h("portal-dev")
     )
-    assert portal.status_code == 401
+    assert portal.status_code == 403
 
 
 def test_M3_A3(client: TestClient, app: FastAPI) -> None:
@@ -340,10 +343,33 @@ def test_M3_B1(client: TestClient, tokens_outro_tenant: dict[str, str]) -> None:
     alheio = client.get(f"/api/v1/pedidos/{outro_tenant.json()['id']}", headers=_h("dev-analista"))
     assert alheio.status_code == 404
 
-    # RBAC: a lista é da APP (login pleno) — token de portal → 401
-    assert client.get("/api/v1/pedidos", headers=_h("portal-dev")).status_code == 401
+    # (o RBAC da lista virou aceite próprio, logo abaixo — ele mede uma coisa que este
+    # arquivo achava provada e não estava)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "BURACO ABERTO (frente 3 · corte de ambiente) — EMENDA SUGERIDA para §8-M3: "
+        "`GET /pedidos` e `GET /pedidos/{id}` dependem de `Autenticado` "
+        "(api/v1/intake.py), isto é, QUALQUER papel autenticado; a docstring da rota diz "
+        "'login pleno' e o aceite antigo parecia prová-lo, mas o 401 vinha do TIPO da "
+        "credencial: `portal-dev` era um token estático que `get_current_user` não "
+        "reconhecia. Em produção o solicitante é conta com sessão, e a fila de pedidos "
+        "do tenant inteiro — nome/área do solicitante e, no detalhe, o `conteudo` com "
+        "briefing de todo mundo — fica legível para ele. Correção: trocar `Autenticado` "
+        "por `require_role('analista','lider')` nas duas rotas de leitura. Fora dos "
+        "arquivos desta frente (api/v1/intake.py), por isso entra como xfail ESTRITO: "
+        "no dia em que a rota for corrigida este teste passa, o gate fica VERMELHO e "
+        "obriga a remover o marcador — nunca a esquecer o buraco."
+    ),
+)
+def test_M3_B1b_solicitante_nao_le_a_fila_de_pedidos_do_tenant(client: TestClient) -> None:
+    """A lista de pedidos é fila de trabalho da APP — solicitante não é operador dela."""
+    parcial = _criar_pedido(client, CONTEUDO_PARCIAL)
+    assert client.get("/api/v1/pedidos", headers=_h("portal-dev")).status_code == 403
     assert (
-        client.get(f"/api/v1/pedidos/{parcial['id']}", headers=_h("portal-dev")).status_code == 401
+        client.get(f"/api/v1/pedidos/{parcial['id']}", headers=_h("portal-dev")).status_code == 403
     )
 
 
@@ -376,14 +402,18 @@ def test_M3_B2(client: TestClient) -> None:
     assert reaberto.json()["faltantes"] == ["verba"]
     assert reaberto.json()["estado"] == "rascunho"
 
-    # RBAC: portal → 401; solicitante pleno não escreve → 403
+    # RBAC de escrita: nem o portador de PORTAL nem o `solicitante` pleno editam campos.
+    # Os dois dão 403 (e não 401 num deles) porque em prod os dois são a MESMA coisa —
+    # conta com papel `solicitante` e sessão; quem recusa é o PAPEL, não o tipo de
+    # credencial. O 401 do token estático `portal-dev` é aceite próprio, e por classe
+    # inteira, em test_prod_corte_de_ambiente.py.
     assert (
         client.patch(
             f"/api/v1/pedidos/{pedido['id']}/campos",
             json={"verba": "R$ 1"},
             headers=_h("portal-dev"),
         ).status_code
-        == 401
+        == 403
     )
     assert (
         client.patch(
@@ -470,12 +500,13 @@ def test_M3_B3(client: TestClient) -> None:
     assert negado.status_code == 409
     assert negado.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
 
-    # RBAC: token de portal não arquiva (401)
+    # RBAC: portador de portal não arquiva — 403 pelo PAPEL `solicitante` (ver a nota
+    # equivalente no B2; arquivar é ação de operador da app, analista|lider).
     assert (
         client.post(
             f"/api/v1/pedidos/{pedido['id']}/arquivar", headers=_h("portal-dev")
         ).status_code
-        == 401
+        == 403
     )
 
 

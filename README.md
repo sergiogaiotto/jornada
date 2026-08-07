@@ -159,6 +159,66 @@ Antes de processar PII real, o DPO precisa ler isto — um limite declarado é c
 | **`telemetry_event` guarda `contato_hash`, não o contato** | o purge apaga o pseudônimo; a chave que ligaria o hash à pessoa nunca esteve neste twin |
 | **O token de máquina purga o tenant que vier no `X-Tenant`** — a lista efetiva é `JORNADA_PURGE_TENANTS` (default `torre-movel`), lida pelo executor | onboardar um segundo tenant e esquecer a variável faz o purge desse tenant nunca rodar, e o vigia continua dizendo "em dia" porque o primeiro deu ok. A lista é ecoada no log e no carimbo de toda execução — confira ali |
 
+### Backup e restauração (§10.2) — instalados pelo deploy, e **provados**
+
+Até esta onda **não havia backup nenhum**. Os dados moram em dois volumes nomeados do Docker (`jornada_db-data`, `jornada_db-langfuse-data`) num único disco: um `docker volume rm` distraído, um `down -v` ou a morte do `/dev/sda1` levavam a base junto, sem volta.
+
+| Peça | Onde | O que faz |
+|---|---|---|
+| Instalação | `deploy/deploy.sh` → `/etc/cron.d/jornada-backup` | escreve o cron a cada deploy, gera a passphrase no `.env`, cria `/var/backups/jornada` (0700), logs e logrotate |
+| Execução | `scripts/backup_bancos.sh` | `pg_dump -Fc` dos DOIS bancos, cifrado com AES-256; `--status` e `--listar` |
+| **Prova** | `scripts/restaura_teste.sh` | restaura num container **descartável** e CONFERE; sem isto o resto é teatro |
+| Cifra | `JORNADA_BACKUP_PASSPHRASE` (≥32 chars) | gerada com `openssl rand -hex 32` pelo deploy, vive só no `.env` (0600). Entra no `openssl` por **file descriptor**, nunca por argv — esta VPS tem outros inquilinos em `ps aux` |
+
+```cron
+20 2 * * * root /opt/jornada/scripts/backup_bancos.sh        # antes do purge das 03:15
+10 4 * * 0 root /opt/jornada/scripts/restaura_teste.sh       # prova semanal
+40 9 * * * root /opt/jornada/scripts/backup_bancos.sh --status
+50 9 * * * root /opt/jornada/scripts/restaura_teste.sh --status
+15 9 * * * root /opt/jornada/scripts/cert_status.sh
+```
+
+O backup roda **às 02:20, antes do purge das 03:15**, de propósito: a cópia do dia registra o estado *anterior* à destruição por retenção. Invertido, um `retencao_dias` publicado errado viraria perda irreversível em 24h.
+
+**`pg_dump` e não cópia do volume**: copiar o diretório de dados de um Postgres vivo produz um arquivo que às vezes restaura — e a versão que não restaura só se descobre no dia do desastre. **Dump em arquivo temporário e não `pg_dump | openssl > arq`**: em pipeline o `$?` é o do último comando, então um `pg_dump` que morre no meio geraria um `.enc` bem-formado, de tamanho plausível, com meio dump dentro, e exit 0.
+
+**Backup não testado não é backup.** `restaura_teste.sh` sobe um Postgres novo (sem porta publicada, `--network none`, destruído no `trap`), restaura com `pg_restore --exit-on-error` e então **pergunta**: contagem de tabelas contra um piso, extensão `vector` presente, `alembic_version` preenchida, linhas em `os`/`usuario`/`politica_ia`, e um `join` real entre `os` e `os_thread`. A imagem descartável é `pgvector/pgvector:pg16` e **não** `postgres:16` — o banco usa a extensão `vector` (§7.4) e restaurar sem ela falha no `CREATE EXTENSION`. Esse detalhe só aparece quando se testa a restauração, e é a resposta curta para por que "temos `pg_dump` agendado" não é resposta para "temos backup?".
+
+Cada conferência foi verificada por **inversão** (o defeito foi introduzido e o script reprovou): imagem sem pgvector, dump `--schema-only`, arquivo corrompido em 1 byte, passphrase trocada, carimbo velho, carimbo OK com os arquivos apagados.
+
+```bash
+/opt/jornada/scripts/backup_bancos.sh --listar    # o que existe, tamanho e idade
+/opt/jornada/scripts/restaura_teste.sh            # ~2 min; não toca em produção
+/opt/jornada/scripts/restaura_teste.sh --status   # silêncio = provado nos últimos 8d
+journalctl -t jornada-restore-teste -p err --since '-30d'
+```
+
+#### O que este backup NÃO faz (limites declarados)
+
+| Limite | Consequência prática |
+|---|---|
+| **Uma cópia, um disco.** Sem `JORNADA_BACKUP_REMOTO` configurado, o backup mora no mesmo `/dev/sda1` do banco | protege contra `docker volume rm`, `down -v`, `DROP TABLE` e corrupção lógica; **não** protege contra perda do host. RPO honesto: 24h para erro lógico, **infinito** para perda de disco. O gancho de cópia remota (`scp`, `BatchMode`) está pronto — falta o destino, que é decisão de fornecedor e de dinheiro do dono |
+| **A chave está na mesma máquina** que gera o backup | protege a cópia que sai daqui e o descarte do disco; **não** protege contra quem obtiver root nesta VPS. A evolução é cifra assimétrica (`age -r`), com a privada fora do host — o preço é o teste de restauração deixar de rodar sozinho, e teste automático vale mais hoje |
+| **Não inclui o `.env` do servidor** (`APP_SECRET`, senhas) nem `pg_dumpall --globals` | restaurar do zero exige o `.env`, que por definição não pode entrar no repositório nem no backup cifrado pela chave que ele guarda. Guarde-o à parte, junto da passphrase |
+| **A passphrase é gerada no host e só existe lá** até alguém copiá-la para fora | o deploy avisa em voz alta na primeira vez. Ignorado o aviso, o dia do desastre encontra cópias cifradas e nenhuma chave |
+
+### TLS (§10.3) — `nginx/jornada.conf` + `deploy/tls_setup.sh`
+
+Com login real e PII, `http://vps:8050` significa senha e CPF em claro na rede. O certificado sai para **`vps.falagaiotto.com.br`**, que já resolve para o IP da VPS — `jornada.falagaiotto.com.br`, citado em versões anteriores deste README, **não existe no DNS** (NXDOMAIN), e o site que o esperava em `/etc/nginx/sites-enabled/` nunca serviu ninguém.
+
+O bloqueio real era outro: o **ufw do host está ativo e não tem regra para 80/443**, enquanto as portas publicadas pelo Docker (8050, 13000) atravessam o ufw pela `FORWARD`/`DOCKER-USER` e respondem à internet. Por isso `curl http://vps.falagaiotto.com.br/` dava *timeout* (pacote descartado) e `:8050` respondia normalmente. Que o bloqueio é local, e não da operadora, está provado no próprio `/var/log/ufw.log`: milhares de `[UFW BLOCK] ... DPT=80`/`DPT=443` vindos da internet — o pacote chega na `eth0` e morre no firewall. Logo, HTTP-01 funciona; não é preciso DNS-01.
+
+```bash
+bash /opt/jornada/deploy/tls_setup.sh --verificar   # não muda nada: diagnostica
+bash /opt/jornada/deploy/tls_setup.sh --aplicar     # ufw, dry-run staging, emite, liga
+```
+
+A emissão real é precedida de um **dry-run contra o staging** do Let's Encrypt: é a única etapa com limite de tentativas do outro lado (5 falhas/hora), e queimá-lo por uma porta fechada deixa o host sem TLS por uma hora.
+
+**Renovação** é do `certbot.timer` (já ativo neste host, 2×/dia). O que faltava é alguém **perceber quando ela para**: certificado vencido não degrada — o navegador recusa a conexão antes do primeiro byte e a plataforma inteira cai de uma vez. `scripts/cert_status.sh` (09:15 diário) faz duas perguntas independentes: quantos dias o **arquivo** ainda vale, e se o que a **:443 realmente serve** é esse arquivo — a divergência entre os dois é o modo de falha clássico do certbot que renova sem recarregar o nginx, invisível até o dia do vencimento.
+
+> **HSTS começa em `max-age=300`, de propósito.** HSTS é escopado por *host* e ignora a *porta* (RFC 6797 §8.3). Este host serve outros projetos em `:8080` e `:8010` sobre HTTP puro no mesmo nome — assim que um navegador vir o header, passa a forçar HTTPS neles também e os quebra, sem que limpar o cache resolva. Só suba para `31536000` depois de confirmar que nada mais neste hostname depende de HTTP, e nunca use `includeSubDomains` aqui.
+
 ## Estrutura do repositório
 
 ```
@@ -167,8 +227,13 @@ Antes de processar PII real, o DPO precisa ler isto — um limite declarado é c
 ├── docs/UAT-VPS-2026-08-05.md# UAT via UI: 10 use cases, 18 achados, reteste
 ├── docker-compose.yml        # dev: db(pgvector), api, mocks, mailpit, langfuse
 ├── docker-compose.prod.yml   # demo VPS: web(nginx+SPA):8050, api, mocks, langfuse:13000
-├── deploy/deploy.sh          # deploy por git clone/reset na VPS + cron do purge (§10.4)
+├── deploy/deploy.sh          # deploy por git clone/reset na VPS + crons do purge e do backup
+├── deploy/tls_setup.sh       # TLS (§10.3): ufw, certbot no hostname existente, nginx
+├── nginx/jornada.conf        # site do nginx do HOST: 443 → 127.0.0.1:8050 (web → api)
 ├── scripts/purge_retencao.sh # executor do purge chamado pelo cron (dry-run default)
+├── scripts/backup_bancos.sh  # pg_dump cifrado dos 2 bancos + retenção (§10.2)
+├── scripts/restaura_teste.sh # restaura em container descartável e CONFERE — a prova
+├── scripts/cert_status.sh    # vigia do vencimento do certificado (arquivo vs :443)
 ├── backend/
 │   ├── domain/               # puro, sem I/O (campanha, jornada/JGC + XSD de export, simulação…)
 │   ├── application/          # ports (Protocols) + services (casos de uso)
@@ -210,7 +275,7 @@ Sem o hub LLM acessível, os agentes degradam para **503 + modo manual** (SDD §
 curl -fsSL https://raw.githubusercontent.com/sergiogaiotto/jornada/main/deploy/deploy.sh | bash -s -- --local
 ```
 
-Sobe `web` (nginx + SPA, porta **8050**), `api`, mocks e Langfuse (**:13000**, signup desabilitado; segredos gerados na própria VPS, fora do git). Em produção contínua, o job `deploy` do CI faz isso automaticamente a cada push verde na main (chave SSH dedicada em secret, smoke pós-deploy). HTTPS: nginx + certbot prontos, aguardando o DNS `jornada.falagaiotto.com.br → 187.77.46.137`.
+Sobe `web` (nginx + SPA, porta **8050**), `api`, mocks e Langfuse (**:13000**, signup desabilitado; segredos gerados na própria VPS, fora do git). Em produção contínua, o job `deploy` do CI faz isso automaticamente a cada push verde na main (chave SSH dedicada em secret, smoke pós-deploy). HTTPS: ver "TLS (§10.3)" acima — o certificado sai para `vps.falagaiotto.com.br`, que já resolve; a frase anterior ("aguardando o DNS `jornada.falagaiotto.com.br`") descrevia uma espera por um nome que nunca foi criado, e o que de fato faltava era abrir 80/443 no ufw.
 
 ## Glossário do vocabulário canônico
 

@@ -125,9 +125,34 @@ _ROTAS_DE_LEITURA = [
     "/api/v1/pedidos",
     "/api/v1/policies",
     "/api/v1/policies/drift",
-    "/api/v1/atelie/agentes",
+    # Era `/api/v1/atelie/agentes` — rota que NÃO EXISTE: o router do Ateliê entra sem
+    # prefixo (`api_router.include_router(atelie.router)`), então o caminho real é
+    # `/api/v1/agentes`. O erro passou cinco meses invisível porque o 403 do middleware
+    # é emitido ANTES do roteamento: o aceite recebia o 403 que esperava sem nunca
+    # tocar rota nenhuma. Aceite que passa por não enxergar é o que esta frente veio
+    # caçar — daí o guarda-corpo `test_E05_A6b` logo abaixo.
+    "/api/v1/agentes",
     "/api/v1/auditoria",
 ]
+
+
+def test_E05_A6b_a_lista_de_rotas_do_aceite_existe_de_verdade(app: FastAPI) -> None:
+    """Toda rota de `_ROTAS_DE_LEITURA` tem de estar no contrato OpenAPI.
+
+    Sem isto, um caminho digitado errado (ou uma rota renomeada) continua "coberto":
+    o middleware recusa o header forjado antes de descobrir que a rota não existe, e o
+    parametrize verde vira prova de nada. Mesmo espírito da emenda F01 no A7.
+
+    As chaves de `openapi()["paths"]` já vêm com o prefixo (`/api/v1/os`), que é a mesma
+    forma escrita em `_ROTAS_DE_LEITURA`: a comparação é DIRETA. A primeira versão deste
+    guarda-corpo cortava o `/api/v1` de um lado só e dava todas as rotas por ausentes —
+    um guarda-corpo que nasceu vermelho, com a piada pronta de ser exatamente o defeito
+    que ele existe para pegar. A asserção abaixo é a que precisa continuar honesta:
+    trocar `/api/v1/agentes` por `/api/v1/atelie/agentes` na lista tem de deixá-la
+    vermelha (inversão conferida)."""
+    caminhos = set(app.openapi()["paths"])
+    ausentes = [rota for rota in _ROTAS_DE_LEITURA if rota not in caminhos]
+    assert not ausentes, f"aceite A6 aponta para rota inexistente: {ausentes}"
 
 
 @pytest.mark.parametrize("rota", _ROTAS_DE_LEITURA)

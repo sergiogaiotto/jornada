@@ -23,7 +23,8 @@ from adapters.llm.fake import LLMFake
 from adapters.observabilidade.langfuse import TracerLangfuse
 from adapters.persistence.memoria import RepositorioOsMemoria
 from app.config import Settings
-from app.main import create_app, ping_db
+from app.main import create_app, ping_db, ping_llm
+from tests.conftest import ClienteJornada
 
 TENANT = "torre-movel"
 HEADERS = {"X-Tenant": TENANT, "Authorization": "Bearer dev-analista"}
@@ -35,6 +36,7 @@ def app_demo() -> FastAPI:
     # e o hub real jamais é tocado em teste (§1.3.5).
     application = create_app(demo=True, embedding=EmbeddingFake())
     application.dependency_overrides[ping_db] = lambda: "ok"
+    application.dependency_overrides[ping_llm] = lambda: "skip"  # §1.3.5: zero rede em prod
     application.state.llm = LLMFake()  # §1.3.5 — hub real jamais em teste
     application.state.tracer = TracerLangfuse(Settings(_env_file=None, langfuse_enabled=False))
     return application
@@ -42,7 +44,10 @@ def app_demo() -> FastAPI:
 
 @pytest.fixture()
 def client(app_demo: FastAPI) -> Iterator[TestClient]:
-    with TestClient(app_demo, raise_server_exceptions=False) as test_client:
+    # `ClienteJornada` (e não `TestClient` cru): estes aceites também precisam valer com
+    # `APP_ENV=prod`, onde `Bearer dev-analista` não existe — a credencial vira sessão
+    # real. Ver o cabeçalho de tests/conftest.py.
+    with ClienteJornada(app_demo, raise_server_exceptions=False) as test_client:
         yield test_client
 
 

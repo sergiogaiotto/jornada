@@ -11,6 +11,13 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Arma o gate de deriva de dependências (emenda F04): com esta variável,
+    # `test_ambiente_instalado_e_exatamente_o_do_lock` sai do skip e confere se o que
+    # está INSTALADO neste runner é exatamente o que `requirements.lock` manda. Comparar
+    # lock com requirements prova só que os ARQUIVOS combinam; o que cegou o aceite
+    # `E05_A7` (emenda F01) foi o AMBIENTE ter mudado sozinho.
+    env:
+      JORNADA_DEPS_DO_LOCK: "1"
     services:
       postgres:                    # A7 parte 1: Postgres real p/ pytest -m integration
         image: pgvector/pgvector:pg16
@@ -32,10 +39,15 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install deps
+        # Do LOCK, não da declaração (F04): `requirements.txt` traz faixas `~=X.Y` que
+        # resolvem na data do run, e o CI passava a rodar contra bibliotecas que ninguém
+        # escolheu. `pytest-cov` é o único extra e entra COM `-c requirements.lock`: sem a
+        # constraint, o resolvedor pode subir o próprio pytest para satisfazê-lo e o
+        # ambiente sai do lock pela porta dos fundos.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest-cov  # somente CI (gate de cobertura §13; não consta do §3.2)
+          pip install -r requirements.lock
+          pip install -c requirements.lock pytest-cov  # somente CI (§13; não consta do §3.2)
       - name: Ruff (lint)
         run: ruff check .
       - name: Ruff (format check)

@@ -11,6 +11,12 @@
  * 2. **A ORIGEM é a primeira coisa que se lê.** `seed` = default de fábrica, ninguém
  *    publicou; `policy_versao` = alguém assinou, e o nome está na tela. A pergunta que
  *    uma auditoria faz é essa, e ela não pode depender de abrir o banco.
+ * 3. **Cada categoria de PII declara a NATUREZA do detector e os seus LIMITES** (F04).
+ *    `cpf` é detectado pela FORMA; `nome` é detectado pelo CONTEXTO, com buracos
+ *    conhecidos. Mostrar as duas com o mesmo seletor e a mesma firmeza é o achado 8 um
+ *    nível mais fundo: o parâmetro governa, mas o DPO assina acreditando numa cobertura
+ *    que não existe. Os limites vêm do servidor (`vocabulario.categorias_pii`), onde
+ *    moram junto do detector — escritos aqui, envelheceriam na primeira mexida nele.
  *
  * O formulário não redigita vocabulário: categorias de PII, ações, ações automatizáveis
  * e o roster de agentes vêm do `vocabulario` da própria resposta. Lista mantida no
@@ -49,8 +55,26 @@ interface Conteudo {
   modelos_permitidos: Record<string, string[]>;
 }
 
+/** Um buraco declarado do detector (§10.2 · F04) — texto do DPO + exemplo que vaza. */
+interface LimiteDeteccao {
+  texto: string;
+  exemplo: string;
+  /** Preenchida quando o buraco é de CHAVE de formulário: o exemplo é o VALOR. */
+  chave: string;
+}
+
+interface CategoriaPii {
+  chave: string;
+  rotulo: string;
+  natureza: string;
+  natureza_rotulo: string;
+  natureza_texto: string;
+  exemplo_detectado: string;
+  limites: LimiteDeteccao[];
+}
+
 interface Vocabulario {
-  categorias_pii: { chave: string; rotulo: string }[];
+  categorias_pii: CategoriaPii[];
   acoes_dado: string[];
   acoes_via_ai: string[];
   agentes: Record<string, string[]>;
@@ -89,6 +113,13 @@ const CHAVE = ["ia-responsavel", "politicas"] as const;
 
 /** `origem` do backend — `seed` é o default de fábrica (ninguém publicou). */
 const ORIGEM_SEED = "seed";
+
+/**
+ * `natureza` da detecção (§10.2 · F04) — vem do domínio junto do detector. Só o valor
+ * de CONTEXTO é comparado aqui, e só para escolher a cor do selo: o texto que o DPO lê
+ * (`natureza_rotulo`, `natureza_texto`, `limites`) é servido pronto pelo backend.
+ */
+const NATUREZA_CONTEXTO = "contexto";
 
 function dataCurta(iso: string | null): string {
   if (!iso) return "—";
@@ -154,6 +185,86 @@ function BlocoDeEfeito({ bloco }: { bloco: BlocoEfeito }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Uma linha do seletor de PII — com a NATUREZA da detecção ao lado da ação (F04).
+ *
+ * Antes desta frente as onze categorias apareciam na mesma linha, com o mesmo seletor,
+ * como se `nome: bloquear` fechasse a porta do mesmo jeito que `cpf: bloquear`. Não
+ * fecha: CPF é detectado pela FORMA (o formato basta, o dígito verificador confirma) e
+ * nome é detectado pelo CONTEXTO (depende de como o dado aparece escrito, e tem buracos
+ * conhecidos). É o achado 8 um nível mais fundo — o parâmetro muda comportamento, mas o
+ * DPO assina acreditando numa cobertura que não existe.
+ *
+ * Nada aqui é texto do cliente: natureza, exemplos e limites descem do
+ * `vocabulario.categorias_pii` do backend, onde moram junto do detector e onde um teste
+ * executa cada exemplo contra ele a cada CI. Escrito aqui, envelheceria na primeira
+ * mexida em `mascarar.py` — e a tela passaria a mentir na direção contrária.
+ */
+function LinhaCategoria({
+  categoria,
+  acoesDisponiveis,
+  acaoAtual,
+  acaoDeFabrica,
+  onMudar,
+}: {
+  categoria: CategoriaPii;
+  acoesDisponiveis: string[];
+  acaoAtual: string;
+  acaoDeFabrica: string | undefined;
+  onMudar: (acao: string) => void;
+}) {
+  const porContexto = categoria.natureza === NATUREZA_CONTEXTO;
+  const limites = categoria.limites;
+  return (
+    <div className="flex flex-col gap-1 border-t border-linesoft py-1.5 first:border-t-0">
+      <label className="flex flex-wrap items-center gap-2 text-[12.5px]">
+        <span className="w-56 text-ink2">{categoria.rotulo}</span>
+        <select
+          className="rounded border border-line px-2 py-1 text-[12.5px]"
+          value={acaoAtual}
+          onChange={(e) => onMudar(e.target.value)}
+        >
+          {acoesDisponiveis.map((acao) => (
+            <option key={acao} value={acao}>
+              {acao === "bloquear" ? "bloquear (a chamada não acontece)" : "mascarar"}
+            </option>
+          ))}
+        </select>
+        {/* A natureza fica ao LADO do seletor, não numa nota de rodapé: é ela que diz
+            quanto vale a ação que se acabou de escolher. */}
+        <span className={porContexto ? "mchip-w" : "mchip-n"}>{categoria.natureza_rotulo}</span>
+        {acaoDeFabrica === acaoAtual && <span className="mchip-n">de fábrica</span>}
+      </label>
+
+      <details className="ml-2 text-[12px] text-muted">
+        <summary className="cursor-pointer">
+          {limites.length > 0
+            ? `Cobertura: ${limites.length} caso(s) em que ${categoria.rotulo} sai em claro`
+            : `Como ${categoria.rotulo} é reconhecido`}
+        </summary>
+        <div className="mt-1 flex flex-col gap-1.5 pl-3">
+          <div>{categoria.natureza_texto}</div>
+          <div>
+            <b className="text-ink2">Detectado hoje:</b>{" "}
+            <code className="rounded bg-linesoft/40 px-1">{categoria.exemplo_detectado}</code>
+          </div>
+          {limites.map((limite) => (
+            <div key={limite.texto} className="border-l-2 border-warn-line pl-2">
+              <div className="text-ink">{limite.texto}</div>
+              <div className="mt-0.5">
+                <b className="text-ink2">Sai em claro:</b>{" "}
+                <code className="rounded bg-linesoft/40 px-1">
+                  {limite.chave ? `campo "${limite.chave}": "${limite.exemplo}"` : limite.exemplo}
+                </code>
+              </div>
+            </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
@@ -224,34 +335,25 @@ function Formulario({ vigente }: { vigente: Vigente }) {
         </legend>
         <div className="text-[12px] text-muted">
           Não existe “permitir”: mascarar é o piso de contrato (§10.2) e a política só aperta.
-          Conservador de fábrica: tudo <b>mascarar</b>.
+          Conservador de fábrica: tudo <b>mascarar</b>. A ação escolhida só age sobre o que o
+          detector ENCONTRA — por isso cada categoria abre a própria cobertura aqui embaixo.
         </div>
         {vigente.vocabulario.categorias_pii.map((categoria) => (
-          <label key={categoria.chave} className="flex items-center gap-2 text-[12.5px]">
-            <span className="w-56 text-ink2">{categoria.rotulo}</span>
-            <select
-              className="rounded border border-line px-2 py-1 text-[12.5px]"
-              value={rascunho.dados_llm.acoes[categoria.chave] ?? "mascarar"}
-              onChange={(e) =>
-                setRascunho((atual) => ({
-                  ...atual,
-                  dados_llm: {
-                    acoes: { ...atual.dados_llm.acoes, [categoria.chave]: e.target.value },
-                  },
-                }))
-              }
-            >
-              {vigente.vocabulario.acoes_dado.map((acao) => (
-                <option key={acao} value={acao}>
-                  {acao === "bloquear" ? "bloquear (a chamada não acontece)" : "mascarar"}
-                </option>
-              ))}
-            </select>
-            {conservador.dados_llm.acoes[categoria.chave] ===
-              rascunho.dados_llm.acoes[categoria.chave] && (
-              <span className="mchip-n">de fábrica</span>
-            )}
-          </label>
+          <LinhaCategoria
+            key={categoria.chave}
+            categoria={categoria}
+            acoesDisponiveis={vigente.vocabulario.acoes_dado}
+            acaoAtual={rascunho.dados_llm.acoes[categoria.chave] ?? "mascarar"}
+            acaoDeFabrica={conservador.dados_llm.acoes[categoria.chave]}
+            onMudar={(acao) =>
+              setRascunho((atual) => ({
+                ...atual,
+                dados_llm: {
+                  acoes: { ...atual.dados_llm.acoes, [categoria.chave]: acao },
+                },
+              }))
+            }
+          />
         ))}
       </fieldset>
 

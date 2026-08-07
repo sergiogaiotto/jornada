@@ -145,7 +145,9 @@ def test_F04_token_errado_nao_passa_e_o_caminho_humano_fica_intacto(
     assert client.post("/api/v1/admin/purge", headers=_h("f4" * 31 + "00")).status_code == 401
     # analista continua sem poder destruir dado; dpo continua podendo
     assert client.post("/api/v1/admin/purge", headers=_h("dev-analista")).status_code == 403
-    assert client.post("/api/v1/admin/purge", headers=_h("portal-dev")).status_code == 401
+    # 403 (e não 401): o portador de portal é `solicitante` com sessão real — quem barra
+    # é o papel, não o tipo da credencial. Ver a nota longa em test_D01_purge.py.
+    assert client.post("/api/v1/admin/purge", headers=_h("portal-dev")).status_code == 403
     assert client.post("/api/v1/admin/purge", headers=_h("dev-dpo")).status_code == 200
 
 

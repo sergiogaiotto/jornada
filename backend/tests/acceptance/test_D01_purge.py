@@ -182,8 +182,13 @@ def test_D01_purge_e_do_tenant_e_exige_dpo(
     )
 
     assert client.post("/api/v1/admin/purge", headers=_h("dev-analista")).status_code == 403
-    # token de PORTAL nem chega ao RBAC: destruir dado exige login pleno (401, não 403)
-    assert client.post("/api/v1/admin/purge", headers=_h("portal-dev")).status_code == 401
+    # Portador de PORTAL (papel `solicitante`) também não destrói dado: 403 no RBAC.
+    # Era 401 enquanto `portal-dev` era um token estático que `get_current_user` nem
+    # reconhecia — 401 vinha do TIPO da credencial, não de regra de autorização nenhuma.
+    # Em produção o solicitante é uma conta com sessão de verdade, e quem barra passa a
+    # ser o papel: `require_role("dpo")`. Fail-closed dos dois jeitos, mas agora a recusa
+    # é a que existe em prod (ver o cabeçalho de tests/conftest.py).
+    assert client.post("/api/v1/admin/purge", headers=_h("portal-dev")).status_code == 403
     valeu = client.post("/api/v1/admin/purge?aplicar=true", headers=_h("dev-admin"))
     assert valeu.status_code == 200, valeu.text
 
