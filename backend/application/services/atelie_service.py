@@ -86,6 +86,9 @@ class _LedgerInvocacoes(Protocol):
 
     def adicionar_invocacao(self, invocacao: Invocacao) -> None: ...
 
+    # J02: gasto MEDIDO do teto de tokens (NULL conta 0 — régua do I04).
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int: ...
+
 
 class ServicoAtelie:
     def __init__(
@@ -247,7 +250,13 @@ class ServicoAtelie:
                 f"Agente {agente.nome!r} sem golden dataset (`harness_case` §4.1) — "
                 "harness exige casos (seeds §11.4: 3 por agente-chave)."
             )
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
+        portao = portao_ia.de(  # política PUBLICADA (§10.2) + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(
+                cast(_LedgerInvocacoes, self._repo), self._relogio, tenant_id
+            ),
+        )
         perfil = str(skill.execution_profile.get("modelo_perfil") or "20b")
         # §10.2 (C02): o corpo da skill é texto DIGITADO na tela do T16 e vira o system
         # prompt — sanear uma vez aqui cobre os N casos do golden dataset.
@@ -432,7 +441,13 @@ class ServicoAtelie:
         em claro no prompt.
         """
         candidata, agente = self._skill_do_tenant(tenant_id, skill_id)
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
+        portao = portao_ia.de(  # política PUBLICADA (§10.2) + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(
+                cast(_LedgerInvocacoes, self._repo), self._relogio, tenant_id
+            ),
+        )
         # §10.2 (C02): a `entrada` é o corpo do POST — texto que alguém digitou na tela.
         # Saneada UMA vez e usada nos dois lados: lado a lado só é comparação se as duas
         # versões receberem exatamente o mesmo texto.

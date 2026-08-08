@@ -50,6 +50,7 @@ from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento import apuracao
 from domain.experimento.modelos import Experimento, experimento_travado
 from domain.governanca.modelos import Snapshot
+from domain.intake.janela import janela_oferta_dias
 from domain.jornada import taximetro
 from domain.jornada.canonico import hash_jgc, normalizar_grafo
 from domain.jornada.diff import diff_grafos
@@ -197,7 +198,11 @@ class ServicoOtimizacao(_Base):
         # aqui, direto para o prompt e para o ledger. Sem `sanear`, um CPF digitado na
         # justificativa saía da plataforma em claro — e a política do DPO que mandava
         # BLOQUEAR cartão/CPF não governava esta rota.
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         sinais = [
             portao.sanear(a.texto)
             for a in self._repo.listar_aprendizados(os_id=os_.id, status="sinal")
@@ -236,12 +241,14 @@ class ServicoOtimizacao(_Base):
         parametros = (base.simulacao or {}).get("parametros") or {}
         criadas: list[PropostaOtimizacao] = []
         avisos: list[dict[str, Any]] = []
+        janela_dias = janela_oferta_dias(os_.briefing)  # J04: mesma régua do save/M7
         for bruta in saida.propostas:
             grafo = _normalizar_meta(bruta.grafo, os_)
             erros = validar_grafo(
                 grafo,
                 experimento_travado=experimento_travado(experimento),
                 politica=politica,
+                janela_oferta_dias=janela_dias,
             )
             if erros:  # candidata inválida é DESCARTADA com evidência (nada é salvo)
                 avisos.append({"titulo": bruta.titulo, "descartada_por": erros})
@@ -299,6 +306,7 @@ class ServicoOtimizacao(_Base):
             proposta.grafo_proposto,
             experimento_travado=experimento_travado(experimento),
             politica=politica,
+            janela_oferta_dias=janela_oferta_dias(os_.briefing),  # J04 — mesma régua
         )
         if erros:
             raise GrafoInvalido(erros)

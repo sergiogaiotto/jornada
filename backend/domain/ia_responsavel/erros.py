@@ -56,3 +56,18 @@ class ModeloNaoPermitido(ErroDominio):
         super().__init__(motivo)
         self.agente = agente
         self.perfil = perfil
+
+
+class TetoDeTokensExcedido(ErroDominio):
+    """O gasto MEDIDO do tenant no dia atingiu `teto_tokens.tokens_por_dia` (J02): a
+    chamada ao modelo NÃO foi feita — recusada ANTES de custar, como o 429 do limite
+    de login (a requisição está correta e autorizada; o orçamento é que acabou).
+
+    Semântica gate-on-entry, declarada: a chamada que COMEÇA abaixo do teto completa
+    (o custo dela só é conhecido depois); a próxima é recusada. O reset é a virada do
+    dia UTC."""
+
+    def __init__(self, motivo: str, *, gasto: int, teto: int) -> None:
+        super().__init__(motivo)
+        self.gasto = gasto
+        self.teto = teto

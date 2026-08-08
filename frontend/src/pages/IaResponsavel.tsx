@@ -53,6 +53,9 @@ interface Conteudo {
   retencao: { reter_prompt: boolean; reter_resposta: boolean; dias_trace: number };
   decisao_automatizada: { pode_aplicar_sozinho: string[] };
   modelos_permitidos: Record<string, string[]>;
+  /** (d) J02 — opcional: política publicada antes da onda 6 não tem o bloco;
+   * ausente/null = sem teto (o comportamento de sempre). */
+  teto_tokens?: { tokens_por_dia: number | null };
 }
 
 /** Um buraco declarado do detector (§10.2 · F04) — texto do DPO + exemplo que vaza. */
@@ -489,6 +492,39 @@ function Formulario({ vigente }: { vigente: Vigente }) {
             </div>
           ))}
         </div>
+      </fieldset>
+
+      {/* (d) teto de consumo — J02 */}
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="text-[12.5px] font-semibold text-ink2">
+          Teto de consumo de tokens (por tenant, por dia UTC)
+        </legend>
+        <div className="text-[12px] text-muted">
+          Vazio = sem teto (o comportamento de sempre). Com teto, a chamada que encontrar o
+          gasto do dia no limite é recusada ANTES de custar (429); o orçamento reinicia à
+          meia-noite UTC. Limite declarado: o teto governa o gasto <b>medido</b> — linha de
+          ledger sem usage do provedor conta 0.
+        </div>
+        <label className="flex items-center gap-2 text-[12.5px]">
+          <span className="w-56 text-ink2">Tokens por dia</span>
+          <input
+            type="number"
+            min={1}
+            className="w-32 rounded border border-line px-2 py-1 text-[12.5px]"
+            value={rascunho.teto_tokens?.tokens_por_dia ?? ""}
+            onChange={(e) =>
+              setRascunho((a) => ({
+                ...a,
+                teto_tokens: {
+                  tokens_por_dia: e.target.value === "" ? null : Number(e.target.value),
+                },
+              }))
+            }
+          />
+          <span className="text-[12px] text-muted">
+            de fábrica: {conservador.teto_tokens?.tokens_por_dia ?? "sem teto"}
+          </span>
+        </label>
       </fieldset>
 
       <label className="flex flex-col gap-1 text-[12.5px]">

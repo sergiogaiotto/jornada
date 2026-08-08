@@ -1013,6 +1013,47 @@ export interface DryRunOut {
   avisos: string[];
 }
 
+/** Detalhe do ledger `invocacao` embutido no evento via_ai (GET /auditoria — §8-M12).
+ * `tokens`/`latencia_ms` são `number | null` por CONTRATO (I04): null = o provedor não
+ * mandou usage — ausência de medida, exibida como "—", jamais como 0. */
+export interface InvocacaoDetalheOut {
+  invocacao_id: string;
+  os_id: string | null;
+  agente_id: string | null;
+  agente: string | null;
+  skill_versao: string | null;
+  usuario_portador: string;
+  // J05: conteúdo do Art. 20 — objeto/null para dpo|lider|admin; string de redação
+  // ("[restrito ...]") para os demais papéis. As métricas (tokens/latência) sempre vêm.
+  input: Record<string, unknown> | string | null;
+  output: Record<string, unknown> | string | null;
+  evidencias: unknown[] | string;
+  judge: Record<string, unknown> | string | null;
+  aceito_por: string | null;
+  aceito_em: string | null;
+  tokens: number | null;
+  latencia_ms: number | null;
+  created_at: string | null;
+}
+
+export interface EventoAuditoriaOut {
+  id: number;
+  tipo: string;
+  os_id: string | null;
+  actor: string | null;
+  via_ai: boolean;
+  payload: Record<string, unknown>;
+  created_at: string | null;
+  invocacao?: InvocacaoDetalheOut | null;
+}
+
+export interface AuditoriaOut {
+  eventos: EventoAuditoriaOut[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ------------------------------------------------------------------ helpers
 /** Normaliza a entrada de campo do briefing para `{valor, inferido}`. */
 export function campoBriefing(entrada: CampoBriefing | unknown): CampoBriefing {

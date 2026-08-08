@@ -213,9 +213,14 @@ class ServicoPlataforma:
         via_ai: bool | None = None,
         limit: int = 50,
         offset: int = 0,
+        incluir_conteudo: bool = True,
     ) -> dict[str, Any]:
         """Trilha de auditoria (outbox §2.3) com filtros §8-M12: tipo/agente/OS (+
-        via_ai); evento via_ai carrega o detalhe COMPLETO do ledger `invocacao`."""
+        via_ai); evento via_ai carrega o detalhe do ledger `invocacao`.
+
+        `incluir_conteudo` (J05): quando False, o detalhe sai SEM input/output/judge/
+        evidências (Art. 20 — só dpo|lider|admin veem o conteúdo, o mesmo portão do
+        reconstruir); métricas operacionais (agente, tokens, latência) seguem."""
         eventos = [
             e
             for e in self._repo.listar_eventos(os_id=os_id, tipo=tipo)
@@ -240,7 +245,9 @@ class ServicoPlataforma:
             }
             invocacao = invocacoes.get(str(evento.payload.get("invocacao_id") or ""))
             if evento.via_ai and invocacao is not None:  # o "clicável" da T16
-                item["invocacao"] = _invocacao_out(invocacao, nomes)
+                item["invocacao"] = _invocacao_out(
+                    invocacao, nomes, incluir_conteudo=incluir_conteudo
+                )
             saida.append(item)
         return {"eventos": saida, "total": total, "limit": limit, "offset": offset}
 
@@ -305,9 +312,17 @@ def _policy_out(policy: PolicyVersao) -> dict[str, Any]:
     }
 
 
-def _invocacao_out(invocacao: Invocacao, nomes: dict[uuid.UUID, str]) -> dict[str, Any]:
-    """Detalhe COMPLETO do ledger (§4.1 `invocacao`) — input/evidências/output/judge
-    exatamente como gravados na época (Art. 20)."""
+_RESTRITO = "[restrito ao portão do Art. 20 — dpo|lider]"
+
+
+def _invocacao_out(
+    invocacao: Invocacao, nomes: dict[uuid.UUID, str], *, incluir_conteudo: bool = True
+) -> dict[str, Any]:
+    """Detalhe do ledger (§4.1 `invocacao`). Com `incluir_conteudo`, input/evidências/
+    output/judge exatamente como gravados na época (Art. 20 — o `reconstruir` sempre
+    inclui). Sem ele (J05: papel que não pode reconstruir), o CONTEÚDO é redigido e só
+    as métricas operacionais + a trilha permanecem — o prompt/resposta não vaza pela
+    lista de auditoria."""
     return {
         "invocacao_id": str(invocacao.id),
         "os_id": str(invocacao.os_id) if invocacao.os_id else None,
@@ -315,10 +330,10 @@ def _invocacao_out(invocacao: Invocacao, nomes: dict[uuid.UUID, str]) -> dict[st
         "agente": nomes.get(invocacao.agente_id) if invocacao.agente_id else None,
         "skill_versao": invocacao.skill_versao,
         "usuario_portador": str(invocacao.usuario_portador),
-        "input": invocacao.input,
-        "evidencias": invocacao.evidencias,
-        "output": invocacao.output,
-        "judge": invocacao.judge,
+        "input": invocacao.input if incluir_conteudo else _RESTRITO,
+        "evidencias": invocacao.evidencias if incluir_conteudo else _RESTRITO,
+        "output": invocacao.output if incluir_conteudo else _RESTRITO,
+        "judge": invocacao.judge if incluir_conteudo else _RESTRITO,
         "aceito_por": str(invocacao.aceito_por) if invocacao.aceito_por else None,
         "aceito_em": invocacao.aceito_em.isoformat() if invocacao.aceito_em else None,
         "tokens": invocacao.tokens,

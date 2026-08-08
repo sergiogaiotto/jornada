@@ -7,6 +7,7 @@ demais (mesma instância por app — tipagem estrutural).
 """
 
 import uuid
+from datetime import datetime
 from typing import Protocol
 
 from domain.agentes.modelos import Invocacao
@@ -38,5 +39,8 @@ class RepositorioInsight(Protocol):
 
     # --- Ledger via_ai (`invocacao` §4.1) + outbox (§2.3) ---
     def adicionar_invocacao(self, invocacao: Invocacao) -> None: ...
+
+    # J02: gasto MEDIDO do teto de tokens (NULL conta 0 — régua do I04).
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int: ...
 
     def adicionar_evento(self, evento: EventoDominio) -> None: ...

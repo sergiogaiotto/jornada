@@ -25,11 +25,12 @@ Um teste por parâmetro fiado:
 * (a) `dados_llm`        → a chamada ao modelo NÃO acontece  (`test_a_*`)
 * (b) `retencao`         → o texto some do ledger na GRAVAÇÃO (`test_b_*`)
 * (c) `decisao_automatizada` → o twin passa a aplicar sozinho (`test_c_*`)
+* (d) `teto_tokens`      → o orçamento do dia recusa a chamada seguinte (`test_d_*` — J02)
 * (f) `modelos_permitidos`   → o perfil do roster é recusado  (`test_f_*`)
 
-`teto_tokens` e `rotulo_ia` não têm teste aqui porque não têm enforcement — e é por
-isso que `politica.CAMPOS_CONTEUDO` os REJEITA. A ausência deles neste arquivo é o
-mesmo fato que a rejeição deles lá.
+`rotulo_ia` não tem teste aqui porque não tem enforcement — e é por isso que
+`politica.CAMPOS_CONTEUDO` o REJEITA. A ausência dele neste arquivo é o mesmo fato que
+a rejeição dele lá (a régua que fez `teto_tokens` esperar da onda 3 até a J02).
 """
 
 import json
@@ -791,6 +792,81 @@ def test_f_restringir_um_agente_nao_derruba_os_outros(client: TestClient, app: F
     app.state.llm = LLMFake(resposta=_resposta_flow(_grafo(os_["codigo"])))
     gerada = client.post(f"/api/v1/os/{os_['id']}/jornada/gerar", headers=_h())
     assert gerada.status_code == 201, gerada.text
+
+
+# ============================================================ (d) teto de tokens (J02)
+def test_d_teto_de_tokens_publicado_recusa_a_chamada_seguinte(
+    client: TestClient, app: FastAPI
+) -> None:
+    """Publicar `teto_tokens.tokens_por_dia` e a chamada que encontra o gasto do dia
+    no teto responde 429 ANTES de custar — antes da publicação, o mesmo fluxo chamava
+    o modelo livremente.
+
+    Gate-on-entry declarado: a chamada que COMEÇA abaixo do teto completa (o custo
+    dela só é conhecido depois); a seguinte encontra o gasto MEDIDO >= teto e não
+    chega ao modelo. O assert que carrega o peso é `len(fake.chamadas)` inalterado —
+    recusar depois de chamar seria gastar com mensagem de erro em cima.
+
+    INVERSÃO: remover o `exigir_dentro_do_teto` de `autorizar_modelo` (portao_ia.py)
+    deixa este teste vermelho; remover o `gasto_tokens=` da fiação do ajuda_service
+    também — o guarda-corpo de fiação em test_J02_teto_tokens cobre os demais.
+    """
+    fake = LLMFake(resposta="resposta do guia")
+    app.state.llm = fake
+
+    # ---- ANTES: sem teto publicado, chamadas seguem livremente
+    assert _perguntar(client, "Como preencho o briefing?").status_code == 200
+    assert _perguntar(client, "E o campo objetivo?").status_code == 200
+    assert len(fake.chamadas) == 2
+
+    # ---- o DPO publica o teto: o gasto já MEDIDO do dia (2 linhas de ledger com
+    # tokens do fake) supera 1 — a próxima chamada não cabe no orçamento
+    conteudo = _conservador(client)
+    conteudo["teto_tokens"] = {"tokens_por_dia": 1}
+    assert _publicar(client, conteudo) == 1
+
+    # ---- DEPOIS: 429 problem+json, nenhuma chamada nova, nenhuma linha nova
+    recusada = _perguntar(client, "Ainda posso perguntar?")
+    assert recusada.status_code == 429, recusada.text
+    assert recusada.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert "teto" in recusada.json()["detail"].lower()
+    assert len(fake.chamadas) == 2, "o orçamento do dia acabou: nada podia ser chamado"
+    assert len(app.state.repositorio_os.listar_invocacoes(TENANT)) == 2
+
+
+def test_d_teto_e_por_tenant_o_vizinho_segue_trabalhando(
+    client: TestClient, app: FastAPI, tokens_outro_tenant: dict[str, str]
+) -> None:
+    """Contraprova de escopo: o teto é POR TENANT — esgotar o orçamento de torre-movel
+    não cala `outra-torre` (mesmo padrão do test_f de modelos)."""
+    fake = LLMFake(resposta="resposta do guia")
+    app.state.llm = fake
+
+    assert _perguntar(client, "Como preencho o briefing?").status_code == 200
+    conteudo = _conservador(client)
+    conteudo["teto_tokens"] = {"tokens_por_dia": 1}
+    assert _publicar(client, conteudo) == 1
+    assert _perguntar(client, "Ainda posso?").status_code == 429
+
+    alheia = client.post(
+        "/api/v1/ajuda/perguntar",
+        json={"pagina": "cockpit", "pergunta": "Como preencho?", "contexto": CONTEXTO},
+        headers=_h(tokens_outro_tenant["pleno"], tenant="outra-torre"),
+    )
+    assert alheia.status_code == 200, alheia.text
+
+
+def test_d_sem_teto_nada_muda_o_default_e_o_comportamento_de_sempre(
+    client: TestClient, app: FastAPI
+) -> None:
+    """Publicar a política SEM mexer no teto (null de fábrica) não recusa nada — o
+    contraponto que separa 'governa' de 'quebrou' (mesma doutrina do test_f)."""
+    fake = LLMFake(resposta="resposta do guia")
+    app.state.llm = fake
+    assert _publicar(client, _conservador(client)) == 1
+    for i in range(3):
+        assert _perguntar(client, f"Pergunta {i}?").status_code == 200
+    assert len(fake.chamadas) == 3
 
 
 # ============================ o Ateliê (§8-M12): o serviço que estava INTEIRO fora

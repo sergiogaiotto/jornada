@@ -27,7 +27,13 @@ from application.ports.llm import PerfilModelo
 from domain.agentes import compliance
 from domain.atelie.skill_parser import parse_skill_md
 from domain.intake.completude import valor_do_campo, valor_presente
-from domain.intake.modelos import CAMPOS_OBRIGATORIOS
+from domain.intake.janela import parse_data_iso
+from domain.intake.modelos import (
+    CAMPO_JANELA_FIM,
+    CAMPO_JANELA_INICIO,
+    CAMPOS_INFERIVEIS,
+    CAMPOS_OBRIGATORIOS,
+)
 
 SKILL_PATH = Path(__file__).resolve().parent / "skills" / "consultor.skill.md"
 
@@ -164,8 +170,18 @@ def interpretar_saida(texto: str, *, exige_evidencia: bool = True) -> SaidaConsu
         if not isinstance(bruta, dict):
             continue
         campo, valor = bruta.get("campo"), bruta.get("valor")
-        if campo not in CAMPOS_OBRIGATORIOS or not valor_presente(valor):
+        # J04: a whitelist é CAMPOS_INFERIVEIS (obrigatórios + janela estruturada
+        # opcional) — campo fora dela continua descartado, como sempre (§1.3.5).
+        if campo not in CAMPOS_INFERIVEIS or not valor_presente(valor):
             continue  # nunca campo fora do contrato; valor vazio não infere nada
+        # J04 (auditoria da onda 6): a janela estruturada é ISO YYYY-MM-DD ou NÃO ENTRA.
+        # Descartar aqui, na fronteira, distingue "não declarei" de "declarei em formato
+        # BR e a regra ficou inerte em silêncio" — o 120b tende a emitir '01/07/2026'
+        # em pt-BR, e um valor presente-mas-inválido enganaria o usuário (chip
+        # "confirmado" na tela, regra do §5.3 morta). Melhor não gravar do que gravar
+        # um limite que não governa.
+        if campo in (CAMPO_JANELA_INICIO, CAMPO_JANELA_FIM) and parse_data_iso(valor) is None:
+            continue
         cruas = bruta.get("evidencias")
         evidencias = tuple(
             str(e).strip() for e in (cruas if isinstance(cruas, list) else []) if str(e).strip()

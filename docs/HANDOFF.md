@@ -428,18 +428,18 @@ o middleware protege a aplicação, não a máquina.
 | Achado | O quê |
 |---|---|
 | ~~**P2**~~ | **Fechado na onda 5 (I01):** o jsonschema roda inteiro no `jgc_validate`; schema emendado às formas D05/D07 antes de ligar |
-| **Camada 2 do Guard** | Inerte: o read model é fixture e **ignora** o `sql_publico` |
+| **Camada 2 do Guard** | Inerte: o read model é fixture e ignora o `sql_publico`. **A onda 6 (J01) tentou executar o SQL num sqlite e a auditoria reprovou** (dialeto PG×sqlite, vocabulário do dicionário, monocultura da base) — revertido. Fecho REAL exige o read model de produção (Postgres com a base de contatos, dialeto de destino); não há fecho barato com fixtures |
 | **Ação inerte na IA Responsável** | `decisao_automatizada` governa 1 das 7 ações; travado por teste, não escondido |
 | **`blackout` e `precedencia`** | No conjunto fechado, na tela, **sem consumidor** |
 | ~~**Roteamento híbrido**~~ | **Fechado na onda 5 (I02):** regra bloqueante `roteamento_ambiguo` no §5.3 + espelho no lint + editor recusa criar o híbrido |
 | **D06** | Editar o grafo sobrescreve a versão, sem histórico |
-| **D04 / throttle** | Regras implementadas que nenhum chamador ativa |
+| ~~**D04 / throttle**~~ | **Fechado na onda 6 (J04):** `wait_alem_da_janela` ligado por `janela_inicio`/`janela_fim` (ISO) no briefing; todos os chamadores de `validar_grafo` passam a janela (save/retry/PUT/ajustar/Ensaio/Optimize). `wait` por `ate` segue fora, declarado |
 | ~~**Nome sem âncora**~~ | **Fechado:** o código (detector+API+tela) já estava na onda 4 — esta linha do handoff estava stale; a emenda §10.2 entrou na onda 5 (I05) |
-| ~~**Teto de tokens**~~ | **Meio fechado na onda 5 (I04):** o `usage` flui até `invocacao.tokens` (medição feita); falta o ENFORCEMENT do teto — só então o campo entra na política |
+| ~~**Teto de tokens**~~ | **Fechado na onda 6 (J02):** medição (I04) + enforcement — `teto_tokens.tokens_por_dia` por tenant/dia UTC, 429 antes de custar no portão; obrigatoriedade congelada nos 4 campos v1 |
 | **e2e Playwright** | Job comentado no CI; não existe |
 | **Reconciliação diária / drift 30min** | Sem scheduler |
 | ~~**Motor §6 × classes D05**~~ | **Fechado (D08):** cond fora do mix do governor vira AVISO nomeando nó e chaves (semáforo amarelo), determinístico e fora do loop de runs — M8-A1 preservado. Aberto derivado: escalar "100% do volume some" para vermelho é decisão de precedência do semáforo |
-| **Tela T16 × tokens** | `invocacao.tokens` agora tem valor (I04) e a API o expõe; nenhuma tela renderiza ainda |
+| ~~**Tela T16 × tokens**~~ | **Fechado na onda 6 (J05):** painel de auditoria via_ai na T16 com tokens/latência (null → "—"); o conteúdo do ledger (Art. 20) redigido para quem não é dpo\|lider |
 | ~~**Hash sensível à ordem**~~ | **Fechado na onda 5 (I03):** nodes/edges ordenados por id na persistência e no hash; golden intacto por construção |
 
 ### 8.4 ~~Emenda pendente ao SDD~~ — APLICADA na onda 5 (I05)

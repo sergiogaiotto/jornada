@@ -3,6 +3,95 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-08 — Onda 6 · Guard, teto e fechos (§5.3, §8-M3, §8-M5, §8-M8, §10.2, §10.5, §10.8)
+
+Cinco frentes dos achados abertos do §8.3 do HANDOFF, escolhidas pela relação conserto/dano.
+Duas mudaram de forma no mapeamento (**J03** já estava implementada; **J05** era maior). A
+auditoria cética REPROVOU duas (**J01** e **J05**) e ressalvou **J02**/**J04**; os consertos
+entraram antes deste commit:
+- **J01** revertida (abaixo) — a Camada 2 não fecha com fixtures.
+- **J04**: o `otimizacao_service` (propor E aprovar) validava sem a janela — P1 clássico, o
+  terceiro consumidor de `validar_grafo` esquecido; corrigido, com aceite pela rota do
+  Optimize. E a janela estruturada passou a ser DESCARTADA na fronteira quando não é ISO
+  (o 120b tende a emitir data BR): valor presente-mas-inválido enganava o usuário (chip
+  "confirmado", regra inerte em silêncio).
+- **J05**: o painel de auditoria vazava input/output/judge de todo o ledger a QUALQUER papel,
+  enquanto o `reconstruir` do Art. 20 barra o mesmo conteúdo a dpo|lider. Agora `GET
+  /auditoria` REDIGE o conteúdo para quem não pode reconstruir; as métricas (tokens/latência)
+  — o que a T16 mostra — seguem para todos.
+- **J02**: o warn de compliance do criativo era o único chat que não passava por
+  `autorizar_modelo` (exceção do vigia F03 por PERFIL), então escapava do teto; agora aplica
+  `exigir_dentro_do_teto` explícito. E o guarda-corpo de fiação virou por CALL SITE (AST), não
+  mais nível-arquivo — o vigia file-level dava o falso negativo que deixou o furo passar.
+
+### J01 · Camada 2 do Guard — TENTADA e REVERTIDA (segue aberta)
+A ideia era executar o `sql_publico` num sqlite in-memory sobre uma base sintética dos 14
+hashes de `lista_supressao.json` e reprovar por vazamento medido. A auditoria cética da onda
+REPROVOU, com reproduções: **(1)** monocultura — a base tinha um único perfil de contato, e
+qualquer SQL que mirasse outro valor zerava o resultado e certificava bypass em silêncio (o
+próprio teste do autor só usava o perfil que casava); **(2)** dialeto — o Engineer 120b gera
+Postgres (ILIKE, `::cast`, EXTRACT), que o sqlite rejeita → fail-closed reprovando SQL
+válido, o "Guard que reprova tudo é desligado pelo primeiro analista"; **(3)** vocabulário —
+`_COLUNAS_BASE` usava as colunas do SQL hardcoded do demo, não as que o `dicionario_dados`
+(RAG do Engineer) manda o modelo citar, então todo SQL real explodia. Mais dois furos no
+caminho fail-closed (500 em vez de 422; sem `gate.blocked`). A conclusão é a doutrina do
+projeto: uma Camada 2 que só funciona para o SQL escrito à mão do demo é o "comentário que
+parece controle", pior que o achado documentado. Revertida por inteiro. O fecho REAL exige o
+read model de produção (Postgres com a base de contatos, executando o dialeto de destino) —
+dependência arquitetural que não se resolve com fixtures. Continua na tabela de abertos do
+HANDOFF §8.3, agora com o porquê de não ter fecho barato.
+
+### J02 · Enforcement do `teto_tokens` — o campo entra na política com a régua do achado 8
+A medição chegou na onda 5 (I04); o enforcement chegou junto com o campo (a ordem que a
+doutrina exige). Bloco `teto_tokens: {tokens_por_dia: int|null}` (sub-conjunto FECHADO),
+escopo por **tenant por dia UTC** (`os_id` é NULL em ajuda/Ateliê — teto por OS nasceria com
+metade das chamadas fora; teto sem período estoura uma vez e trava para sempre). O gasto
+MEDIDO do dia é congelado UMA vez por requisição na fábrica `portao_ia.de` (só quando há teto
+configurado — tenant sem teto não paga a soma), e `autorizar_modelo` recusa com
+`TetoDeTokensExcedido` → **429** ANTES de a chamada custar. Enforcement no mesmo portão que o
+vigia AST do F03 já varre; a metade que ele não vê (a fiação do `gasto_tokens=`) ganhou
+guarda-corpo próprio (`test_J02` varre todo serviço com `chat`). Gate-on-entry declarado: a
+chamada que começa abaixo do teto completa; a seguinte é recusada. Limite declarado (na tela
+e aqui): linha de ledger sem usage conta 0 — o teto governa o gasto medido, tenant atrás de
+proxy que suprime usage tem teto inaplicável na prática. Compatibilidade retroativa: a
+obrigatoriedade fica CONGELADA nos 4 campos v1 (o espelho de `CATEGORIAS_PII_OBRIGATORIAS`),
+então política publicada antes da J02 continua válida. `teto_custo` segue fora (sem tarifa
+R$/token no domínio) — é o novo exemplo vivo da rejeição do conjunto fechado. Migração 0017:
+índice `(tenant_id, created_at)` que a soma por requisição exige.
+
+### J03 · Aprovação por sessão — o "Pendente" do §10.5 estava STALE
+O fecho já existia desde a onda 2 (subemenda "E03 · O link mágico deixa de ser credencial",
+entrada G01): o token virou ponteiro, ler exige sessão do tenant dono, decidir exige
+`sessao.email == aprovador_email` por igualdade EXATA (`aprovador+tag@x` não herda), e-mail
+sem conta → 409 na emissão; 4 aceites `test_M8_E03_*` fixam tudo. O drift era só documental —
+o §10.5 mantinha o "Pendente" e o §8-M8 chamava `/aprovacao/*` de "rotas públicas". A J03
+fecha o texto (§10.5 e §8-M8-A7), e faz o rename que a E03 deixou proposto:
+`ROTAS_PUBLICAS` → `ROTAS_SEM_TENANT_HEADER` (isento de HEADER nunca foi isento de
+CREDENCIAL). Doutrina registrada: **segregar** usa a chave de identidade (colapsa `+tag`,
+alargar é conservador); **conceder** usa igualdade exata (alargar seria escalação de
+privilégio) — a comparação que concede jamais vira "por caixa postal".
+
+### J04 · Janela estruturada liga o `wait_alem_da_janela` (fecho do D04)
+A regra existia, testada, e nenhum chamador passava `janela_oferta_dias` — a janela vivia
+como texto livre no briefing e derivá-la por parser seria inventar semântica (§1.3.5). O
+briefing ganhou dois campos OPCIONAIS, `janela_inicio`/`janela_fim` (ISO, entradas normais
+`{valor, inferido}`), e os três chamadores (save/retry, PUT/ajustar, Ensaio) derivam a
+janela deles (`domain/intake/janela.py`, coerção tolerante no precedente do `_numero` do
+simulador). Campos ausentes/não-parseáveis → None → regra inerte, o comportamento pré-J04:
+briefing velho continua válido, os campos NUNCA entram em `CAMPOS_OBRIGATORIOS` (o A1 do
+§8-M3 fixa `faltantes == ['verba','janela']`). O consultor pode inferi-los (whitelist
+`CAMPOS_INFERIVEIS`, que segue descartando qualquer outro campo). Convenção fixada: dias =
+`(fim − início).days`. Limite que permanece, declarado: a regra só cobre `wait` com
+`duracao`; `wait` por `ate` segue fora.
+
+### J05 · A T16 renderiza `invocacao.tokens` (fecho de UI do I04)
+A medição existia (I04), a API já expunha o campo (`_invocacao_out`), e nenhuma tela
+consumia — a "trilha via_ai clicável" prometida pelo §8-M12 e pelo guia da página não tinha
+painel. O J05 cria o painel de auditoria na T16 (rota `/atelie/*`), com a coluna de tokens e
+latência: null aparece como "—" via `fmtInt`, jamais 0 (ausência de medida não é medida
+zero — a doutrina do I04 na última milha). Guarda-corpo por grep no fonte do TSX (o padrão
+do F04 bloco IV; o frontend não tem harness), afirmando a FORMA DE ACESSO, não o nome nu.
+
 ## 2026-08-07 — I06 · Workflow `configurar-vps` (§13)
 
 O deploy da onda 4 estava travado num impasse: o compose exige `APP_ENV` no `.env` da VPS

@@ -211,9 +211,19 @@ def test_publicar_deixa_rastro_na_trilha_de_auditoria(client: TestClient) -> Non
     ("mutacao", "trecho_esperado"),
     [
         pytest.param(
-            lambda c: c.update({"teto_tokens": 10_000}),
-            "teto_tokens",
+            lambda c: c.update({"teto_custo": {"por_dia": 500.0}}),
+            "teto_custo",
             id="campo-de-topo-desconhecido",
+        ),
+        pytest.param(
+            lambda c: c.update({"teto_tokens": 10_000}),  # J02: o campo existe, a FORMA não
+            "teto_tokens",
+            id="teto-tokens-sem-o-sub-bloco",
+        ),
+        pytest.param(
+            lambda c: c.update({"teto_tokens": {"tokens_por_dia": -5}}),
+            "inteiro positivo",
+            id="teto-tokens-negativo",
         ),
         pytest.param(
             lambda c: c["retencao"].update({"dias_ledger": 30}),
@@ -245,9 +255,9 @@ def test_campo_fora_do_conjunto_fechado_e_422_apontando_o_campo(
     Os dois typos (`jornada.ajusta`, `enginer`) são o caso que mais importa: aceitos em
     silêncio, o DPO acreditaria ter autorizado/restringido algo que segue como estava —
     falha silenciosa na direção errada da auditoria, o pior modo de errar num controle
-    de governança. E `teto_tokens` continua fora: a medição chegou (I04, onda 5 — o
-    usage flui até `invocacao.tokens`), mas o ENFORCEMENT não — teto que nenhum portão
-    aplica é número numa tela.
+    de governança. `teto_tokens` ENTROU na J02 (com enforcement no portão — os aceites
+    `test_d_*` do enforcement provam), então o exemplo de campo desconhecido virou
+    `teto_custo`, que segue sem consumidor; a forma torta do bloco novo também é 422.
     """
     conteudo = _conservador(client)
     mutacao(conteudo)

@@ -102,7 +102,7 @@ def get_tenant_do_aprovador(usuario: Autenticado) -> str:
     """Tenant efetivo das rotas de `/aprovacao/*` — vem da SESSÃO (E03 §10.5).
 
     O middleware isenta este prefixo do `X-Tenant` OBRIGATÓRIO (`app/main.py`
-    ROTAS_PUBLICAS) e a isenção continua fazendo sentido depois do login: esta é a URL
+    ROTAS_SEM_TENANT_HEADER) e a isenção continua fazendo sentido depois do login: esta é a URL
     que se abre antes de ter app aberto (link colado no chat, deep link), quando o
     cliente ainda não sabe qual tenant anunciar. O que mudou foi a FONTE: antes o tenant
     era derivado do TOKEN (C03), agora vem do portador autenticado, como no resto da API

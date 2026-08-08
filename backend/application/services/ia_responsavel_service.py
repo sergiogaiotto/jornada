@@ -56,6 +56,7 @@ from domain.ia_responsavel import (
     PoliticaIaInvalida,
     validar_conteudo,
 )
+from domain.ia_responsavel.teto import teto_tokens_diario
 
 # Rótulos das categorias de PII para a tela do DPO. Vivem aqui (application) e não no
 # domínio porque são APRESENTAÇÃO: mudar "cartao" para "Cartão de crédito" não muda
@@ -316,6 +317,7 @@ def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
         (conteudo.get("decisao_automatizada") or {}).get("pode_aplicar_sozinho") or []
     )
     modelos = dict(conteudo.get("modelos_permitidos") or {})
+    teto_diario = teto_tokens_diario(conteudo)  # (d) J02 — None = sem teto
 
     bloqueadas = [c for c in CATEGORIAS_PII if acoes.get(c) == "bloquear"]
     return [
@@ -419,6 +421,38 @@ def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
                     ),
                 }
                 for agente, perfis in sorted(modelos.items())
+            ],
+        },
+        {
+            "parametro": "teto_tokens",
+            "titulo": "Teto de consumo de tokens (por tenant, por dia UTC)",
+            "resumo": (
+                f"Chamadas de IA deste tenant PARAM (429) quando o gasto MEDIDO do dia "
+                f"atinge {teto_diario} tokens; o orçamento reinicia à meia-noite UTC."
+                if teto_diario is not None
+                else "Sem teto: nenhum limite de consumo — o comportamento de sempre."
+            ),
+            "itens": [
+                {
+                    "chave": "tokens_por_dia",
+                    "valor": teto_diario,
+                    "efeito": (
+                        (
+                            f"A chamada que encontrar o gasto do dia >= {teto_diario} é "
+                            "recusada ANTES de custar (429); a que começou abaixo do teto "
+                            "completa. LIMITE DECLARADO: o teto governa o gasto MEDIDO — "
+                            "linha de ledger sem usage do provedor conta 0, então tenant "
+                            "atrás de proxy que suprime usage tem teto inaplicável na "
+                            "prática."
+                        )
+                        if teto_diario is not None
+                        else (
+                            "Nenhuma chamada é recusada por consumo. Para ligar, publique "
+                            "um inteiro positivo — o enforcement mora no mesmo portão dos "
+                            "modelos (autorizar_modelo), coberto pelo vigia de CI."
+                        )
+                    ),
+                }
             ],
         },
     ]

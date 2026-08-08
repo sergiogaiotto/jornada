@@ -2075,6 +2075,17 @@ class RepositorioSql(RepositorioOsMemoria):
         )
         return _linha_para_invocacao(linha) if linha is not None else None
 
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int:
+        """J02: gasto MEDIDO do teto — `coalesce(sum(tokens), 0)` do tenant desde
+        `desde`. NULL conta 0 (régua do I04); a migração 0017 cria o índice
+        (tenant_id, created_at) que esta soma exige por requisição de LLM."""
+        consulta = select(func.coalesce(func.sum(tabela_invocacao.c.tokens), 0)).where(
+            tabela_invocacao.c.tenant_id == tenant_id,
+            tabela_invocacao.c.created_at >= desde,
+        )
+        linha = self._primeira(consulta)
+        return int(linha[0] or 0) if linha is not None else 0
+
     # --- Identidade (`usuario`/`sessao` §4.1 + migração 0015 — emenda G01) ---
     def adicionar_usuario(self, conta: ContaUsuario) -> None:
         """UPSERT por id, como todo o resto do adapter. `senha_hash` entra aqui e não

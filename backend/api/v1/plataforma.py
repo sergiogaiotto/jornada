@@ -156,7 +156,7 @@ async def abrir_pendencias_adequacao(
 async def listar_auditoria(
     tenant: Tenant,
     servico: Servico,
-    _user: Autenticado,
+    user: Autenticado,
     tipo: Annotated[str | None, Query(max_length=100)] = None,
     agente: Annotated[str | None, Query(max_length=100)] = None,
     os_id: Annotated[uuid.UUID | None, Query()] = None,
@@ -165,9 +165,25 @@ async def listar_auditoria(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
     """Trilha de auditoria (outbox §2.3) com filtros §8-M12; evento via_ai carrega o
-    detalhe COMPLETO do ledger `invocacao` (prompt+evidências+judge+humano)."""
+    detalhe do ledger `invocacao`.
+
+    Auditoria da onda 6 (J05): o CONTEÚDO do ledger — input/output/judge/evidências —
+    é dado do Art. 20 e só vai no payload para quem pode RECONSTRUIR (dpo|lider|admin),
+    o mesmo portão de `POST /auditoria/reconstruir`. Para os demais papéis a trilha e
+    as MÉTRICAS operacionais (agente, skill, tokens, latência) continuam visíveis — o
+    que a T16 precisa mostrar —, mas o prompt/resposta não vazam pela lista. Antes do
+    J05 nenhuma tela consumia esta rota, então a inconsistência (lista aberta, reconstruir
+    fechado) era latente; o painel novo a expôs."""
+    pode_ver_conteudo = bool({"dpo", "lider", "admin"} & set(user.papeis))
     return servico.listar_auditoria(
-        tenant, tipo=tipo, agente=agente, os_id=os_id, via_ai=via_ai, limit=limit, offset=offset
+        tenant,
+        tipo=tipo,
+        agente=agente,
+        os_id=os_id,
+        via_ai=via_ai,
+        limit=limit,
+        offset=offset,
+        incluir_conteudo=pode_ver_conteudo,
     )
 
 

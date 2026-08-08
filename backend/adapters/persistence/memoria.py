@@ -237,6 +237,18 @@ class RepositorioOsMemoria:
     def obter_invocacao(self, invocacao_id: uuid.UUID) -> Invocacao | None:
         return next((i for i in self._invocacoes if i.id == invocacao_id), None)
 
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int:
+        """J02: gasto MEDIDO do teto — soma `tokens` do tenant desde `desde`.
+
+        Linha com tokens NULL contribui 0 (ausência de medida não vira medida — régua
+        de `soma_tokens`/I04); full scan é aceitável no adapter de dev (o SQL tem
+        índice próprio na migração 0017)."""
+        return sum(
+            i.tokens or 0
+            for i in self._invocacoes
+            if i.tenant_id == tenant_id and i.created_at is not None and i.created_at >= desde
+        )
+
     # --- Validações campo-a-campo (`validacao_campo` — M4) ---
     def adicionar_validacao(self, validacao: ValidacaoCampo) -> None:
         """UPSERT por id, espelhando o `on conflict (id) do update` do adapter SQL

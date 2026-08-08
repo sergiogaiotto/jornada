@@ -87,7 +87,11 @@ class ServicoAudiencia:
         `criterios_resumo` do segmento e ledger recebem só o texto sanitizado. `sanear`
         mantém o piso do C02 e passa a BLOQUEAR quando a política do tenant marcar a
         categoria detectada."""
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         instrucoes = portao.sanear(instrucoes)
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         skill = agente_engineer.carregar()

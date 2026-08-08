@@ -16,8 +16,8 @@ descreve ("um `if` que alguém esquece de escrever no próximo endpoint"). Com u
 o serviço novo precisa de UM objeto para chamar o LLM, e a revisão vê a ausência dele.
 
 O portão NÃO reimplementa regra: cada método é uma linha delegando ao domínio puro. Ele
-existe para **carregar a política uma vez por requisição** e emprestá-la aos quatro
-enforcements — não para ter opinião própria.
+existe para **carregar a política uma vez por requisição** e emprestá-la aos cinco
+enforcements (o teto de tokens entrou na onda 6) — não para ter opinião própria.
 
 ## Uma leitura por requisição, e por quê
 
@@ -46,10 +46,12 @@ voltaria a governar sem ninguém ver.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, Protocol
 
+from application.ports.clock import ClockPort
 from application.ports.publicacoes_ia import PublicacoesIaPort, politica_ia_vigente
 from domain.ia_responsavel import (
     ACOES_VIA_AI,
@@ -65,7 +67,28 @@ from domain.ia_responsavel import (
 # frente e a re-exportação não foi feita — ver EMENDA SUGERIDA. Funciona igual; a única
 # perda é a simetria com os outros quatro enforcements, que vêm do pacote.
 from domain.ia_responsavel.retencao import aplicar_retencao_evidencias
+from domain.ia_responsavel.teto import (
+    exigir_dentro_do_teto,
+    inicio_do_dia_utc,
+    teto_tokens_diario,
+)
 from domain.privacidade.sanitizar import mascarar_campos, mascarar_estrutura
+
+
+class _LedgerDeTokens(Protocol):
+    """O pedaço do ledger que o teto consome (tipagem estrutural §2.1) — todo
+    repositório fiado declara `somar_tokens` na sua porta."""
+
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int: ...
+
+
+def gasto_do_dia(ledger: _LedgerDeTokens, relogio: ClockPort, tenant_id: str) -> Callable[[], int]:
+    """Callable PREGUIÇOSO do gasto medido do dia (J02) — o `gasto_tokens` de `de()`.
+
+    Um helper, e não uma lambda por serviço, para que a fiação seja UMA linha
+    reconhecível em todo call site — é o que o guarda-corpo de fiação do teto varre."""
+    return lambda: ledger.somar_tokens(tenant_id, inicio_do_dia_utc(relogio.agora()))
+
 
 # Ações do Art. 20 que ESTA onda fiou, nomeadas em vez de digitadas no call site.
 #
@@ -105,13 +128,19 @@ ACOES_FIADAS: frozenset[str] = frozenset({ACAO_JORNADA_AJUSTAR})
 
 @dataclass(frozen=True)
 class PortaoIa:
-    """Política de IA vigente de UM tenant + os quatro enforcements que ela governa.
+    """Política de IA vigente de UM tenant + os cinco enforcements que ela governa.
 
     `frozen` porque o conteúdo é um snapshot da requisição: um serviço que conseguisse
     reatribuir `conteudo` no meio do fluxo recriaria o problema que o snapshot resolve.
+
+    `gasto_tokens_hoje` (J02) é o gasto MEDIDO do tenant no dia (UTC), congelado na
+    fábrica `de()` UMA vez por requisição — mesma doutrina do snapshot do conteúdo.
+    None = teto não configurado OU fiação sem a soma (o guarda-corpo de call site em
+    test_F03_ia_responsavel_enforcement cobra a fiação de todo serviço).
     """
 
     conteudo: dict[str, Any]
+    gasto_tokens_hoje: int | None = None
 
     # ------------------------------------------------ (a) dados que podem ir ao LLM
     def sanear(self, texto: str) -> str:
@@ -214,8 +243,23 @@ class PortaoIa:
         Chamado no ponto da chamada, não no carregamento da skill: um caminho que monte
         o perfil dinamicamente escaparia de um portão posicionado antes (`modelos_llm`
         documenta o porquê).
-        """
+
+        (d) O teto de tokens (J02) mora AQUI de propósito: o vigia AST do F03 já exige
+        `autorizar_modelo` imediatamente antes de cada `chat` — embutir o orçamento no
+        mesmo portão cobre 13 dos 14 call sites sem ensinar regra nova ao vigia. Gate-on-
+        entry: recusa ANTES de a chamada custar (`TetoDeTokensExcedido` → 429)."""
+        self.exigir_dentro_do_teto()
         exigir_perfil_autorizado(agente, perfil, self.conteudo)
+
+    def exigir_dentro_do_teto(self) -> None:
+        """Só o teto (d), SEM o roster (f) — para o único call site que não passa por
+        `autorizar_modelo` (o warn de compliance do criativo, exceção declarada do vigia
+        F03 por causa do PERFIL). Auditoria da onda 6: o teto é ortogonal ao roster, e
+        deixá-lo escapar ali fazia uma rota chamar o modelo com o orçamento estourado
+        enquanto as outras recusavam. `gasto_tokens_hoje is None` (teto não configurado
+        ou caminho sem soma) é no-op."""
+        if self.gasto_tokens_hoje is not None:
+            exigir_dentro_do_teto(self.gasto_tokens_hoje, self.conteudo)
 
     # ------------------------------------------------ (c) decisão automatizada Art. 20
     def exigir_revisao_humana(self, acao: str) -> None:
@@ -255,10 +299,24 @@ class PortaoIa:
         return aplicar_retencao_evidencias(evidencias, self.conteudo)
 
 
-def de(publicacoes: PublicacoesIaPort, tenant_id: str | None = None) -> PortaoIa:
+def de(
+    publicacoes: PublicacoesIaPort,
+    tenant_id: str | None = None,
+    *,
+    gasto_tokens: Callable[[], int] | None = None,
+) -> PortaoIa:
     """Portão do tenant a partir da política PUBLICADA — a única fonte em runtime.
 
     Nome curto porque o call site vira `portao_ia.de(self._publicacoes_ia, tenant_id)`,
     que se lê como frase e deixa explícito, na linha, que a política veio de uma porta.
-    """
-    return PortaoIa(politica_ia_vigente(publicacoes, tenant_id))
+
+    `gasto_tokens` (J02) é um CALLABLE preguiçoso — `lambda: repo.somar_tokens(...)` —
+    avaliado UMA vez, e SÓ quando a política vigente tem teto configurado: tenant sem
+    teto não paga a soma do ledger a cada requisição. O valor congela no snapshot
+    (`gasto_tokens_hoje`), então retry §7.3 dentro da MESMA requisição não vê o próprio
+    gasto — a folga de até uma requisição é semântica declarada do gate-on-entry."""
+    conteudo = politica_ia_vigente(publicacoes, tenant_id)
+    gasto: int | None = None
+    if gasto_tokens is not None and teto_tokens_diario(conteudo) is not None:
+        gasto = int(gasto_tokens())
+    return PortaoIa(conteudo, gasto_tokens_hoje=gasto)

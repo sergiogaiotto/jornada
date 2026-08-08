@@ -798,16 +798,41 @@ def test_f_agente_desconhecido_nao_ganha_modelo_por_omissao() -> None:
 def test_conjunto_fechado_recusa_parametro_sem_enforcement() -> None:
     """O antídoto do achado 8 aplicado ao próprio módulo.
 
-    `teto_tokens` é o exemplo VIVO: parece responsável, e seria inerte. A MEDIÇÃO
-    chegou na onda 5 (I04: `invocacao.tokens` recebe o usage do provedor), mas o
-    ENFORCEMENT não — nenhum portão soma o gasto por OS/tenant e recusa a chamada que
-    estourar. Enquanto ele não existir, publicar o campo é proibido pela validação —
-    não por convenção, por código.
+    `teto_custo` é o exemplo VIVO agora: parece responsável, e seria inerte — exige
+    tarifa R$/token que não existe no domínio (tarifas são por canal de disparo).
+    `teto_tokens` deixou de ser o exemplo na J02, quando ganhou o enforcement no
+    portão — a régua não mudou, o campo é que se qualificou.
     """
     conteudo = politica_ia_seed()
-    conteudo["teto_tokens"] = {"por_os": 100_000}
+    conteudo["teto_custo"] = {"por_dia": 500.0}
     erros = validar_conteudo(conteudo)
-    assert any("teto_tokens" in e and "conjunto FECHADO" in e for e in erros)
+    assert any("teto_custo" in e and "conjunto FECHADO" in e for e in erros)
+
+
+def test_teto_tokens_entra_no_conjunto_com_sub_bloco_fechado() -> None:
+    """J02: `teto_tokens` é ACEITO (a medição do I04 + o enforcement do portão o
+    qualificaram) — mas o sub-bloco é fechado e o valor é int>0 ou null."""
+    conteudo = politica_ia_seed()
+    conteudo["teto_tokens"] = {"tokens_por_dia": 50_000}
+    assert validar_conteudo(conteudo) == []
+
+    conteudo["teto_tokens"] = {"tokens_por_dia": None}  # null = sem teto
+    assert validar_conteudo(conteudo) == []
+
+    conteudo["teto_tokens"] = {"tokens_por_dia": 0}
+    assert any("inteiro positivo" in e for e in validar_conteudo(conteudo))
+
+    conteudo["teto_tokens"] = {"tokens_por_os_dia": 10}  # sub-conjunto FECHADO
+    assert any("tokens_por_os_dia" in e for e in validar_conteudo(conteudo))
+
+
+def test_politica_v1_sem_teto_tokens_continua_valida() -> None:
+    """Compatibilidade retroativa (a doutrina de CATEGORIAS_PII_OBRIGATORIAS): a
+    obrigatoriedade fica CONGELADA nos 4 campos v1 — política publicada antes da J02
+    não pode acusar erro na tela do DPO de um deploy para o outro."""
+    conteudo = politica_ia_seed()
+    del conteudo["teto_tokens"]
+    assert validar_conteudo(conteudo) == []
 
 
 def test_nao_existe_acao_permitir_para_pii() -> None:

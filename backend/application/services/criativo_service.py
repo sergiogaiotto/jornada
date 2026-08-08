@@ -42,6 +42,7 @@ from domain.criativo.modelos import (
     CelulaCriativo,
     Criativo,
 )
+from domain.ia_responsavel.erros import TetoDeTokensExcedido
 
 
 class ServicoCriativo:
@@ -80,7 +81,11 @@ class ServicoCriativo:
         na fronteira, daqui para baixo só existe a versão sanitizada. `sanear` mantém o
         piso do C02 e passa a BLOQUEAR a chamada quando a política do tenant marcar a
         categoria detectada (§10.2)."""
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         instrucoes = portao.sanear(instrucoes) if instrucoes else instrucoes
         os_ = self._servico_os.obter_os(tenant_id, os_id)  # NaoEncontrado → 404
         canais = list(canais or CANAIS_CRIATIVO)
@@ -231,7 +236,11 @@ class ServicoCriativo:
             criativo.celulas,
             kv_master,
             portador_id,
-            portao_ia.de(self._publicacoes_ia, tenant_id),  # política PUBLICADA (§10.2)
+            portao_ia.de(  # política PUBLICADA (§10.2) + gasto do teto (J02)
+                self._publicacoes_ia,
+                tenant_id,
+                gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+            ),
         )
         self._evento(
             os_,
@@ -297,8 +306,16 @@ class ServicoCriativo:
         mensagens = agentes_t6.montar_mensagens_compliance(textos)
         inicio = self._relogio.agora()
         try:
+            # J02 (auditoria da onda 6): este chat NÃO passa por `autorizar_modelo` (a
+            # exceção do vigia F03 é sobre o PERFIL), mas o teto de tokens é ortogonal
+            # ao roster — sem o teto aqui, este era o único chat da rota kv-master que
+            # ignorava o orçamento. O teto é aplicado DENTRO do try: o warn é acessório
+            # (a edição já foi persistida), então orçamento estourado DEGRADA o warn
+            # para vazio — a enforcement do teto é "o modelo não é chamado", não um 429
+            # que quebraria uma edição já feita. Mesma direção do LLMIndisponivel.
+            portao.exigir_dentro_do_teto()
             texto, tokens_uso = self._llm.chat(mensagens, perfil="20b")
-        except LLMIndisponivel:
+        except (LLMIndisponivel, TetoDeTokensExcedido):
             return []  # warn é acessório — nunca bloqueia nem depende de LLM
         fim = self._relogio.agora()
         avisos = agentes_t6.interpretar_avisos(texto)

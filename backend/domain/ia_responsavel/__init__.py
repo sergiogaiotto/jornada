@@ -12,7 +12,7 @@ exportada é um ENFORCEMENT: recebe o `conteudo` da política PUBLICADA — lido
 INJETADO pelo serviço, nunca importado como constante — e ou muda o resultado, ou
 levanta erro de domínio.
 
-Quatro parâmetros governam nesta onda:
+Cinco parâmetros governam (o quinto entrou na onda 6):
 
 | campo | módulo | o que muda quando o DPO mexe |
 |---|---|---|
@@ -20,12 +20,12 @@ Quatro parâmetros governam nesta onda:
 | `retencao` | `retencao.py` | prompt/resposta deixam de ser gravados; prazo do purge |
 | `decisao_automatizada` | `decisao.py` | ação sai de "IA propõe" para "IA aplica" |
 | `modelos_permitidos` | `modelos_llm.py` | perfil fora da lista não é chamado |
+| `teto_tokens` | `teto.py` | gasto medido do dia no teto → 429 antes de custar (J02) |
 
-Ficaram FORA, por decisão registrada em `politica.py`: teto de custo/tokens (a métrica
-passou a ser medida na onda 5 — I04 — mas o enforcement que soma o gasto e recusa a
-chamada ainda não existe) e rótulo de conteúdo gerado por IA (o enforcement é a UI de
-~10 telas). Ambos voltam junto do teste que provar que mudam comportamento — a mesma
-régua que este módulo aplica ao resto da plataforma vale para ele próprio.
+Seguem FORA, por decisão registrada em `politica.py`: `teto_custo` (exige tarifa
+R$/token que não existe no domínio) e `rotulo_ia` (o enforcement é a UI de ~10 telas).
+Voltam junto do teste que provar que mudam comportamento — a mesma régua que este
+módulo aplica ao resto da plataforma.
 """
 
 from domain.ia_responsavel.dados import Saneamento, categorias_detectadas, sanear_para_llm

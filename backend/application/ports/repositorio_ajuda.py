@@ -6,6 +6,7 @@ Portas = Protocols Python (§2.1). `RepositorioOsMemoria` implementa esta porta 
 demais (mesma instância por app — tipagem estrutural).
 """
 
+from datetime import datetime
 from typing import Protocol
 
 from domain.agentes.modelos import Invocacao
@@ -13,3 +14,7 @@ from domain.agentes.modelos import Invocacao
 
 class RepositorioAjuda(Protocol):
     def adicionar_invocacao(self, invocacao: Invocacao) -> None: ...
+
+    # J02: gasto MEDIDO do teto de tokens — soma de `invocacao.tokens` do tenant desde
+    # `desde` (NULL conta 0: ausência de medida não vira medida — régua do I04).
+    def somar_tokens(self, tenant_id: str, desde: datetime) -> int: ...

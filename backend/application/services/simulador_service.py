@@ -25,6 +25,7 @@ from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import Experimento, experimento_travado
 from domain.intake.completude import valor_do_campo
+from domain.intake.janela import janela_oferta_dias
 from domain.jornada.erros import GrafoInvalido
 from domain.jornada.modelos import ESTADOS_EDITAVEIS, JornadaVersao
 from domain.jornada.validacao import validar_grafo
@@ -211,6 +212,9 @@ class ServicoSimulador:
             grafo,
             experimento_travado=experimento_travado(experimento),
             politica=politica,
+            # J04: a janela ESTRUTURADA do briefing liga o wait_alem_da_janela (§5.3).
+            # Sem os campos janela_inicio/janela_fim → None → regra inerte, como antes.
+            janela_oferta_dias=janela_oferta_dias(os_.briefing),
         )
         if erros:
             raise GrafoInvalido(erros)

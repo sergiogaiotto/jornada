@@ -19,6 +19,23 @@ from typing import Any
 # em que `faltantes` é reportado.
 CAMPOS_OBRIGATORIOS: tuple[str, ...] = ("objetivo", "publico", "oferta", "verba", "janela")
 
+# J04 — a janela ESTRUTURADA da oferta (ISO YYYY-MM-DD), campos OPCIONAIS do briefing:
+# nunca entram em CAMPOS_OBRIGATORIOS (briefing velho continua 100% válido; o aceite
+# §8-M3-A1 fixa faltantes == ['verba','janela']). Quando presentes e parseáveis, ligam
+# o `wait_alem_da_janela` do §5.3 (domain/intake/janela.py). O campo textual `janela`
+# segue obrigatório para completude e vira display — a estruturada governa a regra.
+CAMPO_JANELA_INICIO = "janela_inicio"
+CAMPO_JANELA_FIM = "janela_fim"
+
+# O que o consultor (LLM) PODE inferir (§8-M3): os obrigatórios + os campos opcionais
+# declarados aqui. `interpretar_saida` descarta qualquer outro campo — a whitelist
+# alarga o contrato deliberadamente, nunca o abre (§1.3.5).
+CAMPOS_INFERIVEIS: tuple[str, ...] = (
+    *CAMPOS_OBRIGATORIOS,
+    CAMPO_JANELA_INICIO,
+    CAMPO_JANELA_FIM,
+)
+
 ESTADOS_PEDIDO: tuple[str, ...] = ("rascunho", "completo", "convertido", "arquivado")
 
 

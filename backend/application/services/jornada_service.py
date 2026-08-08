@@ -43,6 +43,7 @@ from domain.campanha.erros import EstadoInvalido, NaoEncontrado
 from domain.campanha.modelos import OS, EventoDominio
 from domain.custo.tarifas import TARIFAS_VIGENTES
 from domain.experimento.modelos import experimento_travado
+from domain.intake.janela import janela_oferta_dias
 from domain.jornada import exportacao, taximetro
 from domain.jornada.canonico import hash_jgc, normalizar_grafo
 from domain.jornada.diff import diff_grafos
@@ -89,7 +90,11 @@ class ServicoJornada:
         §10.2 (C02): instruções livres saneadas na fronteira — prompt e ledger só
         veem o texto sanitizado. `sanear` mantém o piso do C02 e passa a BLOQUEAR
         quando a política do tenant marcar a categoria detectada."""
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         instrucoes = portao.sanear(instrucoes)
         os_ = self._exigir_os(tenant_id, os_id)
         skill = flow.carregar()
@@ -135,7 +140,7 @@ class ServicoJornada:
                 )
             candidato = self._normalizar_meta(saida.grafo, os_)
             try:
-                self._validar(candidato, os_.id, politica)
+                self._validar(candidato, os_, politica)
             except GrafoInvalido as erro:
                 erro_validacao = erro
                 continue
@@ -204,7 +209,7 @@ class ServicoJornada:
         )
         candidato = grafo if grafo is not None else self._grafo_minimo(os_, holdout_pct)
         candidato = self._normalizar_meta(candidato, os_)
-        self._validar(candidato, os_.id, self._politica(os_))  # A1/A3 → 422
+        self._validar(candidato, os_, self._politica(os_))  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(candidato, os_.id)
         jornada = JornadaVersao(
             id=uuid.uuid4(),
@@ -307,7 +312,7 @@ class ServicoJornada:
                 "nova versão (§1.2 non-goals: sem edição ao vivo)."
             )
         grafo = self._normalizar_meta(grafo, os_)
-        self._validar(grafo, os_.id, self._politica(os_))  # A1/A3 → 422
+        self._validar(grafo, os_, self._politica(os_))  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(grafo, os_.id)
         jornada.grafo = grafo
         jornada.hash = hash_jgc(grafo)
@@ -343,7 +348,11 @@ class ServicoJornada:
         publicar a v1 preserva exatamente o comportamento de hoje.
 
         §10.2 (C02): instruções livres saneadas na fronteira (prompt + ledger)."""
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         instrucoes = portao.sanear(instrucoes)
         jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
         skill = flow.carregar()
@@ -371,6 +380,7 @@ class ServicoJornada:
             proposto,
             experimento_travado=experimento_travado(self._repo.experimento_da_os(os_.id)),
             politica=politica,
+            janela_oferta_dias=janela_oferta_dias(os_.briefing),  # J04 — mesma régua
         )
         custo_proposto, _, avisos = self._taximetro(proposto, os_.id)
         invocacao = self._registrar_invocacao(
@@ -551,11 +561,14 @@ class ServicoJornada:
         grafo["meta"] = meta
         return normalizar_grafo(grafo)
 
-    def _validar(self, grafo: dict[str, Any], os_id: uuid.UUID, politica: dict[str, Any]) -> None:
+    def _validar(self, grafo: dict[str, Any], os_: OS, politica: dict[str, Any]) -> None:
         erros = validar_grafo(
             grafo,
-            experimento_travado=experimento_travado(self._repo.experimento_da_os(os_id)),
+            experimento_travado=experimento_travado(self._repo.experimento_da_os(os_.id)),
             politica=politica,
+            # J04: a janela ESTRUTURADA do briefing (janela_inicio/janela_fim) liga o
+            # wait_alem_da_janela (§5.3) — ausente/não-parseável → None → inerte.
+            janela_oferta_dias=janela_oferta_dias(os_.briefing),
         )
         if erros:
             raise GrafoInvalido(erros)

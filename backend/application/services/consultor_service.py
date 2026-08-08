@@ -57,6 +57,7 @@ from domain.intake.erros import (
     PedidoArquivado,
     PedidoJaConvertido,
 )
+from domain.intake.janela import exigir_janela_iso
 from domain.intake.modelos import Pedido
 from domain.privacidade import mascarar_campos, mascarar_estrutura
 
@@ -127,7 +128,11 @@ class ServicoConsultor:
         `sanear` mantém o piso do C02 (mascarar) e passa a BLOQUEAR a chamada quando a
         política do tenant marcar a categoria detectada.
         """
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA
+        portao = portao_ia.de(  # política PUBLICADA + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
         mensagem = portao.sanear(mensagem)
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
@@ -266,6 +271,8 @@ class ServicoConsultor:
         página pública do link mágico de aprovação (§8-M8). Mascarado na fronteira; o
         nome derivado (`_nome_padrao`) já nasce limpo porque o briefing é mascarado
         na entrada."""
+        # Só saneia (nenhum chat): o portão aqui não carrega o gasto do teto (J02) de
+        # propósito — pagar a soma do ledger num caminho sem LLM seria custo sem portão.
         nome = portao_ia.de(self._publicacoes_ia, tenant_id).sanear(nome) if nome else nome
         pedido = self._exigir_pedido(tenant_id, pedido_id)
         if pedido.estado == "convertido":
@@ -335,6 +342,7 @@ class ServicoConsultor:
             )
         self._exigir_nao_arquivado(pedido)
         for campo, valor in campos.items():
+            exigir_janela_iso(campo, valor)  # J04: data da janela não-ISO → 422
             entrada = pedido.conteudo.get(campo)
             nova: dict[str, Any] = dict(entrada) if isinstance(entrada, dict) else {}
             nova["valor"] = valor
@@ -384,6 +392,7 @@ class ServicoConsultor:
         briefing (engineer, flow, criativo). Mascarado na entrada, como as outras duas.
         `campo` também passa pelo sanitizador: ele vem do PATH da URL (texto livre) e
         é ecoado na mensagem de erro 404 e no payload do evento."""
+        # Só saneia (nenhum chat) — sem gasto do teto, mesmo motivo do `arquivar`.
         campo = portao_ia.de(self._publicacoes_ia, tenant_id).sanear(campo)
         if valor is not _AUSENTE:
             valor = mascarar_estrutura(valor)
@@ -395,6 +404,7 @@ class ServicoConsultor:
             )
         nova: dict[str, Any] = dict(entrada) if isinstance(entrada, dict) else {"valor": entrada}
         if valor is not _AUSENTE:
+            exigir_janela_iso(campo, valor)  # J04: data da janela não-ISO → 422
             nova["valor"] = valor
         nova["inferido"] = False
         os_.briefing[campo] = nova

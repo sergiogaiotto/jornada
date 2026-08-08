@@ -63,7 +63,11 @@ class ServicoInsight:
             raise NaoEncontrado(f"OS {os_id} não encontrada no tenant {tenant_id!r}.")
         skill = agente_insight.carregar()
         inicio = self._relogio.agora()
-        portao = portao_ia.de(self._publicacoes_ia, tenant_id)  # política PUBLICADA (§10.2)
+        portao = portao_ia.de(  # política PUBLICADA (§10.2) + gasto do teto (J02)
+            self._publicacoes_ia,
+            tenant_id,
+            gasto_tokens=portao_ia.gasto_do_dia(self._repo, self._relogio, tenant_id),
+        )
 
         spans: list[dict[str, Any]] = []
         consulta_executada: dict[str, Any] | None = None

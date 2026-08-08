@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import PORTAL_TOKENS
 from app.errors import PROBLEM_CONTENT_TYPE
-from app.main import ROTAS_PUBLICAS
+from app.main import ROTAS_SEM_TENANT_HEADER
 from tests.conftest import TENANT_ALHEIO as OUTRO_TENANT
 
 TENANT = "torre-movel"
@@ -177,11 +177,11 @@ def test_E05_A7_nenhuma_rota_privada_mora_sob_o_prefixo_publico(app: FastAPI) ->
     # devolvia lista VAZIA — um aceite de segurança que passa por não enxergar nada é
     # pior que aceite nenhum. O `~=` do requirements permitia 0.115 no dev e 0.141 no CI,
     # então o teste passava aqui e quebrava lá (emenda F01).
-    publicas = sorted(
-        caminho for caminho in app.openapi()["paths"] if caminho.startswith(ROTAS_PUBLICAS)
+    isentas = sorted(
+        caminho for caminho in app.openapi()["paths"] if caminho.startswith(ROTAS_SEM_TENANT_HEADER)
     )
-    assert publicas == ["/api/v1/aprovacao/{token}", "/api/v1/aprovacao/{token}/decidir"], publicas
-    assert all(prefixo.endswith("/") for prefixo in ROTAS_PUBLICAS), ROTAS_PUBLICAS
+    assert isentas == ["/api/v1/aprovacao/{token}", "/api/v1/aprovacao/{token}/decidir"], isentas
+    assert all(p.endswith("/") for p in ROTAS_SEM_TENANT_HEADER), ROTAS_SEM_TENANT_HEADER
 
 
 @pytest.mark.parametrize(

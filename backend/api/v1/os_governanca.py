@@ -43,12 +43,15 @@ from domain.ia_responsavel import (
     DecisaoAutomatizadaNegada,
     ModeloNaoPermitido,
 )
+from domain.ia_responsavel.erros import TetoDeTokensExcedido
+from domain.intake.erros import CampoBriefingInvalido
 
 # ----------------------------------------------------------- Erros → problem+json
 _STATUS_POR_ERRO: tuple[tuple[type[ErroDominio], int], ...] = (
     (NaoEncontrado, 404),
     (AcaoNaoPermitida, 403),
     (JustificativaObrigatoria, 422),
+    (CampoBriefingInvalido, 422),  # J04: data de janela não-ISO no PATCH do briefing
     (AvancoBloqueadoPorPendencia, 409),
     (TransicaoIlegal, 409),
     (CodigoDuplicado, 409),
@@ -64,6 +67,10 @@ _STATUS_POR_ERRO: tuple[tuple[type[ErroDominio], int], ...] = (
     # 409 e não 403: quem chamou TEM o papel: é a política do tenant que conflita com o
     # perfil que a skill pede. 403 mandaria o usuário pedir permissão a si mesmo.
     (ModeloNaoPermitido, 409),
+    # 429 e não 422/403 (J02): a requisição está correta e autorizada — o ORÇAMENTO do
+    # dia é que acabou; mesma semântica do limite de login (middleware_limite: "a
+    # requisição não foi julgada, foi recusada antes de custar"). Reset: virada UTC.
+    (TetoDeTokensExcedido, 429),
 )
 
 

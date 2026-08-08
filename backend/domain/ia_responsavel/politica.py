@@ -320,27 +320,52 @@ PERFIL_DO_ROSTER: dict[str, tuple[str, ...]] = {
     "triagem_operacao": ("20b",),
 }
 
-# Conjunto FECHADO. Quatro campos, não seis — e a ausência dos outros dois é a parte
-# mais importante deste arquivo:
+# Conjunto FECHADO. Cinco campos desde a onda 6 (J02) — e a ausência dos que ficaram
+# de fora segue sendo a parte mais importante deste arquivo:
 #
-# * `teto_tokens`/`teto_custo` (pedido (d)) NÃO entra AINDA. A pré-condição que faltava
-#   caiu na onda 5 (I04): `LLMPort.chat` devolve `RespostaLLM(texto, tokens)` e o
-#   `usage` do provedor chega a `invocacao.tokens` — a métrica agora É medida. O que
-#   segue faltando é o ENFORCEMENT: nenhum portão soma o gasto por OS/tenant e recusa a
-#   chamada que estourar o teto. Campo publicável sem consumidor é o achado 8 de novo —
-#   entra na onda que trouxer o enforcement COM o teste de inversão dele.
+# * `teto_tokens` (pedido (d)) ENTROU na onda 6, na ordem que a régua exige: a medição
+#   veio na onda 5 (I04 — o `usage` chega a `invocacao.tokens`) e o ENFORCEMENT veio
+#   junto com o campo (J02): o portão congela o gasto MEDIDO do tenant no dia (UTC) na
+#   fábrica `portao_ia.de` e `autorizar_modelo` recusa com `TetoDeTokensExcedido` (429)
+#   ANTES de a chamada custar — teste de inversão em test_F03_ia_responsavel_enforcement.
+#   Escopo deliberado: por TENANT por DIA — `os_id` é NULL em ajuda/Ateliê, então um
+#   teto "por OS" nasceria com metade das chamadas fora; e teto sem período só estoura
+#   uma vez na vida e trava para sempre. Limite DECLARADO (vale o mesmo da tela): linha
+#   de ledger com tokens NULL (hub/proxy sem usage) contribui 0 — o teto governa o
+#   gasto MEDIDO, nunca inventa medida (a régua de `soma_tokens`).
+# * `teto_custo` NÃO entra: exige tarifa R$/token que não existe no domínio (tarifas
+#   são por canal de disparo). Entrar sem consumidor seria recriar o achado 8 no mesmo
+#   commit que o mata para tokens.
 # * `rotulo_ia` (pedido (e)) NÃO entra porque o enforcement dele é a UI marcar a saída
 #   de agente em ~10 telas — arquivos fora desta frente. A regra sem as telas seria um
 #   booleano que ninguém lê.
 #
-# Os dois voltam junto com o teste que prova que mudam comportamento. É literalmente a
+# Campo novo entra junto com o teste que prova que muda comportamento. É literalmente a
 # regra que o achado 8 do UAT #5 cobrou, aplicada ao próprio módulo que nasce dele.
 CAMPOS_CONTEUDO: tuple[str, ...] = (
     "dados_llm",  # (a) o que pode sair para o modelo
     "retencao",  # (b) por quanto tempo prompt/resposta ficam guardados
     "decisao_automatizada",  # (c) LGPD Art. 20
     "modelos_permitidos",  # (f) roster §7.2 pinado
+    "teto_tokens",  # (d) orçamento de consumo — J02, com enforcement no portão
 )
+
+# Obrigatoriedade CONGELADA no conjunto v1 (o espelho exato da doutrina de
+# `CATEGORIAS_PII_OBRIGATORIAS`): exigir `teto_tokens` invalidaria, de um deploy para
+# o outro, toda política já publicada — a tela do DPO abriria o vigente e o formulário
+# nasceria inválido. Omissão cai em "sem teto", que nunca AFROUXA nada: sem teto é o
+# comportamento de sempre.
+CAMPOS_CONTEUDO_OBRIGATORIOS: tuple[str, ...] = (
+    "dados_llm",
+    "retencao",
+    "decisao_automatizada",
+    "modelos_permitidos",
+)
+
+# Sub-conjunto FECHADO do bloco `teto_tokens` (mesma doutrina de CAMPOS_RETENCAO).
+# Só `tokens_por_dia` tem enforcement hoje; `tokens_por_os_dia`/`teto_custo` entram
+# quando (e se) ganharem o seu.
+CAMPOS_TETO_TOKENS: tuple[str, ...] = ("tokens_por_dia",)
 
 # Mesmo teto do `retencao_dias` do M12 (`domain/governanca/politicas.py`, purge §10.4).
 DIAS_RETENCAO_MAX = 36500
@@ -390,6 +415,9 @@ def politica_ia_seed() -> dict[str, Any]:
         "decisao_automatizada": {"pode_aplicar_sozinho": []},
         # (f) Roster §7.2 pinado.
         "modelos_permitidos": {nome: list(perfis) for nome, perfis in PERFIL_DO_ROSTER.items()},
+        # (d) Sem teto por default (J02): null = nenhum limite de consumo — o
+        # comportamento de sempre. O DPO aperta quando quiser; ver o efeito na tela.
+        "teto_tokens": {"tokens_por_dia": None},
     }
 
 
@@ -402,7 +430,9 @@ def validar_conteudo(conteudo: Any) -> list[str]:
     if not isinstance(conteudo, dict) or not conteudo:
         return ["conteudo deve ser objeto não-vazio (política de IA Responsável)"]
     erros: list[str] = []
-    for campo in CAMPOS_CONTEUDO:
+    # Obrigatórios = conjunto v1 CONGELADO (compatibilidade retroativa — ver a nota em
+    # CAMPOS_CONTEUDO_OBRIGATORIOS): política publicada antes do J02 continua válida.
+    for campo in CAMPOS_CONTEUDO_OBRIGATORIOS:
         if campo not in conteudo:
             erros.append(f"conteudo sem campo obrigatório {campo!r}")
     for campo in conteudo:
@@ -417,6 +447,29 @@ def validar_conteudo(conteudo: Any) -> list[str]:
         erros.extend(_erros_decisao(conteudo.get("decisao_automatizada")))
     if "modelos_permitidos" in conteudo:
         erros.extend(_erros_modelos(conteudo.get("modelos_permitidos")))
+    if "teto_tokens" in conteudo:
+        erros.extend(_erros_teto_tokens(conteudo.get("teto_tokens")))
+    return erros
+
+
+def _erros_teto_tokens(bloco: Any) -> list[str]:
+    """Bloco (d) — sub-conjunto fechado {tokens_por_dia: int>0 | null} (J02)."""
+    if not isinstance(bloco, dict):
+        return ["teto_tokens deve ser {tokens_por_dia: inteiro positivo ou null}"]
+    erros: list[str] = []
+    for chave in bloco:
+        if chave not in CAMPOS_TETO_TOKENS:
+            erros.append(
+                f"teto_tokens.{chave} desconhecido — sub-conjunto FECHADO: só "
+                f"{list(CAMPOS_TETO_TOKENS)} tem enforcement hoje (a régua do achado 8 "
+                "vale dentro do bloco também)"
+            )
+    valor = bloco.get("tokens_por_dia")
+    if valor is not None and (isinstance(valor, bool) or not isinstance(valor, int) or valor <= 0):
+        erros.append(
+            f"teto_tokens.tokens_por_dia deve ser inteiro positivo ou null (recebido "
+            f"{valor!r}) — null = sem teto"
+        )
     return erros
 
 

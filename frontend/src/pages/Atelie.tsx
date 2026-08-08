@@ -12,8 +12,16 @@ import { useMemo, useState } from "react";
 import { Copiloto } from "../components/ai/Copiloto";
 import { BannerErro, EstadoVazio, TituloTela } from "../components/ui/basics";
 import { get, post } from "../lib/api";
+import { fmtInt } from "../lib/format";
 import { usePainelContextual } from "../lib/hooks";
-import type { AgenteOut, DryRunOut, HarnessRunOut, SkillOut } from "../lib/types";
+import type {
+  AgenteOut,
+  AuditoriaOut,
+  DryRunOut,
+  EventoAuditoriaOut,
+  HarnessRunOut,
+  SkillOut,
+} from "../lib/types";
 
 const ETAPA_ROTULO: Record<string, string> = {
   pedido: "Pedido",
@@ -53,6 +61,67 @@ function ChipHarness({ score, passou }: { score: number | null; passou?: boolean
   );
 }
 
+/** Linha da trilha via_ai (§8-M12) + detalhe do ledger sob clique (J05 — fecho do I04).
+ * `tokens`/`latencia_ms` nulos aparecem como "—" via fmtInt: ausência de medida (hub
+ * sem `usage`) NUNCA vira 0 — a doutrina do I04 vale na tela como vale no ledger. */
+function LinhaAuditoria({ evento }: { evento: EventoAuditoriaOut }) {
+  const [aberto, setAberto] = useState(false);
+  const det = evento.invocacao ?? null;
+  return (
+    <>
+      <tr
+        className="cursor-pointer border-b border-linesoft transition-colors hover:bg-surface2"
+        onClick={() => setAberto((v) => !v)}
+      >
+        <td className="px-3 py-1.5 font-mono text-[10.5px] text-faint">
+          {evento.created_at ? new Date(evento.created_at).toLocaleString("pt-BR") : "—"}
+        </td>
+        <td className="px-3 py-1.5 font-mono text-[11px]">{evento.tipo}</td>
+        <td className="px-3 py-1.5">
+          {det?.agente ? <span className="mchip-b">{det.agente}</span> : (evento.actor ?? "—")}
+        </td>
+        <td className="px-3 py-1.5 text-right tabular-nums">{fmtInt(det?.tokens)}</td>
+        <td className="px-3 py-1.5 text-right tabular-nums">
+          {det?.latencia_ms == null ? "—" : `${fmtInt(det.latencia_ms)} ms`}
+        </td>
+        <td className="px-3 py-1.5 text-right text-[10px] text-faint">{aberto ? "▲" : "▼"}</td>
+      </tr>
+      {aberto && det && (
+        <tr className="border-b border-linesoft bg-surface2/60">
+          <td colSpan={6} className="px-3 py-2">
+            <div className="flex flex-wrap gap-3 text-[11.5px]">
+              <span>
+                skill <b className="font-mono">{det.skill_versao ?? "—"}</b>
+              </span>
+              <span>
+                tokens <b className="tabular-nums">{fmtInt(det.tokens)}</b>
+              </span>
+              <span>
+                latência{" "}
+                <b className="tabular-nums">
+                  {det.latencia_ms == null ? "—" : `${fmtInt(det.latencia_ms)} ms`}
+                </b>
+              </span>
+              {det.os_id && (
+                <span className="font-mono text-faint">OS {det.os_id.slice(0, 8)}</span>
+              )}
+            </div>
+            {/* input/output/judge: conteúdo integral do ledger (mascarado na entrada
+                pela C02 e sujeito à retenção §10.4) — monospace, expandido só aqui */}
+            <pre className="mt-1.5 max-h-40 overflow-auto rounded-lg bg-claro p-2.5 font-mono text-[10.5px] leading-relaxed text-claro-pale">
+              {JSON.stringify(
+                { input: det.input, output: det.output, judge: det.judge },
+                null,
+                2,
+              )}
+            </pre>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 function UltimoRun({ run }: { run: HarnessRunOut }) {
   return (
     <div className="mfield block">
@@ -86,6 +155,13 @@ export function Atelie() {
   const agentes = useQuery({
     queryKey: ["agentes"],
     queryFn: ({ signal }) => get<{ agentes: AgenteOut[] }>("/agentes", signal),
+  });
+
+  // Trilha via_ai (§8-M12): o guia desta página e o SDD prometem a auditoria
+  // clicável desde o M12 — o painel nasceu no J05, junto com tokens/latência (I04).
+  const auditoria = useQuery({
+    queryKey: ["auditoria-via-ai"],
+    queryFn: ({ signal }) => get<AuditoriaOut>("/auditoria?via_ai=true&limit=50", signal),
   });
 
   const skill = useQuery({
@@ -445,6 +521,52 @@ export function Atelie() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ------------------------------------ auditoria via_ai (§8-M12 · J05) */}
+      <div className="mcard mt-3 overflow-x-auto !p-0">
+        <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+          <b className="text-[13px]">Auditoria via_ai</b>
+          <span className="mchip-n">{fmtInt(auditoria.data?.total)} evento(s)</span>
+          <span className="text-[11px] text-faint">
+            trilha do ledger `invocacao` (Art. 20) — clique para o detalhe da época;
+            tokens/latência “—” = provedor sem usage, nunca zero
+          </span>
+        </div>
+        {auditoria.error != null && (
+          <div className="p-3">
+            <BannerErro erro={auditoria.error} contexto="Auditoria" />
+          </div>
+        )}
+        {auditoria.isLoading && (
+          <div className="p-3 text-[12.5px] text-muted">Carregando trilha…</div>
+        )}
+        {!auditoria.isLoading && (auditoria.data?.eventos.length ?? 0) === 0 && (
+          <div className="p-3">
+            <EstadoVazio>
+              Nenhum evento via_ai ainda — toda chamada de agente grava uma linha aqui.
+            </EstadoVazio>
+          </div>
+        )}
+        {(auditoria.data?.eventos.length ?? 0) > 0 && (
+          <table className="w-full text-left text-[12px]">
+            <thead>
+              <tr className="border-b border-line bg-surface2 text-[10px] uppercase tracking-[.06em] text-faint">
+                <th className="px-3 py-2">Quando</th>
+                <th className="px-3 py-2">Evento</th>
+                <th className="px-3 py-2">Agente</th>
+                <th className="px-3 py-2 text-right">Tokens</th>
+                <th className="px-3 py-2 text-right">Latência</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {(auditoria.data?.eventos ?? []).map((evento) => (
+                <LinhaAuditoria key={evento.id} evento={evento} />
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
