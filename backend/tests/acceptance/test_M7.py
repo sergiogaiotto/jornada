@@ -478,12 +478,17 @@ def test_M7_B3(client: TestClient, app: FastAPI) -> None:
         headers=_h(),
     )
     assert salvo.status_code == 200, salvo.text
+    # D06 (K04): o save MINTA versão em vez de sobrescrever, então o alvo do diff é o id
+    # DEVOLVIDO, não o que foi editado. Antes desta emenda `v2_id` era o próprio destino
+    # — e é justamente por isso que uma sessão de edição colapsava numa versão só.
+    editada = salvo.json()["jornada"]
+    assert editada["id"] != v2_id, "o save sobrescreveu a versão em vez de mintar (D06)"
 
-    resposta = client.get(f"/api/v1/jornadas/{v1['id']}/diff/{v2_id}", headers=_h())
+    resposta = client.get(f"/api/v1/jornadas/{v1['id']}/diff/{editada['id']}", headers=_h())
     assert resposta.status_code == 200, resposta.text
     diff = resposta.json()
     assert diff["de"] == {"id": v1["id"], "versao": 1, "hash": v1["hash"]}
-    assert diff["para"]["versao"] == 2 and diff["para"]["hash"] != v1["hash"]
+    assert diff["para"]["versao"] == 3 and diff["para"]["hash"] != v1["hash"]
     assert diff["nodes"]["adicionados"] == ["n7"]
     assert diff["nodes"]["removidos"] == ["n4"]
     assert diff["nodes"]["alterados"] == ["n2"]

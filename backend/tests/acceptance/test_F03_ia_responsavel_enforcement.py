@@ -650,8 +650,16 @@ def test_c_decisao_automatizada_abre_o_caminho_que_o_codigo_fechava_na_mao(
     # — é escrita de verdade no twin, pelo mesmo `atualizar_grafo` do PUT humano
     # (§1.1.3), que valida o §5.3 de novo e recalcula o taxímetro. Um atalho que
     # gravasse direto teria menos gates que o clique, o oposto do que o Art. 20 pede.
-    gravada = app.state.repositorio_os.obter_jornada(uuid.UUID(jornada["id"]))
+    # D06 (K04): `atualizar_grafo` passou a MINTAR versão em vez de sobrescrever, então
+    # a escrita aparece na versão CORRENTE da OS, não no id de origem. O que se afirma
+    # aqui não mudou — "o twin mudou de verdade" —, mudou onde se olha.
+    versoes = app.state.repositorio_os.listar_jornadas(uuid.UUID(jornada["os_id"]))
+    gravada = versoes[-1]
+    assert gravada.id != uuid.UUID(jornada["id"]), "a IA aplicou sobrescrevendo (D06)"
     assert gravada.grafo != grafo_original, "a política autorizou: o twin tinha de ter mudado"
+    # e a versão de ORIGEM continua intacta — é o ganho do D06: a IA não apaga histórico
+    origem = app.state.repositorio_os.obter_jornada(uuid.UUID(jornada["id"]))
+    assert origem.grafo == grafo_original, "aplicar automático destruiu a versão anterior"
     bracos = next(n for n in gravada.grafo["nodes"] if n["id"] == "n2")["data"]["braços"]
     assert {b["id"]: b["pct"] for b in bracos} == {"tratado": 80, "holdout": 20}
 

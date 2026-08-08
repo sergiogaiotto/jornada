@@ -15,6 +15,45 @@ do agendamento, `K02` honestidade da documentação, e as frentes de código seg
 ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
 `blackout` no pré-voo, e2e/paridade do lint, drift por cron.
 
+### K04 · Salvar o grafo MINTA versão em vez de sobrescrever (achado D06 · aceite §8-M7-B6)
+
+`atualizar_grafo` mutava o MESMO registro e o adapter fazia `on_conflict_do_update`: uma sessão
+inteira de edição colapsava numa linha (o UAT #4 mediu ~25 PUTs virando UMA versão). O twin é a
+fonte da verdade do §1.1 e o histórico dele existia só no papel.
+
+O que subiu a gravidade durante a implementação: `criar_snapshot` **não** muda o estado da jornada.
+Entre montar o snapshot e a decisão do aprovador a versão segue `simulado` — editável. O snapshot
+guarda o JGC por REFERÊNCIA e o compilador materializa o grafo ATUAL com o hash APROVADO, sem
+conferir igualdade. Um PUT nessa janela publicava no SFMC um grafo que ninguém aprovou, carimbado
+como aprovado. Mintar versão fecha isso **por construção**, sem guarda nova em lugar nenhum: a
+versão aprovada deixa de ser alcançável pela edição.
+
+Duas garantias que só valem juntas. **Mintar** (nenhuma linha da função atribui a
+`jornada.<atributo>`; a origem sai byte a byte como entrou, com `simulacao` e `estado` preservados)
+e **no-op** (hash canônico igual ⇒ nada acontece). Sem a segunda, o conserto viraria regressão: cada
+auto-save do canvas criaria versão idêntica e apagaria o Ensaio — e quebraria a promessa, escrita no
+README, de que reordenar nós não versiona (o hash já é insensível à ordem desde o I03).
+
+`jornada.grafo_atualizado` **continua** sendo emitido, ao lado do `jornada.versao_criada` novo:
+trocar o tipo calado transformaria um fecho em quebra de contrato para quem consome o outbox.
+
+Ripple medido: **dois** aceites existentes, ambos corrigidos passando a seguir o id devolvido —
+nunca afrouxando asserção. `test_M7_B3` (o diff) e o teste do `decisao_automatizada` do F03, que
+afirmava a escrita no id de origem; agora afirma na versão corrente **e** que a origem ficou intacta,
+o que é mais forte: aplicar automático não apaga histórico.
+
+Inversão nos dois eixos. Restaurar o bloco antigo mata o aceite na releitura da origem e na contagem
+de versões; remover o early-return do no-op deixa vermelho o caso do grafo permutado — e, de quebra,
+o `test_M7_criar_manual_comecar_do_zero`, o que mostra que a guarda é estrutural, não decorativa.
+
+Frontend: o `salvar` do `Twin.tsx` passou a limpar `versaoVistaId`/`compararComId` no sucesso (mesmo
+idioma que `restaurar` e `comecarDoZero` já usavam) — sem isso a tela cairia em read-only logo após
+salvar, já que o id corrente muda a cada save.
+
+**Limite declarado:** `proxima_versao` é MAX+1 sem lock. Dois saves simultâneos na mesma OS colidem
+no `unique(os_id, versao)`. Hoje não acontecia porque saves não mintavam; a partir daqui passa a ser
+possível. Fica declarado em vez de silenciosamente tratado.
+
 ### K03 · O vermelho do §6 passa a RECUSAR, não só pintar (emenda D09 · aceite §8-M8-A8)
 
 O D08 tirou do verde o `frequencySplit` cujas conds não casam com o mix do governor. Parou na cor,

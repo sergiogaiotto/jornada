@@ -205,6 +205,12 @@ export function Twin() {
         taximetro: saida.taximetro,
         resumo: estado?.resumo,
       });
+      // D06 (K04): salvar MINTA versão, então o id corrente muda a cada save. Sem
+      // reapontar, um `versaoVistaId` remanescente passaria a divergir do id novo e a
+      // tela cairia em `vendoAntiga` (read-only) logo depois de salvar. Mesmo idioma
+      // que `restaurar` e `comecarDoZero` já usam.
+      setVersaoVistaId(null);
+      setCompararComId(null);
       invalidarVersoes();
     },
   });

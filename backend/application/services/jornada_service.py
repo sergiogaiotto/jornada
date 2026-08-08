@@ -302,9 +302,32 @@ class ServicoJornada:
     def atualizar_grafo(
         self, tenant_id: str, jornada_id: uuid.UUID, *, grafo: dict[str, Any], actor: str
     ) -> tuple[JornadaVersao, dict[str, Any]]:
-        """Valida §5.3 e recalcula o taxímetro (§8-M7) — SEM LLM (§10.6). Editar uma
-        versão `simulado` invalida simulação/previsto (→ `rascunho`): o Previsto
-        congelado que vale é o do snapshot (§1.1.2)."""
+        """Valida §5.3, recalcula o taxímetro (§8-M7) e MINTA uma versão nova — SEM LLM
+        (§10.6).
+
+        **D06 (emenda K04, onda 7 — aceite §8-M7-B6).** Até aqui esta função mutava o
+        MESMO registro (`jornada.grafo = grafo`, `jornada.hash = ...`) e o adapter fazia
+        `on_conflict_do_update`: uma sessão inteira de edição colapsava numa linha só. O
+        UAT #4 mediu ~25 PUTs virando UMA versão — o histórico do twin, que é a fonte da
+        verdade do §1.1, existia só no papel.
+
+        E havia um buraco pior que a perda de histórico. Entre `criar_snapshot` (que NÃO
+        muda o estado) e a decisão, a jornada segue `simulado` — portanto editável. O
+        snapshot guarda o JGC por REFERÊNCIA e o compilador materializa o grafo ATUAL
+        carimbado com o hash APROVADO, sem conferir igualdade: um PUT nessa janela
+        publicava no SFMC um grafo que ninguém aprovou. Mintar versão fecha essa janela
+        **por construção** — a versão aprovada deixa de ser alcançável pela edição.
+
+        Duas garantias que andam juntas:
+
+        · **Save idempotente não versiona.** Hash igual ⇒ nada acontece: nem registro
+          novo, nem evento, nem invalidação de simulação. É o que cumpre a promessa de
+          que reordenar nós no canvas não mexe no SFMC (o hash já é insensível à ordem,
+          emenda I03) — sem esta guarda, o D06 encheria o histórico de versões idênticas
+          e zeraria o Ensaio a cada auto-save.
+        · **Nada é mutado.** Nenhuma linha desta função atribui a `jornada.<atributo>`:
+          a versão de origem tem de sair da chamada byte a byte como entrou.
+        """
         jornada, os_ = self._jornada_da_os(tenant_id, jornada_id)
         if jornada.estado not in ESTADOS_EDITAVEIS:
             raise EstadoInvalido(
@@ -314,25 +337,51 @@ class ServicoJornada:
         grafo = self._normalizar_meta(grafo, os_)
         self._validar(grafo, os_, self._politica(os_))  # A1/A3 → 422
         custo, memoria, avisos = self._taximetro(grafo, os_.id)
-        jornada.grafo = grafo
-        jornada.hash = hash_jgc(grafo)
-        jornada.custo_projetado = float(custo)
-        jornada.simulacao = None  # grafo mudou: Ensaio Geral anterior não vale (§6)
-        jornada.previsto = None
-        jornada.estado = "rascunho"
-        self._repo.salvar_jornada(jornada)
+
+        novo_hash = hash_jgc(grafo)
+        if novo_hash == jornada.hash:
+            # Grafo idêntico (inclusive só reordenado): o save é no-op observável.
+            return jornada, {"memoria": memoria, "avisos": avisos}
+
+        nova = JornadaVersao(
+            id=uuid.uuid4(),
+            os_id=os_.id,
+            versao=self._repo.proxima_versao(os_.id),
+            grafo=grafo,
+            hash=novo_hash,
+            premissas=list(jornada.premissas),
+            custo_projetado=float(custo),
+            created_at=self._relogio.agora(),
+        )
+        # `simulacao`/`previsto` NÃO acompanham: nascem `None` no dataclass. O Ensaio
+        # pertence ao grafo que foi simulado, e o Previsto que vale é o do snapshot.
+        self._repo.adicionar_jornada(nova)
+        self._evento(
+            os_,
+            "jornada.versao_criada",
+            {
+                "jornada_id": str(nova.id),
+                "versao": nova.versao,
+                "hash": nova.hash,
+                "custo_projetado": nova.custo_projetado,
+                "derivada_de": {"jornada_id": str(jornada.id), "versao": jornada.versao},
+            },
+            actor=actor,
+        )
+        # O evento antigo CONTINUA saindo: consumidores (e aceites) filtram por ele, e
+        # trocar o tipo calado transformaria um fecho em quebra de contrato de outros.
         self._evento(
             os_,
             "jornada.grafo_atualizado",
             {
-                "jornada_id": str(jornada.id),
-                "versao": jornada.versao,
-                "hash": jornada.hash,
-                "custo_projetado": jornada.custo_projetado,
+                "jornada_id": str(nova.id),
+                "versao": nova.versao,
+                "hash": nova.hash,
+                "custo_projetado": nova.custo_projetado,
             },
             actor=actor,
         )
-        return jornada, {"memoria": memoria, "avisos": avisos}
+        return nova, {"memoria": memoria, "avisos": avisos}
 
     # -------------------------------------------------- POST /jornadas/{id}/ajustar
     def ajustar(
