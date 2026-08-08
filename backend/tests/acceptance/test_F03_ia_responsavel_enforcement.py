@@ -693,6 +693,73 @@ ACOES_SEM_ENFORCEMENT_HOJE = frozenset(
 )
 
 
+def _acoes_com_call_site_real() -> set[str]:
+    """As ações que algum serviço REALMENTE consulta — derivadas por AST, não declaradas.
+
+    Varre `application/`, `adapters/` e `api/` por chamadas a `pode_aplicar_sozinho(...)`
+    e resolve o argumento de cada call site (literal ou constante de `portao_ia`).
+    Excluídos: o próprio `portao_ia.py` (definição + delegação interna) e os testes.
+
+    Acessos por CHAVE (`.get("pode_aplicar_sozinho")`) não contam: são leitura do dict
+    da política (tela/validação), não decisão de aplicar — e é exatamente por isso que a
+    varredura é por nó `Call` com esse nome de método, não por grep de string.
+    """
+    import ast
+    from pathlib import Path
+
+    backend = Path(portao_ia.__file__).resolve().parents[2]
+    definicao = Path(portao_ia.__file__).resolve()
+    acoes: set[str] = set()
+    for pasta in ("application", "adapters", "api"):
+        for arquivo in (backend / pasta).rglob("*.py"):
+            if arquivo == definicao:
+                continue
+            arvore = ast.parse(arquivo.read_text(encoding="utf-8"))
+            for no in ast.walk(arvore):
+                if not (
+                    isinstance(no, ast.Call)
+                    and isinstance(no.func, ast.Attribute)
+                    and no.func.attr == "pode_aplicar_sozinho"
+                    and no.args
+                ):
+                    continue
+                argumento = no.args[0]
+                if isinstance(argumento, ast.Constant) and isinstance(argumento.value, str):
+                    acoes.add(argumento.value)
+                elif isinstance(argumento, ast.Attribute):
+                    acoes.add(getattr(portao_ia, argumento.attr))
+                elif isinstance(argumento, ast.Name):
+                    acoes.add(getattr(portao_ia, argumento.id))
+                else:  # pragma: no cover — argumento dinâmico exige revisão humana
+                    raise AssertionError(
+                        f"{arquivo}: call site de pode_aplicar_sozinho com argumento "
+                        f"não-resolvível ({ast.dump(argumento)}) — o vigia não consegue "
+                        "derivar a ação; use uma constante de portao_ia"
+                    )
+    return acoes
+
+
+def test_c_acoes_fiadas_e_derivada_dos_call_sites() -> None:
+    """ACOES_FIADAS não é promessa: cada nome ali tem um call site real — e vice-versa.
+
+    A versão anterior deste guarda-corpo comparava dois frozensets LITERAIS
+    (`ACOES_FIADAS` × `ACOES_SEM_ENFORCEMENT_HOJE`): mover um nome entre eles ficava
+    verde com zero linhas de fiação — promessa conferida contra promessa. Agora o lado
+    de lá é MEDIDO no código: a varredura AST resolve o argumento de cada
+    `pode_aplicar_sozinho(...)` fora do próprio portão.
+
+    Inversão (as duas direções): acrescentar um nome a `ACOES_FIADAS` sem criar call
+    site reprova aqui; criar um call site novo sem declará-lo em `ACOES_FIADAS` também.
+    """
+    medidas = _acoes_com_call_site_real()
+    assert medidas == set(portao_ia.ACOES_FIADAS), (
+        f"ACOES_FIADAS={sorted(portao_ia.ACOES_FIADAS)} × call sites reais="
+        f"{sorted(medidas)}. Se ACOES_FIADAS tem um nome a mais, é promessa sem fiação "
+        "(o overclaim do K06); se tem um a menos, um serviço passou a aplicar sozinho "
+        "sem que a lista — e a tela do DPO — saibam."
+    )
+
+
 def test_c_acao_publicavel_sem_consumidor_e_divida_medida() -> None:
     """Toda ação de `ACOES_VIA_AI` ou tem consumidor, ou está declarada como inerte.
 
@@ -700,7 +767,7 @@ def test_c_acao_publicavel_sem_consumidor_e_divida_medida() -> None:
     de portão: fiar uma ação obriga a tirá-la daqui (senão a dívida nunca encolhe), e
     ACRESCENTAR uma ação ao vocabulário obriga a declarar que ela nasce inerte — que é
     a decisão que ninguém quer tomar por escrito, e exatamente por isso tem de ser
-    escrita.
+    escrita. (Quem prova que `ACOES_FIADAS` não é promessa é o teste ACIMA, por AST.)
     """
     inertes = set(ACOES_VIA_AI) - portao_ia.ACOES_FIADAS
 

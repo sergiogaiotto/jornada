@@ -80,6 +80,8 @@ interface Vocabulario {
   categorias_pii: CategoriaPii[];
   acoes_dado: string[];
   acoes_via_ai: string[];
+  /** K06: ações com consumidor em runtime — derivado de ACOES_FIADAS, nunca redigitado. */
+  acoes_com_enforcement: string[];
   agentes: Record<string, string[]>;
 }
 
@@ -442,9 +444,20 @@ function Formulario({ vigente }: { vigente: Vigente }) {
               }
             />
             <code>{acao}</code>
-            <span className="text-muted">
+            {/* K06: TRÊS estados, e quem sabe qual ação tem consumidor é o servidor
+                (vocabulario.acoes_com_enforcement) — nenhum nome de ação redigitado. */}
+            <span
+              className={
+                rascunho.decisao_automatizada.pode_aplicar_sozinho.includes(acao) &&
+                !vigente.vocabulario.acoes_com_enforcement.includes(acao)
+                  ? "text-warn"
+                  : "text-muted"
+              }
+            >
               {rascunho.decisao_automatizada.pode_aplicar_sozinho.includes(acao)
-                ? "— a IA aplica sozinha"
+                ? vigente.vocabulario.acoes_com_enforcement.includes(acao)
+                  ? "— a IA aplica sozinha"
+                  : "— autorização SEM consumidor em runtime: nada muda hoje (fiação aberta)"
                 : "— a IA propõe, um humano aplica"}
             </span>
           </label>

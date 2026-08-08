@@ -15,6 +15,42 @@ do agendamento, `K02` honestidade da documentação, e as frentes de código seg
 ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
 `blackout` no pré-voo, e2e/paridade do lint, drift por cron.
 
+### K06 · A tela do DPO para de afirmar efeito inexistente (§10.2 — fatia B)
+
+`decisao_automatizada` governa **1 das 7** ações (`ACOES_FIADAS = {jornada.ajustar}`), mas a tela e
+os `efeitos` diziam "A IA APLICA sozinha — não há revisão humana antes do efeito" para QUALQUER ação
+marcada, e o resumo contava "6 de 7 ações aplicadas pela IA" com 5 inertes. Publicar
+`otimizacao.propor` recebia 201, a tela confirmava a automação, e nada mudava — há um aceite cujo
+único propósito é provar esse nada. Era a plataforma afirmando efeito inexistente na tela em que o
+DPO governa, sobre o artigo (Art. 20) em que "quem aplicou" é o ponto inteiro.
+
+O fecho, na direção da honestidade (fatia B):
+
+- o vocabulário serve `acoes_com_enforcement`, **derivado** de `ACOES_FIADAS` — a tela lê de lá e
+  não redigita nome de ação (a doutrina dos limites de PII: redigitado no React, envelhece na
+  primeira fiação e a tela passa a mentir na direção que for);
+- os efeitos ganham **três estados** — fiada / marcada-e-inerte ("autorização PUBLICADA e sem
+  consumidor em runtime — nada muda hoje") / não marcada — e o **resumo conta só as fiadas**;
+- o **201 da publicação avisa na hora** quando uma autorização marcada não tem consumidor. A
+  publicação continua aceita (a ação é do vocabulário; recusar quebraria política retroativa), mas
+  quem publicou fica sabendo no ato, não num relatório seis meses depois. Fiada marcada → zero
+  avisos, para o aviso não virar ruído permanente.
+
+**O guarda-corpo trocou de natureza.** A versão anterior comparava dois frozensets LITERAIS
+(`ACOES_FIADAS` × `ACOES_SEM_ENFORCEMENT_HOJE`) — promessa conferida contra promessa: mover um nome
+entre eles ficava verde com zero fiação. O vigia novo (`test_c_acoes_fiadas_e_derivada_dos_call_sites`)
+**mede** o lado de lá por AST: varre `application/`, `adapters/` e `api/` pelos call sites reais de
+`pode_aplicar_sozinho(...)`, resolve o argumento de cada um, e cobra igualdade com `ACOES_FIADAS`
+nas duas direções. Acesso por chave (`.get("pode_aplicar_sozinho")`) não conta — é leitura da
+política, não decisão de aplicar. Inversão verificada: nome em `ACOES_FIADAS` sem call site reprova
+(a direção que o guarda-corpo velho não tinha); call site novo sem declarar também.
+
+**A fatia A (auto-aplicar `otimizacao.propor`) fica DE FORA por decisão.** Automatizar a aprovação
+da top-1 é comportamento novo de produto — semântica, escopo de tenant e papéis exigem emenda prévia
+(o gate A0 do plano da onda). Construí-la só para encolher a lista de inertes seria a forma
+sofisticada de teatro. O aceite que prova a inércia (`test_c_publicar_acao_inerte_e_nao_muda_nada`)
+fica intacto até lá.
+
 ### K05 · O certificado declara a PROVENIÊNCIA das contagens (§8-M5-A5)
 
 O overclaim que a reversão do J01 deixou exposto: `certificado_elegibilidade.suprimidos`/`liquido`

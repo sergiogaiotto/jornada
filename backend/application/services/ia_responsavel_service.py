@@ -44,6 +44,7 @@ from application.ports.publicacoes_ia import (
     PublicacoesIaPort,
     RepositorioPoliticaIa,
 )
+from application.services.portao_ia import ACOES_FIADAS
 from domain.campanha.modelos import EventoDominio
 from domain.ia_responsavel import (
     ACOES_VIA_AI,
@@ -219,7 +220,20 @@ class ServicoIaResponsavel:
                 created_at=agora,
             )
         )
-        return self.vigente(tenant_id)
+        # K06: o 201 AVISA quando a publicação inclui autorização sem consumidor. A
+        # publicação é aceita (a ação é do vocabulário; recusar quebraria política
+        # retroativa), mas quem publicou precisa saber NA HORA que aquela linha não
+        # muda comportamento — não descobrir num relatório seis meses depois.
+        marcadas = set(
+            (conteudo.get("decisao_automatizada") or {}).get("pode_aplicar_sozinho") or []
+        )
+        avisos = [
+            f"decisao_automatizada: a ação {acao!r} foi autorizada e NÃO tem consumidor "
+            "em runtime — a autorização é aceita e registrada, mas nada muda hoje "
+            "(HANDOFF §8.3)."
+            for acao in sorted(marcadas - ACOES_FIADAS)
+        ]
+        return {**self.vigente(tenant_id), "avisos": avisos}
 
 
 # ------------------------------------------------------------- helpers puros do módulo
@@ -276,6 +290,12 @@ def _vocabulario() -> dict[str, Any]:
         "categorias_pii": [_categoria_out(c) for c in CATEGORIAS_PII],
         "acoes_dado": ["mascarar", "bloquear"],
         "acoes_via_ai": list(ACOES_VIA_AI),
+        # K06 (§10.2, onda 7): quais ações têm CONSUMIDOR em runtime — derivado de
+        # `ACOES_FIADAS`, nunca redigitado. A tela lê daqui para distinguir "a IA aplica
+        # sozinha" (verdade) de "autorização publicada e inerte" (o que era exibido como
+        # verdade para 6 das 7 ações). Redigitar esta lista no React foi vetado pelo
+        # mesmo motivo dos limites de PII acima: envelhece na primeira fiação nova.
+        "acoes_com_enforcement": sorted(ACOES_FIADAS),
         "agentes": {nome: list(perfis) for nome, perfis in PERFIL_DO_ROSTER.items()},
     }
 
@@ -301,6 +321,47 @@ def _efeito_da_categoria(categoria: str, acao: Any) -> str:
             "o formulário abaixo lista os casos em que ele sai em claro."
         )
     return frase
+
+
+def _efeito_da_acao(acao: str, *, marcada: bool) -> str:
+    """A frase de efeito de UMA ação — em TRÊS estados, não dois (K06, onda 7).
+
+    O estado do meio é o que faltava: ação marcada na allowlist mas SEM consumidor em
+    runtime. Antes ela recebia a frase da fiada ("A IA APLICA sozinha") e o DPO lia um
+    efeito que não existe — publicar `otimizacao.propor` não muda comportamento nenhum,
+    e há um aceite cujo único propósito é provar isso. A frase do meio diz a verdade no
+    presente do indicativo, que é a régua deste módulo: o que ACONTECE, não o que se
+    gostaria que acontecesse.
+    """
+    if not marcada:
+        return "A IA PROPÕE; um humano aplica."
+    if acao in ACOES_FIADAS:
+        return "A IA APLICA sozinha — não há revisão humana antes do efeito."
+    return (
+        "Autorização PUBLICADA e sem consumidor em runtime — nada muda hoje: a IA "
+        "continua propondo e um humano aplicando. A fiação desta ação está aberta "
+        "(HANDOFF §8.3); quando existir, esta frase troca sozinha."
+    )
+
+
+def _resumo_decisao_automatizada(automatizaveis: list[str]) -> str:
+    """O resumo conta APENAS as ações fiadas — nunca as marcadas."""
+    fiadas_marcadas = sorted(set(automatizaveis) & ACOES_FIADAS)
+    inertes_marcadas = sorted(set(automatizaveis) - ACOES_FIADAS)
+    if not automatizaveis:
+        return "Nenhuma ação é aplicada pela IA sozinha: a IA PROPÕE e um humano aplica."
+    partes: list[str] = []
+    if fiadas_marcadas:
+        partes.append(
+            f"{len(fiadas_marcadas)} de {len(ACOES_VIA_AI)} ações são aplicadas pela IA "
+            "SEM revisão humana."
+        )
+    if inertes_marcadas:
+        partes.append(
+            f"{len(inertes_marcadas)} autorização(ões) publicada(s) SEM consumidor em "
+            "runtime — sem efeito hoje."
+        )
+    return " ".join(partes)
 
 
 def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
@@ -384,21 +445,15 @@ def efeitos_em_portugues(conteudo: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "parametro": "decisao_automatizada",
             "titulo": "Decisão automatizada (LGPD Art. 20)",
-            "resumo": (
-                "Nenhuma ação é aplicada pela IA sozinha: a IA PROPÕE e um humano aplica."
-                if not automatizaveis
-                else f"{len(automatizaveis)} de {len(ACOES_VIA_AI)} ações são aplicadas pela "
-                "IA SEM revisão humana."
-            ),
+            # K06: o resumo conta só as FIADAS. "6 de 7 ações são aplicadas pela IA"
+            # quando 5 delas não têm consumidor era a plataforma afirmando efeito
+            # inexistente na tela em que o DPO governa — a forma mais cara de mentira.
+            "resumo": _resumo_decisao_automatizada(automatizaveis),
             "itens": [
                 {
                     "chave": acao,
                     "valor": acao in automatizaveis,
-                    "efeito": (
-                        "A IA APLICA sozinha — não há revisão humana antes do efeito."
-                        if acao in automatizaveis
-                        else "A IA PROPÕE; um humano aplica."
-                    ),
+                    "efeito": _efeito_da_acao(acao, marcada=acao in automatizaveis),
                 }
                 for acao in ACOES_VIA_AI
             ],
