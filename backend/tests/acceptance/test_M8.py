@@ -965,6 +965,8 @@ def test_M8_portoes_e_custo_alcada(client: TestClient, app: FastAPI) -> None:
             liquido=VOLUME_LIQUIDO,
             emitido_em=agora - timedelta(days=8),
             valido_ate=agora - timedelta(days=1),
+            # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+            contagens_derivadas_do_sql=False,
         )
     )
     resposta = client.get(f"/api/v1/os/{os_id}/portoes", headers=_h()).json()
@@ -979,6 +981,8 @@ def test_M8_portoes_e_custo_alcada(client: TestClient, app: FastAPI) -> None:
             liquido=VOLUME_LIQUIDO,
             emitido_em=agora,
             valido_ate=agora + timedelta(days=7),
+            # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+            contagens_derivadas_do_sql=False,
         )
     )
 

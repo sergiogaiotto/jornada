@@ -15,6 +15,36 @@ do agendamento, `K02` honestidade da documentação, e as frentes de código seg
 ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
 `blackout` no pré-voo, e2e/paridade do lint, drift por cron.
 
+### K05 · O certificado declara a PROVENIÊNCIA das contagens (§8-M5-A5)
+
+O overclaim que a reversão do J01 deixou exposto: `certificado_elegibilidade.suprimidos`/`liquido`
+vêm de fixture (o read model de dev ignora o `sql_publico`), são cobertos por sha256 e devolvidos
+pela API com a mesma cara de supressão MEDIDA. O aceite do M5 chegava a fixar `liquido == 888_620`
+— o valor do seed — como prova de funcionamento. Quem lê o certificado conclui que a supressão foi
+verificada nos números; não foi.
+
+O fecho é o **honesto possível sem o read model real**: declarar, com assinatura. O campo
+`contagens_derivadas_do_sql` nasce SEM default no domínio (cada emissor é obrigado a responder —
+default otimista foi apontado na auditoria do J01 como a forma silenciosa de o overclaim voltar),
+atravessa resposta/eventos/persistência, e entra no **payload canônico do hash**: proveniência fora
+do hash seria decorativa, editável a posteriori sem invalidar a assinatura.
+
+O coração é o **contract test** (`test_read_model_audiencia_contrato.py`), que trata proveniência
+como afirmação verificada, não flag: (t1) forma; (t2) quem declara `True` discrimina SQLs distintos
+— para fixtures o caso é `skip` nomeando o achado aberto por extenso, o registro executável do J01;
+(t3) o alçapão — um `_ReadModelMentiroso` que declara `True` ignorando o argumento tem de REPROVAR
+no MESMO juiz do t2 (se passar, o contrato não prende nada); (t4) o adapter de fixtures confessa
+`False`, e t2/t4 se travam mutuamente: virar a confissão sem trocar a implementação faz o
+discriminador rodar e reprovar.
+
+Ripple: coluna 0018 (`default false` no servidor — o único default honesto: toda linha antiga é de
+fixture por definição), `CertificadoOut` aditivo, seis construtores de seed/teste declarando `False`
+explicitamente, e a T5 ganha o chip "contagens não medidas do SQL" lido do certificado (nunca
+redigitado). O ramo Data Cloud injeta `False` explícito; o serviço lê com default conservador.
+
+**Este A5 declara o limite; não o fecha.** A Camada 2 do Guard segue ABERTA e a task J01 segue
+pendente — o skip do t2 desaparece sozinho no dia em que um read model executar o SQL de verdade.
+
 ### K10 · O deploy retenta a CONEXÃO e nunca o DEFEITO (§13)
 
 Frente não planejada, aberta por incidente: o deploy do `6833b01` reprovou com

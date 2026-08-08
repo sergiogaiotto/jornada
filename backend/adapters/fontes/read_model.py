@@ -28,5 +28,11 @@ class ReadModelFixtures:
 
     def contagens_segmentacao(self, sql_publico: str) -> dict[str, Any]:
         """Dry-run determinístico: as fixtures respondem pelo bloco `estudio_sql`
-        independentemente do SQL (o Guard é quem valida o SQL — §8-M5-A1)."""
-        return dict(self._carregar().get("estudio_sql", {}))
+        independentemente do SQL (o Guard é quem valida o SQL — §8-M5-A1).
+
+        `derivado_do_sql: False` é a confissão exigida pela porta (§8-M5-A5): este
+        adapter IGNORA o `sql_publico`. Proibido "melhorar" isto olhando o texto do
+        SQL — parecer derivado sem executar é exatamente o overclaim que o campo
+        veio eliminar (e o contract test tem um alçapão para quem tentar).
+        """
+        return {**self._carregar().get("estudio_sql", {}), "derivado_do_sql": False}

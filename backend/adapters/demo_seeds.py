@@ -592,6 +592,8 @@ def semear_demo(repositorio: RepositorioDemo, *, tenant_id: str, agora: datetime
             liquido=847_312,
             emitido_em=agora - timedelta(days=22),
             valido_ate=agora + timedelta(days=7),
+            # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+            contagens_derivadas_do_sql=False,
         )
     )
 

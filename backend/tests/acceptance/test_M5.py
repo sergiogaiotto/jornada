@@ -15,6 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from adapters.fontes.read_model import ReadModelFixtures
 from adapters.llm.fake import LLMFake
 from agents.guard import elegibilidade as guard
 from app.errors import PROBLEM_CONTENT_TYPE
@@ -269,12 +270,110 @@ def test_M5_A3(client: TestClient, app: FastAPI) -> None:
         suprimidos={lista: 1 for lista in SETE_LISTAS},
         liquido=100,
         agora=ontem,
+        contagens_derivadas_do_sql=False,  # §8-M5-A5: números de teste, não medidos
     )
     agora = ontem + timedelta(hours=guard.VALIDADE_HORAS_CERTIFICADO, minutes=1)
     assert guard.certificado_vigente(expirado, ontem + timedelta(hours=1)) is True
     assert guard.certificado_vigente(expirado, agora) is False
     with pytest.raises(CertificadoExpirado):
         guard.exigir_certificado_vigente(expirado, agora)
+
+
+def test_M5_A5(client: TestClient, app: FastAPI) -> None:
+    """A5 (emenda K05, onda 7): o certificado DECLARA a proveniência das contagens.
+
+    Até o K05, `suprimidos`/`liquido` vinham de fixture (o read model ignora o
+    `sql_publico`) e a API os devolvia com a mesma cara de supressão MEDIDA — o
+    overclaim apontado na reversão do J01. Agora:
+
+    1. a resposta da certificação carrega `contagens_derivadas_do_sql: false` (o estado
+       honesto de hoje — vira `true` só quando o read model real existir);
+    2. a MESMA chave sai nos eventos `gate.passed` e `certificado.emitido` (a trilha
+       diz de onde vieram os números que o portão aprovou) e no registro persistido;
+    3. a proveniência entra no PAYLOAD CANÔNICO do hash: dois certificados idênticos
+       exceto por ela têm hashes diferentes — ninguém promove fixture a medido
+       editando uma coluna depois.
+
+    Inversão: remover o campo do payload de `emitir_certificado` derruba a alínea 3;
+    trocar o default conservador do serviço por `.get(..., True)` derruba a alínea 1.
+    """
+    gerado = _gerar_segmento(client, app, SQL_CONFORME)
+    resposta = client.post(f"/api/v1/segmentos/{gerado['segmento']['id']}/certificar", headers=_h())
+    assert resposta.status_code == 201, resposta.text
+    certificado = resposta.json()
+
+    # 1 · resposta HTTP declara o estado honesto de hoje
+    assert certificado["contagens_derivadas_do_sql"] is False
+
+    # 2 · trilha e persistência carregam a MESMA resposta
+    repo = app.state.repositorio_os
+    os_id = uuid.UUID(gerado["segmento"]["os_id"])
+    persistido = repo.listar_certificados(os_id)[-1]
+    assert persistido.contagens_derivadas_do_sql is False
+    emitido = repo.listar_eventos(os_id=os_id, tipo="certificado.emitido")[-1]
+    assert emitido.payload["contagens_derivadas_do_sql"] is False
+    passou = [
+        e
+        for e in repo.listar_eventos(os_id=os_id, tipo="gate.passed")
+        if e.payload.get("portao") == "guard"
+    ][-1]
+    assert passou.payload["contagens_derivadas_do_sql"] is False
+
+    # 3 · a proveniência muda o hash: fixture e medido nunca são o mesmo documento
+    base = {
+        "os_id": os_id,
+        "segmento_id": uuid.UUID(gerado["segmento"]["id"]),
+        "sql_publico": SQL_CONFORME,
+        "suprimidos": {lista: 5 for lista in SETE_LISTAS},
+        "liquido": 1000,
+        "agora": datetime(2026, 8, 8, 12, 0, tzinfo=UTC),
+    }
+    de_fixture = guard.emitir_certificado(contagens_derivadas_do_sql=False, **base)
+    medido = guard.emitir_certificado(contagens_derivadas_do_sql=True, **base)
+    assert de_fixture.hash != medido.hash, (
+        "proveniência fora do hash é decorativa — editável sem invalidar a assinatura"
+    )
+
+
+def test_M5_A5_read_model_que_nao_declara_cai_no_default_conservador(
+    client: TestClient, app: FastAPI
+) -> None:
+    """O default do serviço é FALSE — e este teste é o único que o exercita.
+
+    Os dois adapters de hoje declaram `derivado_do_sql` explicitamente, então o caminho
+    HTTP normal nunca toca o default do `certificar` — a inversão "trocar para
+    `.get(..., True)`" passava batida pelo A5 principal (medido: ficou verde). Quem
+    prende o default é este caso: um read model FUTURO que esqueça a chave tem de sair
+    como fixture, nunca como medido. `.get(..., True)` aqui seria o overclaim voltando
+    pelo adapter que ninguém escreveu ainda.
+    """
+
+    class _ReadModelSemDeclaracao:
+        """Contagens plausíveis, SEM a chave `derivado_do_sql` — fora do contrato."""
+
+        def contagens_segmentacao(self, sql_publico: str) -> dict:
+            base = ReadModelFixtures().contagens_segmentacao(sql_publico)
+            base.pop("derivado_do_sql", None)
+            return base
+
+    # o atributo nasce lazy em get_read_model — pode não existir ainda
+    original = getattr(app.state, "read_model_audiencia", None)
+    app.state.read_model_audiencia = _ReadModelSemDeclaracao()
+    try:
+        gerado = _gerar_segmento(client, app, SQL_CONFORME)
+        resposta = client.post(
+            f"/api/v1/segmentos/{gerado['segmento']['id']}/certificar", headers=_h()
+        )
+        assert resposta.status_code == 201, resposta.text
+        assert resposta.json()["contagens_derivadas_do_sql"] is False, (
+            "read model que não declara proveniência foi tratado como MEDIDO — "
+            "o default do serviço deixou de ser conservador"
+        )
+    finally:
+        if original is not None:
+            app.state.read_model_audiencia = original
+        else:
+            delattr(app.state, "read_model_audiencia")
 
 
 def test_M5_A4(client: TestClient, app: FastAPI) -> None:

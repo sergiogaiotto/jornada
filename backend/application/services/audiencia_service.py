@@ -232,12 +232,21 @@ class ServicoAudiencia:
             suprimidos=regras.suprimidos_por_lista(contagens),
             liquido=liquido,
             agora=agora,
+            # default CONSERVADOR (§8-M5-A5): read model que não declara proveniência é
+            # tratado como fixture. `.get(..., True)` aqui seria o overclaim de volta.
+            contagens_derivadas_do_sql=bool(contagens.get("derivado_do_sql", False)),
         )
         self._repo.adicionar_certificado(certificado)
         self._evento(
             os_,
             "gate.passed",
-            {"portao": "guard", "segmento_id": str(segmento.id), "hash": certificado.hash},
+            {
+                "portao": "guard",
+                "segmento_id": str(segmento.id),
+                "hash": certificado.hash,
+                # a trilha diz de onde vieram os números que o portão aprovou (A5)
+                "contagens_derivadas_do_sql": certificado.contagens_derivadas_do_sql,
+            },
             actor,
         )
         self._evento(
@@ -250,6 +259,7 @@ class ServicoAudiencia:
                 "valido_ate": (
                     certificado.valido_ate.isoformat() if certificado.valido_ate else None
                 ),
+                "contagens_derivadas_do_sql": certificado.contagens_derivadas_do_sql,
             },
             actor,
         )
@@ -356,7 +366,11 @@ class ServicoAudiencia:
             raise NaoEncontrado(
                 f"Segmento Data Cloud {segmento.dc_segment_id!r} não existe mais (T5a)."
             )
-        return {**relatorio, "bruto": int(detalhe.get("membros", 0))}
+        # `derivado_do_sql: False` EXPLÍCITO (§8-M5-A5): o relatório do Data Cloud é
+        # pré-calculado pela plataforma deles — não há sql_publico executado aqui. Ser
+        # explícito (em vez de confiar no default conservador do `certificar`) deixa a
+        # resposta visível a quem ler este ramo.
+        return {**relatorio, "bruto": int(detalhe.get("membros", 0)), "derivado_do_sql": False}
 
     def _politica(self, os_: OS) -> dict[str, Any]:
         """`conteudo` da política publicada DO TENANT da OS (§4.1 `policy_versao`).

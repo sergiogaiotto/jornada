@@ -246,6 +246,9 @@ tabela_certificado = Table(
     Column("liquido", Integer, nullable=False),
     Column("emitido_em", DateTime(timezone=True)),
     Column("valido_ate", DateTime(timezone=True)),
+    # §8-M5-A5 (0018): proveniência. `server_default` false = linhas antigas (todas de
+    # fixture, por definição — o read model real nunca existiu) ficam honestas sozinhas.
+    Column("contagens_derivadas_do_sql", Boolean, nullable=False, server_default="false"),
     Column("last_mile", JSONB),
 )
 

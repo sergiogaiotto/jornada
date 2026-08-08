@@ -438,6 +438,15 @@ export function Audiencia() {
             <span className="text-[11px] text-faint">
               publish (M8) recusa certificado expirado
             </span>
+            {/* §8-M5-A5: a proveniência vem do certificado — nunca redigitada aqui */}
+            {!certificado.contagens_derivadas_do_sql && (
+              <span
+                className="mchip-w"
+                title="As contagens de supressão vieram do read model de fixtures/relatório — o SQL público NÃO foi executado para medi-las (Camada 2 do Guard segue aberta; HANDOFF §8.3). A proveniência está assinada no hash do certificado."
+              >
+                contagens não medidas do SQL
+              </span>
+            )}
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11.5px]">
             {Object.entries(certificado.suprimidos).map(([lista, n]) => (

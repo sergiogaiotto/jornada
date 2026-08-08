@@ -163,6 +163,8 @@ def _certificar(app: FastAPI, os_id: uuid.UUID, *, valido: bool = True) -> None:
             liquido=VOLUME_LIQUIDO,
             emitido_em=agora if valido else agora - timedelta(days=8),
             valido_ate=agora + timedelta(days=7) if valido else agora - timedelta(days=1),
+            # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+            contagens_derivadas_do_sql=False,
         )
     )
 

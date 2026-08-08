@@ -549,16 +549,30 @@ def emitir_certificado(
     suprimidos: dict[str, int],
     liquido: int,
     agora: datetime,
+    contagens_derivadas_do_sql: bool,
     validade_horas: int = VALIDADE_HORAS_CERTIFICADO,
 ) -> CertificadoElegibilidade:
     """Emite `certificado_elegibilidade` (§4.1) com hash canônico + validade (A3).
 
     Hash = sha256 do JSON canônico (chaves ordenadas) de {os_id, segmento_id,
-    sha256(sql), suprimidos, liquido, emitido_em} — reproduzível em auditoria.
+    sha256(sql), suprimidos, liquido, emitido_em, contagens_derivadas_do_sql} —
+    reproduzível em auditoria.
 
     Antes de assinar, aplica a CAMADA 2 (`problemas_nas_contagens`): o certificado é o
     documento que autoriza o disparo, então o último portão olha o efeito medido da
     supressão, não só o texto do SQL (UAT5 · achado 1).
+
+    **Proveniência (§8-M5-A5 — K05, onda 7).** `contagens_derivadas_do_sql` diz se os
+    números vieram de um dry-run que EXECUTOU o `sql_publico` (True — read model real)
+    ou de fixture/relatório pré-calculado (False — o estado de hoje). O campo é
+    keyword-only e obrigatório: quem emite tem de saber a resposta, e ela entra no
+    payload ANTES do hash — dois certificados idênticos exceto pela proveniência têm
+    hashes diferentes, então ninguém "promove" um certificado de fixture a medido
+    editando uma coluna. Até esta emenda, o certificado assinava contagens de fixture
+    com a mesma cara de contagens medidas — o overclaim que o CHANGELOG da onda 6 já
+    apontava, agora declarado no próprio documento. A Camada 2 segue inerte na
+    configuração de fixtures (o `problemas_nas_contagens` continua aqui como o dente
+    futuro); o fecho REAL exige o read model de produção — ver HANDOFF §8.3.
     """
     suprimidos_contagem: dict[str, int] = {
         lista: int(suprimidos.get(lista, 0)) for lista in SETE_LISTAS
@@ -579,6 +593,9 @@ def emitir_certificado(
         "suprimidos": suprimidos_contagem,
         "liquido": int(liquido),
         "emitido_em": agora.isoformat(),
+        # dentro do payload canônico DE PROPÓSITO: proveniência fora do hash seria
+        # decorativa — editável a posteriori sem invalidar a assinatura
+        "contagens_derivadas_do_sql": bool(contagens_derivadas_do_sql),
     }
     canonico = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return CertificadoElegibilidade(
@@ -589,6 +606,7 @@ def emitir_certificado(
         liquido=int(liquido),
         emitido_em=agora,
         valido_ate=agora + timedelta(hours=validade_horas),
+        contagens_derivadas_do_sql=bool(contagens_derivadas_do_sql),
         last_mile=None,  # re-varredura no disparo (M9/M10)
     )
 

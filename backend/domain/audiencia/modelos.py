@@ -66,6 +66,12 @@ class CertificadoElegibilidade:
     liquido: int
     emitido_em: datetime
     valido_ate: datetime | None
+    # §8-M5-A5 (K05, onda 7): PROVENIÊNCIA das contagens. False = os números vieram de
+    # fixture/relatório pré-calculado (o read model NÃO executou o sql_publico); True é
+    # reservado ao read model real. SEM default de propósito: cada construtor é obrigado
+    # a declarar — um default aqui seria o "default otimista" que a auditoria do J01
+    # apontou como a forma silenciosa de o overclaim voltar.
+    contagens_derivadas_do_sql: bool
     last_mile: dict[str, Any] | None = None
 
 

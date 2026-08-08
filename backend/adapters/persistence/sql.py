@@ -386,6 +386,7 @@ def _linha_para_certificado(linha: Row[Any]) -> CertificadoElegibilidade:
         liquido=linha.liquido,
         emitido_em=linha.emitido_em,
         valido_ate=linha.valido_ate,
+        contagens_derivadas_do_sql=bool(linha.contagens_derivadas_do_sql),
         last_mile=linha.last_mile,
     )
 
@@ -1286,6 +1287,7 @@ class RepositorioSql(RepositorioOsMemoria):
                 "liquido": certificado.liquido,
                 "emitido_em": certificado.emitido_em,
                 "valido_ate": certificado.valido_ate,
+                "contagens_derivadas_do_sql": certificado.contagens_derivadas_do_sql,
                 "last_mile": certificado.last_mile,
             },
         )

@@ -274,6 +274,8 @@ def test_emitir_certificado_recusa_supressao_zero() -> None:
         "sql_publico": SQL_FELIZ_NOT_IN,
         "liquido": 888_620,
         "agora": datetime(2026, 8, 6, 12, 0, tzinfo=UTC),
+        # §8-M5-A5: os dicionários deste teste são montados à mão — não são medição
+        "contagens_derivadas_do_sql": False,
     }
     with pytest.raises(CertificadoReprovado) as erro:
         guard.emitir_certificado(suprimidos={lista: 0 for lista in SETE_LISTAS}, **argumentos)

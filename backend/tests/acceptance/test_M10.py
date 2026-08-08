@@ -204,6 +204,8 @@ def _snapshot_aplicado(client: TestClient, app: FastAPI) -> tuple[uuid.UUID, dic
             liquido=VOLUME_LIQUIDO,
             emitido_em=agora,
             valido_ate=agora + timedelta(days=7),
+            # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+            contagens_derivadas_do_sql=False,
         )
     )
     base = f"/api/v1/snapshots/{snapshot['id']}"

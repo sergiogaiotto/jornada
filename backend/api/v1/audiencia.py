@@ -187,6 +187,8 @@ class CertificadoOut(BaseModel):
     liquido: int
     emitido_em: datetime
     valido_ate: datetime | None
+    # §8-M5-A5: False = supressões de fixture/relatório, NÃO medidas executando o SQL
+    contagens_derivadas_do_sql: bool
     last_mile: dict[str, Any] | None
 
 

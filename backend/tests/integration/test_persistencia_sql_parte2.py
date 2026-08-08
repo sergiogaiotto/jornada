@@ -281,6 +281,8 @@ def test_snapshot_aprovacao_segmento_certificado_criativo(banco_limpo: str) -> N
         liquido=900,
         emitido_em=AGORA,
         valido_ate=AGORA + timedelta(days=7),
+        # §8-M5-A5: contagens de seed/fixture — nunca medidas executando o SQL
+        contagens_derivadas_do_sql=False,
     )
     repo1.adicionar_certificado(certificado)
     criativo = Criativo(

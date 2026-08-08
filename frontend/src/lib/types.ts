@@ -249,6 +249,8 @@ export interface CertificadoOut {
   liquido: number;
   emitido_em: string;
   valido_ate: string | null;
+  /** §8-M5-A5: false = supressões de fixture/relatório, NÃO medidas executando o SQL. */
+  contagens_derivadas_do_sql: boolean;
   last_mile: Record<string, unknown> | null;
 }
 
