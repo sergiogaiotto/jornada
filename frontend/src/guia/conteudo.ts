@@ -166,6 +166,11 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
         definicao:
           "Marca de campo preenchido por IA e ainda não confirmado — a Validação (T3) cobra a confirmação campo a campo.",
       },
+      {
+        termo: "Janela estruturada (janela_inicio / janela_fim)",
+        definicao:
+          "Além do campo de texto \"janela\" (livre, para completude), dois campos OPCIONAIS de data ISO (AAAA-MM-DD). Preenchidos, eles LIGAM a regra do canvas que barra um wait maior que a janela da oferta. É o que transforma \"01/07 a 15/08\" de enfeite em limite que governa.",
+      },
     ],
     campos: [
       { campo: "Conversa", significado: "Mensagens livres para o Consultor; cada resposta pode trazer inferências (modo pedido: entram em âmbar; modo OS: viram prévia de diff)." },
@@ -174,6 +179,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Converter em OS", significado: "Aparece com 100% de completude: escolha nome e t-shirt (P/M/G/GG) e a OS nasce com o briefing herdado." },
       { campo: "Prévia/diff (modo OS)", significado: "Campo, valor atual vs inferido, premissas em chips e botões Aplicar/Rejeitar." },
       { campo: "Briefing (14 campos, modo OS)", significado: "Objetivo, oferta, público, verba, janela etc. — âmbar = inferido, verde = confirmado." },
+      { campo: "Datas da janela (janela_inicio / janela_fim)", significado: "Campos opcionais em formato ISO AAAA-MM-DD; preenchidos, ligam a regra wait × janela no Twin. Data em outro formato (ex.: 01/07/2026) é recusada com 422 — melhor não gravar do que gravar um limite que não vale." },
       { campo: "Badge via_ai", significado: "Clicável: abre a invocação (prompt, evidências, quem aceitou)." },
     ],
     casosDeUso: [
@@ -197,6 +203,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Aplicar ≠ confirmar: o campo continua \"inferido\" (âmbar) até um humano confirmar — e a Validação/GO cobram isso.",
       "A extração é sensível à forma da frase (achado A1): rotule os valores (\"Verba: R$ 500 mil · Janela: 01–15/09\") para extração 100%.",
       "Converter um pedido em OS exige completude = 100 — não adianta forçar com faltantes abertos (o backend nega com 409).",
+      "As datas da janela (janela_inicio/janela_fim) só governam se forem ISO AAAA-MM-DD: uma data em formato brasileiro entra como 422, não como limite inerte. O campo de texto \"janela\" continua livre e serve à completude — as duas coisas convivem, e a estruturada é quem manda no canvas.",
       "Nenhuma resposta do agente altera o briefing sozinha; se algo mudou, houve um Aplicar humano (modo OS) ou a inferência ficou em âmbar aguardando confirmação (modo pedido) — confira no via_ai.",
     ],
     relacionados: ["validacao", "warroom", "cockpit"],
@@ -593,7 +600,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "JGC",
         definicao:
-          "Journey Graph Canônico: JSON versionado com hash (RFC 8785 + sha256). Cada save que muda o grafo é uma versão nova em rascunho.",
+          "Journey Graph Canônico: JSON versionado com hash (RFC 8785 + sha256). Cada save que muda o grafo é uma versão nova em rascunho. O hash é insensível à ORDEM de nós e arestas: o mesmo grafo desenhado noutra ordem é o mesmo grafo — mesma versão, mesmo externalKey no SFMC.",
       },
       {
         termo: "Tipos de nó fechados",
@@ -601,9 +608,19 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
           "entrySource, splits (random/decision/engagement/frequency), sto, wait, channel.*, updateContact, goal, exit, exception — tipo fora da lista é rejeitado.",
       },
       {
+        termo: "Validação por VALOR (não só por presença)",
+        definicao:
+          "O jgc.schema.json roda inteiro a cada save: pct fora de 0–100, janelaHoras negativa, métrica fora de open/click, throttle como texto, campo desconhecido — tudo vira 422 apontando o nó. Antes bastava o campo existir; agora o valor precisa fazer sentido.",
+      },
+      {
+        termo: "Roteamento sem ambiguidade (decisionSplit)",
+        definicao:
+          "Um decisionSplit roteia OU pela regra (regras[].to) OU pela aresta (destino no cond) — nunca as duas no mesmo nó. Misturar duplicava a saída (+33% no taxímetro e dois braços iguais no JB); agora é 422 roteamento_ambiguo, e o editor nem deixa criar.",
+      },
+      {
         termo: "Validação semântica (§5.3)",
         definicao:
-          "A cada save: braço órfão, soma de percentuais ≠ 100, canal sem opt-in, grafo sem goal etc. → 422 apontando o nó.",
+          "A cada save: braço órfão, soma de percentuais ≠ 100, canal sem opt-in, grafo sem goal, wait além da janela da oferta etc. → 422 apontando o nó.",
       },
       {
         termo: "Taxímetro",
@@ -647,6 +664,9 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Restaurar cria versão NOVA (rascunho), nunca sobrescreve — a linha do tempo é imutável; versão antiga abre sempre somente leitura.",
       "O import nativo do Journey Builder é o JSON; o XML existe para integração/auditoria corporativa (manifest + XSD) — o JB não importa XML.",
       "Os percentuais dos braços de um split precisam somar 100 — braço órfão, soma ≠ 100 ou grafo sem goal → 422 no save apontando o nó.",
+      "O valor é conferido, não só a presença: pct 250, janelaHoras −72, métrica \"telepatia\" ou throttle escrito por extenso agora são 422 no save — antes passavam e quebravam depois, no simulador ou no SFMC.",
+      "decisionSplit não mistura as duas formas de roteamento: se as regras já apontam o destino (to), não puxe arestas do nó — o editor bloqueia a conexão e o save recusa com roteamento_ambiguo. O destino se edita nas regras, pelo Inspetor.",
+      "Reordenar os nós no canvas NÃO cria versão nova nem mexe no SFMC: o hash é do grafo, não da ordem em que você desenhou. Só mudança real de conteúdo gera rascunho.",
       "Reentrada ≠ \"não\" com experimento travado → 422: reentrada quebra o experimento (contrato de re-entrada).",
       "O taxímetro usa a tarifa vigente — tarifa mudou, custo projetado muda; e variação de custo >10% depois da aprovação invalida a aprovação.",
       "Sem segmento definido, o taxímetro mostra volume 0 honestamente — não é bug, é falta de audiência.",
@@ -716,6 +736,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Semáforo vermelho bloqueia QA e Pré-voo — ROAS P50 < 1 ou colisão crítica não passam; resolva a causa e re-simule.",
       "Poder insuficiente pinta o experimento de vermelho e a simulação de amarelo — aumente o holdout ou o público, ou aceite um MDE maior.",
       "Editou o twin depois de simular? A simulação não vale mais para a nova versão — re-simule antes de montar o snapshot.",
+      "O Ensaio valida o grafo com as MESMAS regras do save: se o briefing tem janela estruturada e um wait a ultrapassa, o simular recusa com 422 apontando o nó — a janela vale aqui como no canvas.",
       "O Monitor compara contra o Previsto CONGELADO, nunca contra a última simulação — congelar é um ato consciente.",
       "O Simulate (LLM) apenas narra; se um número parecer estranho, a fonte é o simulador determinístico, não o texto.",
     ],
@@ -796,15 +817,21 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     descricao:
       "Página standalone do aprovador: snapshot imutável, replay do Previsto, hash visível e decisão única.",
     oQueE: [
-      "O aprovador não precisa de login: o link mágico carrega um token que é a própria credencial. A página abre fora do shell da plataforma — sem menu, sem ações de IA — com foco total na decisão.",
+      "A página abre fora do shell da plataforma — sem menu, sem ações de IA — com foco total na decisão. É standalone: não precisa do header de tenant. Mas standalone não é anônima: DECIDIR exige uma sessão autenticada.",
+      "O token do link deixou de ser credencial e virou PONTEIRO: ele localiza o pacote e diz de qual tenant é. Para VER o pacote é preciso estar logado no tenant dono; para DECIDIR é preciso ser o próprio aprovador que foi endereçado na emissão — a plataforma confere o e-mail da sua sessão contra o e-mail congelado, por igualdade exata. Quem abre o link mas não é o destinatário lê o pacote e vê o botão de decisão desabilitado.",
       "O conteúdo é o snapshot imutável: resumo executivo (público líquido, investimento, ROAS previsto, holdout), waterfall da audiência, criativos e o replay do Previsto da simulação, com o hash do pacote visível para conferência.",
-      "A decisão é única: Aprovar, Aprovar com ressalvas ou Reprovar. Ressalvas viram pendências automáticas na OS; a decisão registra IP e device.",
+      "A decisão é única: Aprovar, Aprovar com ressalvas ou Reprovar. Ressalvas viram pendências automáticas na OS; a decisão registra IP, device e o e-mail da sessão que decidiu.",
     ],
     fundamentos: [
       {
-        termo: "Link mágico",
+        termo: "Link mágico (token = ponteiro)",
         definicao:
-          "URL pública com token de uso único e prazo de expiração. Usou ou venceu → não abre de novo; gere outro link.",
+          "URL com token de uso único e prazo de expiração. O token localiza o pacote e o tenant — não autentica. Ver exige sessão do tenant; decidir exige a sessão do aprovador endereçado. De posse do link em claro, o criador NÃO consegue aprovar.",
+      },
+      {
+        termo: "Segregação criador ≠ aprovador",
+        definicao:
+          "O aprovador é congelado na EMISSÃO do link (recusa 409 se for o criador ou quem emite, ou se não tiver conta no tenant). Decidir compara a sessão com esse e-mail por igualdade EXATA — um subendereço tipo aprovador+qa@… é conta distinta e não herda a decisão.",
       },
       {
         termo: "Snapshot imutável",
@@ -831,22 +858,24 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Decisão", significado: "Aprovar · Aprovar com ressalvas · Reprovar (com campo de ressalvas)." },
     ],
     casosDeUso: [
-      "Aprovar remotamente sem criar conta nem senha.",
+      "Aprovar remotamente, logado como o aprovador endereçado, sem precisar do shell da plataforma.",
       "Aprovar com ressalvas que viram pendências rastreáveis.",
-      "Reprovar com registro formal de quando e de onde.",
+      "Reprovar com registro formal de quando, de onde e por quem.",
       "Conferir pelo hash que o pacote é exatamente o discutido.",
     ],
     exemplo: [
-      "O aprovador recebe a URL /aprovacao/{token} (na demo, via Mailpit).",
+      "O aprovador recebe a URL /aprovacao/{token} (na demo, via Mailpit) e faz login como o e-mail que foi endereçado.",
       "Abre e confere: público líquido, investimento, ROAS previsto, holdout, waterfall e criativos.",
       "Faz o replay do Previsto e anota o hash do snapshot.",
-      "Decide \"Aprovar com ressalvas\" com um texto — as ressalvas aparecem como pendências na OS e a decisão grava IP/device.",
+      "Decide \"Aprovar com ressalvas\" com um texto — as ressalvas aparecem como pendências na OS e a decisão grava IP, device e o e-mail da sessão.",
     ],
     pegadinhas: [
+      "O token é PONTEIRO, não senha: de posse do link em claro, quem CRIOU a campanha não consegue aprovar — decidir exige a sessão do aprovador endereçado (403 mudo para qualquer outra).",
+      "Ler ≠ decidir: qualquer sessão do tenant dono VÊ o pacote; só o aprovador endereçado tem o botão de decisão ativo.",
       "O token é de uso ÚNICO e expira — link já usado ou vencido não abre; gere um novo em QA.",
       "A decisão é única e definitiva — não há \"mudar de ideia\" no mesmo token.",
       "Custo subir >10% depois da aprovação invalida a decisão — o fluxo volta para novo snapshot.",
-      "A página é standalone de propósito: sem Bearer, sem shell — não estranhe a ausência do menu.",
+      "A página é standalone (sem menu, sem header de tenant), mas NÃO é anônima — se você não estiver logado, ela manda ao login e volta ao pacote depois.",
     ],
     relacionados: ["portoes", "prevoo", "lancamento"],
   },
@@ -1182,7 +1211,8 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     oQueE: [
       "O Ateliê é a sala de máquinas da IA: o roster de agentes organizado por etapa do workflow, cada um com versão publicada, perfil de modelo (120B/20B), SKILL vinculada e score no harness. O system prompt (SKILL.md canônico) é visível — nada de caixa-preta.",
       "O ciclo de vida é no-code: editar a skill → rodar o harness (bateria de casos golden julgada por um judge 120B em correção, evidência, compliance e formato) → publicar. Harness verde (≥ 90 por dimensão) é o QA de release.",
-      "Aqui também vivem as políticas (policy-as-code: caps, quiet hours, alçadas, breakers — draft → publicada) e a auditoria: todo evento via_ai é clicável (prompt + evidências + judge + humano) e reconstruível (LGPD Art. 20).",
+      "Aqui também vivem as políticas (policy-as-code: caps, quiet hours, alçadas, breakers — draft → publicada) e a auditoria: o painel \"Auditoria via_ai\" lista toda invocação de agente com suas MÉTRICAS (tokens consumidos e latência), e cada evento é clicável (prompt + evidências + judge + humano) e reconstruível (LGPD Art. 20).",
+      "O consumo de IA agora é medido: cada chamada ao modelo grava quantos tokens custou, e o painel mostra isso por invocação. Uma linha sem valor aparece como \"—\" (o provedor não devolveu a contagem), nunca como zero — ausência de medida não é medida zero.",
     ],
     fundamentos: [
       {
@@ -1203,12 +1233,17 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "Policy-as-code",
         definicao:
-          "Frequency cap, quiet hours, blackout, holdout mínimo, alçadas, retenção e breakers como configuração versionada draft → publicada.",
+          "Frequency cap, quiet hours, blackout, holdout mínimo, alçadas, retenção, teto de tokens e breakers como configuração versionada draft → publicada.",
       },
       {
-        termo: "Auditoria / reconstrução",
+        termo: "Teto de tokens (IA Responsável)",
         definicao:
-          "Qualquer invocação pode ser reconstruída: input, evidências e output exatamente da época (Art. 20).",
+          "A política de IA pode fixar um orçamento diário de tokens por tenant. Atingido o teto, a próxima chamada ao modelo é recusada com 429 ANTES de custar — o gasto medido é do dia (UTC) e reinicia à meia-noite. Só entra na política porque a medição existe e o portão aplica: campo que não governa não é aceito.",
+      },
+      {
+        termo: "Auditoria / reconstrução (Art. 20)",
+        definicao:
+          "Qualquer invocação pode ser reconstruída: input, evidências e output exatamente da época. O CONTEÚDO (prompt/resposta/judge) é dado do Art. 20: só dpo/líder (e admin) o veem, na lista e na reconstrução; os demais papéis veem a trilha e as métricas, com o conteúdo redigido.",
       },
     ],
     campos: [
@@ -1216,13 +1251,15 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Painel do agente", significado: "SKILL.md visível, bases RAG autorizadas, execution profile." },
       { campo: "Harness", significado: "Rodar a bateria golden; score por dimensão; histórico de runs." },
       { campo: "Dry-run lado a lado", significado: "Comparar a skill editada com a publicada no mesmo input." },
-      { campo: "Políticas", significado: "Conteúdo da política, estado draft/publicada e relatório de policy drift sobre OSs em voo." },
-      { campo: "Auditoria", significado: "Trilha de eventos via_ai com filtros; clique abre prompt+evidências+judge+humano." },
+      { campo: "Políticas", significado: "Conteúdo da política (incl. teto de tokens por dia), estado draft/publicada e relatório de policy drift sobre OSs em voo." },
+      { campo: "Auditoria via_ai", significado: "Trilha de eventos com colunas de tokens e latência (null = \"—\"); clique expande o detalhe — prompt+evidências+judge+humano para dpo/líder, redigido para os demais." },
     ],
     casosDeUso: [
       "Refinar o prompt de um agente sem escrever código e medir no harness.",
       "Publicar uma versão nova com segurança (QA de qualidade).",
       "Alterar a política de contato (caps, quiet hours) com versionamento.",
+      "Fixar um teto diário de tokens para conter o custo de IA de um tenant.",
+      "Acompanhar o consumo de IA (tokens/latência por invocação) no painel de auditoria.",
       "Auditar uma decisão assistida por IA de ponta a ponta.",
     ],
     exemplo: [
@@ -1235,6 +1272,9 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       "Harness < 90 em qualquer dimensão → 409: não publica — o QA vale até para o admin.",
       "Publicar skill NÃO muda campanhas em voo (frozen do GO) — a versão nova só vale para OSs novas ou próximo GO.",
       "O Guard não aparece como skill editável de LLM: ele é determinístico por definição — o 20B apenas explica o veredito.",
+      "O teto de tokens é por tenant/dia UTC e vale por REQUISIÇÃO que começa: a chamada que já estava abaixo do teto termina; a próxima é recusada. E se o provedor não devolve a contagem de tokens, aquela chamada conta zero para o teto — limite declarado, não escondido.",
+      "O conteúdo do ledger na auditoria é redigido para quem não é dpo/líder: um analista vê tokens, latência e agente, mas o prompt e a resposta aparecem como \"[restrito ao portão do Art. 20]\". A reconstrução completa continua sendo dpo/líder.",
+      "Tokens \"—\" na trilha não é bug: é o provedor que não mandou o usage naquela chamada. Zero seria mentira — a coluna diz a verdade.",
       "Mudar EMBED_DIM exige re-embed completo da base RAG — a busca fica indisponível durante o reindex (aviso na UI).",
       "As 5 triagens do §7.2 e o run verde de cada agente-chave vêm das seeds (A18): é vitrine do demo, não julgamento novo — rode o harness para medir o texto atual.",
     ],
