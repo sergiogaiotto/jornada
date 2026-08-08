@@ -15,6 +15,27 @@ do agendamento, `K02` honestidade da documentação, e as frentes de código seg
 ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
 `blackout` no pré-voo, e2e/paridade do lint, drift por cron.
 
+### K10 · O deploy retenta a CONEXÃO e nunca o DEFEITO (§13)
+
+Frente não planejada, aberta por incidente: o deploy do `6833b01` reprovou com
+`ssh: connect ... port 22: Connection timed out` **depois** dos três gates verdes, com a VPS viva e
+a porta 22 respondendo de fora do runner. O passo fazia UMA tentativa de SSH e saía 255. O risco não
+é o rerun manual — é a terceira vez: *controle que reprova por corrida acaba comentado* (a mesma
+nota que o `esperar_api` do `deploy.sh` já carrega).
+
+O desenho inteiro está numa distinção: `ssh` devolve **255** quando o SSH falha e o **código do
+comando remoto** quando ele chega a rodar. Só o 255 é retentado (3 tentativas, backoff 10s/30s,
+`ConnectTimeout=15`, `BatchMode=yes`); um `docker compose` quebrado reprova de primeira — retry cego
+mascararia defeito reprodutível como instabilidade. Retentar é seguro mesmo com queda no meio do
+comando: `git reset --hard` + `compose up -d --build` são idempotentes.
+
+O aceite (`test_K10_deploy_resiliente.py`) **executa o laço extraído do ci.yml** com um `ssh` falso,
+cenário a cenário — não faz grep. Motivo medido: a primeira versão do laço usava
+`if deploy_remoto; then ... fi; CODIGO=$?`, e com `set -e` o `$?` depois de um `if` cujo `then` não
+executou vale 0 (POSIX) — o retry nunca aconteceria, e um guarda-corpo por string estaria verde.
+Inversão nos dois eixos: reintroduzir o bug do `set -e` derruba 3 casos; retentar qualquer código
+derruba o caso do defeito remoto.
+
 ### K04 · Salvar o grafo MINTA versão em vez de sobrescrever (achado D06 · aceite §8-M7-B6)
 
 `atualizar_grafo` mutava o MESMO registro e o adapter fazia `on_conflict_do_update`: uma sessão

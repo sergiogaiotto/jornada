@@ -115,11 +115,57 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           SHA_CURTO="${GITHUB_SHA:0:7}"
           echo "GIT_SHA alvo: $SHA_CURTO"
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new root@vps.falagaiotto.com.br \
-            "cd /opt/jornada && git fetch origin && git reset --hard origin/main \
-             && export GIT_SHA=\$(git rev-parse HEAD | cut -c1-7) \
-             && docker compose -f docker-compose.prod.yml --env-file .env up -d --build \
-             && docker compose -f docker-compose.prod.yml --env-file .env ps --format '{{.Name}} {{.Status}}'"
+
+          # RETRY SÓ DA CONEXÃO (2026-08-08). Em 6833b01 um `Connection timed out` na
+          # porta 22 reprovou o deploy DEPOIS dos três gates verdes, com a VPS viva e a
+          # 22 respondendo de fora do runner. Um controle que reprova por oscilação de
+          # rede é o que acaba comentado — mesma razão do `esperar_api` no deploy.sh.
+          #
+          # A distinção que faz este retry ser seguro: `ssh` devolve 255 quando O SSH
+          # falha (conexão/auth) e o código do COMANDO REMOTO quando ele roda. Só o 255
+          # é retentado; um `docker compose` que falha sai com o código dele e reprova de
+          # primeira, sem mascarar deploy quebrado com tentativa nova.
+          #
+          # Retentar é seguro mesmo se a conexão cair NO MEIO do comando: `git reset
+          # --hard` + `compose up -d --build` são idempotentes — rodar de novo converge
+          # para o mesmo estado.
+          deploy_remoto() {
+            ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=accept-new \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+              root@vps.falagaiotto.com.br \
+              "cd /opt/jornada && git fetch origin && git reset --hard origin/main \
+               && export GIT_SHA=\$(git rev-parse HEAD | cut -c1-7) \
+               && docker compose -f docker-compose.prod.yml --env-file .env up -d --build \
+               && docker compose -f docker-compose.prod.yml --env-file .env ps --format '{{.Name}} {{.Status}}'"
+          }
+
+          ESPERAS="10 30"
+          TENTATIVA=1
+          for ESPERA in $ESPERAS "fim"; do
+            # `|| CODIGO=$?` e não `if deploy_remoto`: com `set -e`, o `$?` depois de um
+            # `if` cujo `then` não executou vale 0 (POSIX), e o retry nunca enxergaria o
+            # 255. Esta forma também isenta a chamada do errexit.
+            CODIGO=0
+            deploy_remoto || CODIGO=$?
+            if [ "$CODIGO" -eq 0 ]; then
+              echo "deploy concluído na tentativa $TENTATIVA"
+              exit 0
+            fi
+            if [ "$CODIGO" -ne 255 ]; then
+              echo "::error::falha de DEPLOY (o comando remoto rodou e saiu $CODIGO) — não é rede, não retento"
+              exit "$CODIGO"
+            fi
+            if [ "$ESPERA" = "fim" ]; then
+              echo "::error::falha de CONEXÃO com a VPS (ssh 255) em $TENTATIVA tentativas — nada foi alterado no servidor"
+              exit 1
+            fi
+            echo "::warning::falha de CONEXÃO (ssh 255) na tentativa $TENTATIVA — nova tentativa em ${ESPERA}s"
+            sleep "$ESPERA"
+            TENTATIVA=$((TENTATIVA + 1))
+          done
       - name: Smoke pós-deploy (com prova de versão — A22)
         run: |
           SHA_CURTO="${GITHUB_SHA:0:7}"
