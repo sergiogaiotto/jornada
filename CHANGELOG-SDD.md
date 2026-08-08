@@ -3,6 +3,85 @@
 Registro de emendas e decisões sobre o SDD-Jornada.md (regra §1.3.3: toda divergência
 necessária edita o SDD na seção afetada + entrada aqui, no mesmo PR).
 
+## 2026-08-08 — Onda 7 · O agendamento e o TEXTO param de prometer o que o código não faz (§10.2, §10.4)
+
+Investigação dos sete achados abertos do `docs/HANDOFF.md` §8.3 com verificação no código e
+julgamento cético separado. Resultado que orienta a onda: **nenhum** achado é fechável "de graça",
+**cinco dos sete** só admitem fecho parcial, e dois defeitos de honestidade apareceram no caminho —
+ambos introduzidos por documentação, não por código.
+
+**Numeração desta onda** (a investigação propôs IDs conflitantes; fica decidido aqui): `K01` paridade
+do agendamento, `K02` honestidade da documentação, e as frentes de código seguem em `K03+` na ordem
+ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
+`blackout` no pré-voo, e2e/paridade do lint, drift por cron.
+
+### K01 · O §10.2 ganha o guarda-corpo que o §10.4 já tinha
+
+O backup entrou na onda 4 completo (script, cron, cifra AES-256, prova de restauração em container
+descartável) e com **zero** testes. O defeito não demorou a aparecer: ao reescrever o README, o bloco
+` ```cron ` do backup foi redigido com comentários inline inventados e sem as linhas
+`SHELL`/`PATH`/`CRON_TZ`/`MAILTO`, divergindo do arquivo que o `deploy.sh` escreve — e **nada ficou
+vermelho**, porque `test_F04_readme_reproduz_byte_a_byte...` prende apenas `blocos[0]`, o primeiro
+bloco do README.
+
+A emenda vai na doença: `test_K01_todo_bloco_cron_do_readme_corresponde_a_um_cron_instalado` descobre
+sozinho **todo** `cat >"$VAR" <<CRON` cujo `VAR` aponte para `/etc/cron.d/`, e cobra paridade byte a
+byte **nos dois sentidos** — bloco documentado sem instalação e cron instalado sem documentação são
+ambos vermelhos. Cron futuro nasce presos por construção. Somam-se o contrato de falha visível do
+§10.2 (exit codes 0/1/2/3, carimbo, vigia que não mente com data no futuro, syslog independente do
+MAILTO), a invariante **backup 02:20 < purge 03:15** (a cópia do dia tem de registrar o estado
+anterior à destruição por retenção) e as travas de `pg_dump -Fc` sem pipeline, imagem com `pgvector`
+e passphrase por file descriptor.
+
+Inversão verificada em três eixos, no container: README divergente → vermelho; cron instalado sem
+documentação → vermelho; purge antes do backup → vermelho.
+
+**Nota de método:** duas asserções da primeira versão reprovavam o código **certo** — uma exigia a
+sintaxe `pass:fd:` quando o openssl usa `-pass fd:3`, outra casava `"pg_dump | openssl"` com o
+**comentário** que explica por que o script não faz isso. É a armadilha que o F04 já nomeia ("citar
+ao contar a história é permitido; usar não é"), e o conserto foi olhar código, não prosa.
+
+### K02 · O texto do produto para de prometer o que não existe
+
+Quatro afirmações não sustentadas pelo código, e a pior delas não estava no README:
+`frontend/src/guia/conteudo.ts` é a **fonte única** enviada como contexto ao agente `ajuda` (§7
+M-Guia) — o que está errado ali, **a IA repete ao usuário quando perguntada**.
+
+| Afirmação | Realidade medida |
+|---|---|
+| "o drift é vigiado a cada 30 min" (Guia) e "um job de drift" (README) | Nenhum cron o instala; o único gatilho é o botão do Pré-voo, com a consulta nascendo desligada |
+| "um e2e prova isso com `LLM_DEGRADED_MODE=forced_off`", com o **editor** na lista do provado (README) | Não existe Playwright, spec, runner nem job ativo; **nenhuma linha de React é executada por teste algum** — quem prova o modo degradado é `test_M10`, em memória |
+| "tela de Políticas" (README) e um campo "Políticas" com relatório de *policy drift* na T16 (Guia) | A política do §4.1 nunca teve tela (publica-se por `POST /api/v1/policies`); "policy drift" não existe em código nenhum. A tela do DPO que existe é a da IA Responsável, que é outra política |
+| "cada um é um enforcement" para as 5 travas (README) | Verdade por parâmetro, **falso no alcance**: `decisao_automatizada` tem consumidor em runtime para **1 das 7** ações (`ACOES_FIADAS = {jornada.ajustar}`) |
+
+Cada uma virou declaração honesta no formato que o livro já usava para a Camada 2 do Guard, e a
+mesma frase falsa foi corrigida onde mais aparecia: `politicas.py` e a entrada da onda 3 deste
+arquivo diziam que `blackout`/`precedencia` são "exibidos na tela".
+
+**Os cinco aceites são condicionais ao estado do código, não grep de prosa.** Cada um lê a peça que
+deveria existir — o cron do drift no `deploy.sh`, artefatos de Playwright, chamadas a `/policies` no
+frontend, `ACOES_FIADAS` × `ACOES_VIA_AI`, consumidores de `blackout` no backend — e **só então**
+cobra a ressalva. Quando alguém instalar o cron ou fiar as sete ações, o teste para de exigir a
+declaração sozinho, em vez de virar um literal brigando com a realidade nova. O número no README é
+derivado das constantes: "1 das 7 ações" é conferido, não redigitado.
+
+Inversão verificada nos cinco eixos. A terceira **não morreu na primeira tentativa** e o motivo é
+instrutivo: a detecção de "o frontend chama `/policies`" varria todo `.ts*`, e o próprio texto do
+Guia — que cita a rota justamente para dizer que não há tela — dispensava a auditoria de si mesmo.
+Prosa citando uma rota não é chamada; o Guia passou a ser excluído da varredura.
+
+### O que a investigação mediu e fica registrado como aberto
+
+`precedencia` **não é fechável**, e agora há prova: subtração comuta no waterfall, `suprimidos_por_lista`
+é dict, `breakers.py` ordena antes do SEV1 e o Guard confere presença — a única versão que governaria
+de verdade decide *pertinência*, o que derrubaria o contrato fechado das 7 listas (§8-M5-A1). Fiá-la
+seria regressão de segurança vendida como fecho. `blackout`, ao contrário, ficou fechável: a peça que
+faltava (janela ISO estruturada) chegou no J04.
+
+A **reconciliação diária** também fica aberta com motivo escrito: `reconciliar` exige um `os_id` e não
+há fan-out; decidir *quais* OSs um job varre é contrato (§8-M10), e o caminho preguiçoso seria uma OS
+fixa (carimbo mentiroso) ou um loop cego abrindo sev3 em rascunhos de madrugada.
+
 ## 2026-08-08 — Onda 6 · Guard, teto e fechos (§5.3, §8-M3, §8-M5, §8-M8, §10.2, §10.5, §10.8)
 
 Cinco frentes dos achados abertos do §8.3 do HANDOFF, escolhidas pela relação conserto/dano.
@@ -403,7 +482,9 @@ tenant semeado o conteúdo da semente é igual ao da v1 do banco.
 (`api/v1/audiencia.py`), com serviço correto e injeção correta.
 
 **Inertes declarados, não maquiados:** `blackout` e `precedencia` estão no conjunto fechado do §4.1,
-são validados, versionados e exibidos na tela — e não têm **um único consumidor**. Publicar uma
+são validados e versionados — e não têm **um único consumidor**. (Correção da onda 7: esta frase dizia
+"e exibidos na tela"; é **falso** — a política do §4.1 nunca teve tela, publica-se por
+`POST /api/v1/policies`. A mesma frase errada estava no `docs/HANDOFF.md` e em `politicas.py`.) Publicar uma
 janela de blackout não impede envio nenhum. Ou entram numa onda própria com aceite, ou saem do
 conjunto fechado; numa base que vai processar PII real, "blackout configurável que não bloqueia
 nada" é o primeiro achado que uma auditoria encontra.

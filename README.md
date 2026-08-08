@@ -90,7 +90,7 @@ Botão primário no Cockpit (e na busca ⌘K): cria o pedido e abre a **Sala de 
 - **Inspetor por tipo de nó** (formulários do §5.2 — split validando Σ pcts = 100, opt-in por canal, waits) e **lint em tempo real** clicável (o 422 do servidor cai no mesmo painel);
 - **Validação por VALOR, não só por presença** (onda 5): o `jgc.schema.json` roda inteiro a cada save — pct fora de 0–100, `janelaHoras` negativa, métrica fora do enum, throttle como texto, campo desconhecido viram 422 apontando o nó. Antes bastava o campo existir; agora o valor precisa fazer sentido;
 - **Roteamento sem ambiguidade**: um `decisionSplit` roteia OU pela regra OU pela aresta, nunca as duas no mesmo nó — o editor bloqueia a conexão que criaria o híbrido (que duplicava a saída no SFMC), e o save recusa com `roteamento_ambiguo`;
-- **Versionamento**: dropdown de versões, versões antigas read-only, **restaurar cria versão nova (nunca sobrescreve)** e **diff visual pintado no próprio canvas** (verde=adicionado, fantasma vermelho=removido, âmbar=alterado). O **hash é insensível à ordem** de nós e arestas: reordenar o desenho não cria versão nem mexe no SFMC;
+- **Versionamento**: dropdown de versões, versões antigas read-only, **restaurar cria versão nova (nunca sobrescreve)** e **diff visual pintado no próprio canvas** (verde=adicionado, fantasma vermelho=removido, âmbar=alterado). O **hash é insensível à ordem** de nós e arestas: reordenar o desenho não cria versão nem mexe no SFMC. **Ressalva (D06, aberto):** só *restaurar* mina versão — **salvar edita a versão corrente no lugar**, então uma sessão de edição colapsa num único registro e o histórico fino se perde; e o "read-only" da versão antiga é guarda de tela, não do servidor;
 - **Simulação integrada**: overlay dos volumes por aresta da última rodada do Ensaio (espessura proporcional), invalidado ao salvar;
 - **Exportação**: **XML canônico validado por XSD** (com manifest: hash JGC, versão, timestamp — determinístico byte a byte) e **JSON na spec de interaction do JB** (o formato de import nativo da Salesforce);
 - **Taxímetro** sempre visível: Σ volume × tarifa por canal, recalculado a cada mudança.
@@ -135,7 +135,7 @@ O **Journey Graph Canônico** é JSON versionado, com hash content-addressable. 
 
 - **Validação (`jgc_validate`, §5.3)** roda a cada save, em duas naturezas. A **estrutural** valida o grafo inteiro contra o `jgc.schema.json` (fonte da verdade, Draft 2020-12) — por **valor**, não só por presença: tipo, faixa, enum, forma e chaves desconhecidas. A **semântica** cobre o que schema não expressa: braço órfão, soma de pcts ≠ 100, canal sem opt-in, grafo sem goal, `wait` além da janela da oferta, roteamento ambíguo, contrato de re-entrada.
 - **Hash canônico (`canonico.py`)**: `nodes` e `edges` são conjuntos — o mesmo grafo em outra ordem é o mesmo grafo, mesmo hash, mesmo `externalKey`. Sem isso, reordenar o desenho geraria um plan destrutivo no SFMC ("reinicia contatos em espera") para um grafo idêntico.
-- **Compilador plan/apply (§5.4, determinístico — LLM proibido)**: resolve dependências (DEs → EventDef → Assets → Journey → Automations), gera `{recurso, ação, aviso}` com `externalKey = jrn-{hash}-{noId}` (idempotência), aplica com backoff e rollback compensatório, e um job de **drift** decompila o estado real e compara por hash — divergência em prod abre pendência bloqueante.
+- **Compilador plan/apply (§5.4, determinístico — LLM proibido)**: resolve dependências (DEs → EventDef → Assets → Journey → Automations), gera `{recurso, ação, aviso}` com `externalKey = jrn-{hash}-{noId}` (idempotência), aplica com backoff e rollback compensatório, e a verificação de **drift** decompila o estado real e compara por hash — divergência em prod abre pendência bloqueante. **Sob demanda, não agendada:** o drift roda quando alguém chama `GET /drift` (o botão do Pré-voo); o job de 30 min do §5.4.5 não existe — nenhum cron o instala, e a tela nasce com a consulta desligada.
 - **Simulador (§6, Monte Carlo)**: portão obrigatório, reprodutível por seed, congela o Previsto (P10/P50/P90). Consome as mesmas regras de validação — inclusive a janela da oferta.
 
 ---
@@ -152,9 +152,11 @@ A política de IA (tela do DPO na T16, `draft → publicada`, versionada com aut
 |---|---|
 | **`dados_llm`** | PII de categoria marcada `bloquear` impede a chamada ao modelo (mascarar deixa sair marcado; bloquear é a única ação que impede a saída). A detecção tem **duas naturezas**: por *forma* (CPF/CNPJ/e-mail/telefone/cartão/CEP/RG — verificável, com dígito verificador e Luhn) e por *contexto* (nome/endereço/data de nascimento — probabilística, com limites nomeados exibidos ao lado do seletor). |
 | **`retencao`** | Prompt/resposta deixam de ser gravados; prazo do trace. O prazo do *ledger* mora no M12 (purge §10.4), não aqui — dois relógios de retenção seriam o achado 8 renascido. |
-| **`decisao_automatizada`** | LGPD Art. 20: a allowlist decide quando a IA aplica sozinha em vez de propor. Default vazio = a IA propõe, humano aplica. |
+| **`decisao_automatizada`** | LGPD Art. 20: a allowlist decide quando a IA aplica sozinha em vez de propor. Default vazio = a IA propõe, humano aplica. **Alcance real: 1 das 7 ações** — ver o limite abaixo. |
 | **`modelos_permitidos`** | Roster §7.2 pinado: perfil de modelo fora da lista do agente é recusado (409). |
 | **`teto_tokens`** *(onda 6)* | Orçamento diário de tokens por tenant (UTC). Atingido o gasto **medido** do dia, a próxima chamada ao modelo é recusada com **429 antes de custar** (gate-on-entry). Só entrou na política porque a medição existe (o `usage` do provedor chega ao ledger) e o portão aplica de fato. |
+
+> **Limite honesto (aberto):** as cinco travas são enforcement de verdade — mas o **alcance** de `decisao_automatizada` não é o que a tela sugere. O vocabulário fechado tem **7 ações** de agente; só **uma** (`jornada.ajustar`) tem consumidor em runtime — é o que `ACOES_FIADAS` diz, em uma linha, em `portao_ia.py`. Publicar `otimizacao.propor` na allowlist é aceito, versionado e auditado, **e não muda nada**: um aceite existe justamente para provar isso. Enquanto as outras seis não tiverem call site, a autorização é uma declaração do DPO sem efeito — o que este bloco existe para não deixar passar por controle.
 
 Compatibilidade retroativa é levada a sério: a obrigatoriedade dos campos fica **congelada no conjunto v1**, então uma política publicada antes de um campo novo continua válida — a tela do DPO não nasce inválida de um deploy para o outro.
 
@@ -174,7 +176,7 @@ Todo evento de agente entra no ledger `invocacao` (via_ai). O painel de auditori
 
 ## Retenção de dados (§10.4)
 
-`POST /admin/purge` aplica o `retencao_dias` da política **publicada** (tela de Políticas → banco; publicar 30 dias muda o que a rota apaga) sobre `telemetry_event` e `dc_segment_cache`, e registra a destruição no outbox (`dados.purgados`). Papel `dpo` (admin passa). **Sem `?aplicar=true` nada é apagado** — a resposta é o relatório do que expirou, com os mesmos números que a execução usaria.
+`POST /admin/purge` aplica o `retencao_dias` da política **publicada** (a do §4.1, publicada por `POST /api/v1/policies` — **não há tela para ela**; publicar 30 dias muda o que a rota apaga) sobre `telemetry_event` e `dc_segment_cache`, e registra a destruição no outbox (`dados.purgados`). Papel `dpo` (admin passa). **Sem `?aplicar=true` nada é apagado** — a resposta é o relatório do que expirou, com os mesmos números que a execução usaria.
 
 Deliberadamente **não** há scheduler na aplicação (nem apscheduler, nem celery): um segundo modelo de execução traria worker, lease, retry e fuso — e um novo modo de falha silenciosa, que é exatamente como o §10.4 passou meses sem consumidor. O agendamento é cron do host — mas **instalado pelo deploy, não descrito no README**. Até o F04 esta seção mostrava uma linha de `curl` que nada instalava, apontava para uma porta que o serviço não publica e usava um token inexistente.
 
@@ -305,7 +307,9 @@ docker run --rm -v "$PWD:/w" -w /w python:3.11-slim \
 cd frontend && npm run build      # tsc -b && vite build
 ```
 
-**807 testes** (unit · contract com golden files SFMC byte a byte · aceite `test_MX_AN` com os IDs do SDD), `ruff`/`format`/`mypy` (fonte inteira, 30 módulos) verdes, mais os testes de integração em Postgres real no CI. Sem o hub LLM acessível, os agentes degradam para **503 + modo manual** (§10.6) — o caminho crítico (Guard, compilador, breakers, kill switch, editor, export) é 100% determinístico; um e2e prova isso com `LLM_DEGRADED_MODE=forced_off`.
+**807 testes** (unit · contract com golden files SFMC byte a byte · aceite `test_MX_AN` com os IDs do SDD), `ruff`/`format`/`mypy` (fonte inteira, 30 módulos) verdes, mais os testes de integração em Postgres real no CI. Sem o hub LLM acessível, os agentes degradam para **503 + modo manual** (§10.6) — o caminho crítico do backend (Guard, compilador, breakers, kill switch, export) é 100% determinístico, e é o que `test_M10` prova, em memória, com o adaptador de LLM indisponível.
+
+> **Limite honesto (aberto):** **não existe e2e de navegador.** O job `e2e-compose` do §13 segue comentado em [`ci.yml:99`](.github/workflows/ci.yml) e faltam cinco peças (runner, spec, steps, entrada no `needs`, e o serviço `web` do compose de dev, também comentado). A consequência a saber: **nenhuma linha de React é executada por teste algum** — `frontend/src/canvas/EditorJornada.tsx` tem cobertura zero, e `frontend/src` está fora do `--cov-fail-under=80`. O editor é verificado por `tsc`, pelo lint espelhado e pelo servidor que recusa o grafo inválido — não por execução. Quem cobre o caminho crítico ponta a ponta hoje é o smoke funcional pós-deploy (`scripts/smoke_funcional.py`), que fala HTTP, não DOM.
 
 ## Deploy (VPS)
 
@@ -378,7 +382,7 @@ Padrões que a auditoria caça, porque se repetem:
 - **Onda 5 — o contrato passa a valer por valor**: I01 jsonschema real, I02 `roteamento_ambiguo`, I03 hash canônico insensível à ordem, I04 tokens no ledger, I05 as duas naturezas da PII. Auditoria achou 10 furos; todos fechados antes do commit.
 - **Onda 6 — teto, fechos e auditoria da T16**: J02 enforcement do teto de tokens, J03 fecho documental da aprovação por sessão, J04 janela estruturada liga o `wait_alem_da_janela`, J05 painel de auditoria com redação por papel. J01 (Camada 2 do Guard) foi tentada e **revertida** — o fecho honesto exige o read model de produção.
 
-**Estado atual:** VPS no ar em `e2cc8c9` (ondas 1–6), 807 testes verdes, deploy automático. Pendências conhecidas (honestidade de produto): **TLS aplicado** (preparado, falta rodar `tls_setup.sh` antes de PII real), **backup com restauração testada** rodada ao menos uma vez, **corte de ambiente** (`APP_ENV=prod` + `DEMO_MODE=false`), e os achados de código ainda abertos (Camada 2 do Guard, `blackout`/`precedencia` sem consumidor, D06 histórico de versão, schedulers de reconciliação, e2e Playwright) — cada um com o motivo registrado no SDD §8.3.
+**Estado atual:** VPS no ar em `e2cc8c9` (ondas 1–6), 807 testes verdes, deploy automático. Pendências conhecidas (honestidade de produto): **TLS aplicado** (preparado, falta rodar `tls_setup.sh` antes de PII real), **backup com restauração testada** rodada ao menos uma vez, **corte de ambiente** (`APP_ENV=prod` + `DEMO_MODE=false`), e os achados de código ainda abertos — **Camada 2 do Guard** (J01 revertido), **`blackout`/`precedencia` sem consumidor**, **D06** (salvar sobrescreve a versão), **`decisao_automatizada` inerte em 6 das 7 ações**, **drift e reconciliação sem agendamento**, **e2e Playwright inexistente** e **o vermelho do semáforo sem consumidor** (D08). Cada um com o motivo escrito em [`docs/HANDOFF.md` §8.3](docs/HANDOFF.md) — a tabela mora ali, não no SDD.
 
 ---
 
@@ -426,7 +430,7 @@ Padrões que a auditoria caça, porque se repetem:
 | **Pendência** | Item bloqueante herdado do Hike (resolução ou aceite formal do Accountable destravam) — *não existe "RAID" aqui* |
 | **Previsto** | Baseline congelado pela simulação — a régua imutável do pós-disparo |
 | **`via_ai`** | Ledger de toda ação de agente (prompt, evidências, tokens, humano que aceitou) — reconstruível para a LGPD Art. 20 |
-| **Drift** | Divergência entre o twin e o que está vivo no SFMC — gera pendência automática |
+| **Drift** | Divergência entre o twin e o que está vivo no SFMC — abre pendência bloqueante **quando a verificação roda** (hoje só sob demanda, via `GET /drift`) |
 | **Guard / Governor** | Validadores determinísticos (7 listas + opt-in / pressão de contato cross-campanha) — **nunca LLM** |
 | **Roteamento ambíguo** | `decisionSplit` roteado por regra E por aresta no mesmo nó — recusado, porque duplicaria a saída |
 

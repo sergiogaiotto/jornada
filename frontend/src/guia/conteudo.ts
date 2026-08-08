@@ -889,7 +889,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
     oQueE: [
       "Aqui o snapshot aprovado vira realidade no SFMC — no estilo Terraform: primeiro o plan (lista declarativa do que será criado/alterado/mantido/destruído, com avisos destrutivos), depois o apply idempotente, com chaves externas derivadas do hash e rollback compensatório em caso de falha.",
       "Antes do apply em produção roda a bateria de pré-voo: DEs e schemas, frescor das fontes, opt-in, listas last-mile, lint de AMPscript, limites do SFMC, drift zero e seed dry-run — cada item pass/warn/fail. FAIL bloqueia; WARN documenta; n/a é o item que não pôde ser verificado (ex.: nada publicado no ambiente para comparar drift) — não bloqueia, mas tira o verde da bateria: verde significa verificado E conforme.",
-      "O compilador é 100% determinístico — LLM proibido neste caminho. O agente Sync apenas traduz o plano técnico para impacto de negócio. O drift (alguém mexeu direto no SFMC) é vigiado a cada 30 min e pode ser resolvido com adopt/enforce/exceção.",
+      "O compilador é 100% determinístico — LLM proibido neste caminho. O agente Sync apenas traduz o plano técnico para impacto de negócio. O drift (alguém mexeu direto no SFMC) é resolvido com adopt/enforce/exceção. ATENÇÃO — hoje a verificação de drift roda SOB DEMANDA, quando você clica: a vigilância periódica de 30 min do §5.4.5 ainda não existe (nenhum agendador a executa). Não conte com detecção automática entre uma checagem e outra.",
     ],
     fundamentos: [
       {
@@ -1233,7 +1233,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       {
         termo: "Policy-as-code",
         definicao:
-          "Frequency cap, quiet hours, blackout, holdout mínimo, alçadas, retenção, teto de tokens e breakers como configuração versionada draft → publicada.",
+          "Frequency cap, quiet hours, holdout mínimo, alçadas, retenção, teto de tokens e breakers como configuração versionada draft → publicada. Dois campos do conjunto fechado ainda NÃO governam nada: `blackout` e `precedencia` são aceitos e versionados, mas nenhum código os lê — parâmetro que não muda comportamento é declarado aqui em vez de passar por controle.",
       },
       {
         termo: "Teto de tokens (IA Responsável)",
@@ -1251,7 +1251,7 @@ export const CONTEUDO_GUIA: Record<ChaveGuia, ConteudoPagina> = {
       { campo: "Painel do agente", significado: "SKILL.md visível, bases RAG autorizadas, execution profile." },
       { campo: "Harness", significado: "Rodar a bateria golden; score por dimensão; histórico de runs." },
       { campo: "Dry-run lado a lado", significado: "Comparar a skill editada com a publicada no mesmo input." },
-      { campo: "Políticas", significado: "Conteúdo da política (incl. teto de tokens por dia), estado draft/publicada e relatório de policy drift sobre OSs em voo." },
+      { campo: "IA Responsável", significado: "Tela própria do DPO (fora desta página): as 5 travas da política de IA — dados_llm, retenção, decisão automatizada, modelos permitidos e teto de tokens por dia — com estado draft/publicada, autor e motivo. A política de plataforma do §4.1 (frequency cap, alçadas, breakers) NÃO tem tela: publica-se por POST /api/v1/policies." },
       { campo: "Auditoria via_ai", significado: "Trilha de eventos com colunas de tokens e latência (null = \"—\"); clique expande o detalhe — prompt+evidências+judge+humano para dpo/líder, redigido para os demais." },
     ],
     casosDeUso: [

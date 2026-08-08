@@ -13,9 +13,11 @@ foi o furo literal do achado. Os únicos consumidores legítimos são as SEEDS
 (`adapters/*_seeds.py`, que materializam a v1 em `policy_versao`) e o FALLBACK do
 adapter de publicações, para o banco vazio devolver exatamente os mesmos valores da seed.
 
-`blackout` e `precedencia` seguem no conjunto fechado do §4.1 (validados, exibidos na
-T16, versionados) sem NENHUM consumidor em runtime — auditado e registrado como escopo
-aberto, não como esquecimento; ver a emenda do achado 8.
+`blackout` e `precedencia` seguem no conjunto fechado do §4.1 (validados, versionados)
+sem NENHUM consumidor em runtime — auditado e registrado como escopo aberto, não como
+esquecimento; ver a emenda do achado 8. NÃO são "exibidos na T16": esta docstring dizia
+isso e era falso — a política do §4.1 não tem tela, publica-se por `POST /api/v1/policies`
+(a T16 mostra o Ateliê; a tela do DPO é a da IA Responsável, §10.2, que é outra política).
 
 Valores coerentes com o SDD: quiet hours 20:00–08:00 (§5.1), holdout default 10% (§4.1
 `segmento.holdout_pct`), breaker de optout 0,6% (§8-M10-A1), 7 listas de supressão na
