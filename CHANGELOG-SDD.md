@@ -15,6 +15,47 @@ do agendamento, `K02` honestidade da documentação, e as frentes de código seg
 ranqueada — semáforo vermelho com consumidor, D06, proveniência das contagens, IA Responsável,
 `blackout` no pré-voo, e2e/paridade do lint, drift por cron.
 
+### K03 · O vermelho do §6 passa a RECUSAR, não só pintar (emenda D09 · aceite §8-M8-A8)
+
+O D08 tirou do verde o `frequencySplit` cujas conds não casam com o mix do governor. Parou na cor,
+e por um motivo estrutural: `avisos` é `list[str]` sem severidade, e `_semaforo` fazia
+`motivos.extend(avisos)` **depois** do `return "vermelho"` — nenhum aviso podia bloquear, por
+construção. Pior: o §6 dizia "vermelho bloqueia T9/T11" e **ninguém lia a cor**. `criar_snapshot`
+exigia apenas que a simulação EXISTISSE. Uma jornada com 100% do volume evaporando num split passava
+por T9, virava snapshot, ia para aprovação e para o SFMC — com o painel de portões todo verde.
+
+Três peças, e a terceira é a que fecha:
+
+1. **Canal de severidade próprio.** `bloqueantes: list[str]` ao lado de `avisos`, e `_semaforo` faz
+   `motivos.extend(bloqueantes)` **antes** do `return "vermelho"`. A ordem é o contrato, não estilo.
+2. **Regra causal, não sintomática.** Dispara na interseção **vazia** entre as `cond` do nó e as
+   classes do mix. Detectar pelo sintoma ("funil todo zerado", "custo p50 == 0") daria falso positivo
+   em holdout 100% e falso NEGATIVO no instante em que uma pessoa caísse num braço — 99,9% sumiria e
+   voltaria a amarelo, exatamente o buraco a tapar. A perda **parcial** segue amarela, por decisão, e
+   o aviso passou a medir a fração em vez de adjetivá-la.
+3. **O consumidor.** `POST /snapshots` recusa 409 lendo `jornada.simulacao` — a CORRENTE, e não
+   `previsto`: `simular` não limpa `previsto`, então congelar verde e re-simular vermelho passaria
+   batido. A T9 ganhou o quinto portão `simulacao` e o botão de montar snapshot desabilita com o
+   motivo no `title`, porque portão que não aparece no painel é limite escondido.
+
+**T8 não é bloqueada.** O §6 diz T9/T11; `congelar-previsto` continua 200. Legislar além do contrato
+é o mesmo pecado com o sinal trocado — o Ensaio é onde se MEDE o desastre.
+
+Ripple medido: **um** teste existente mudou de expectativa (`test_D08...` linha do semáforo, de
+`amarelo` para `vermelho`), com a história das duas ondas escrita no docstring. Nenhum golden do M11
+se moveu — nenhuma fixture tem `frequencySplit`.
+
+Inversão em cinco eixos, cada um isolando UMA peça. A terceira é a que documenta o fecho: apagar a
+recusa de `criar_snapshot` deixa **apenas** o aceite vermelho enquanto **todo** o unit segue verde.
+Se o teste passaria com o consumidor removido, ele não fecha nada.
+
+Correção de texto encontrada no caminho: a T9 dizia "o aprovador decide **sem login**" — falso desde
+o J03, que exige a sessão do próprio aprovador endereçado.
+
+**Aberto derivado, registrado para não virar promessa:** `randomSplit` tem o mesmo `.get(cond, 0)`
+mudo e **não** ganha bloqueante aqui — por isso a emenda nomeia `frequencySplit` em vez de prometer
+"100% do volume some é vermelho" em geral.
+
 ### K01 · O §10.2 ganha o guarda-corpo que o §10.4 já tinha
 
 O backup entrou na onda 4 completo (script, cron, cifra AES-256, prova de restauração em container

@@ -567,6 +567,8 @@ export interface PortoesOut {
     experimento: PortaoOut;
     custo_alcada: PortaoOut;
     governor: PortaoOut;
+    /** §8-M8-A8 (D09): a cor do Ensaio é portão — vermelho recusa o snapshot. */
+    simulacao: PortaoOut;
   };
   aprovacao: PortaoOut;
 }

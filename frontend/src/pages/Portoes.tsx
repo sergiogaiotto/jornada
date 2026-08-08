@@ -159,7 +159,8 @@ export function Portoes() {
         </div>
       ) : (
         <div className="text-[12px] text-muted">
-          Monte o snapshot e gere o link — o aprovador decide sem login.
+          Monte o snapshot e gere o link — decidir exige a sessão do próprio aprovador
+          endereçado na emissão (§10.5), então quem criou a campanha não aprova.
         </div>
       )}
 
@@ -178,8 +179,8 @@ export function Portoes() {
         titulo="QA de Governança"
         subtitulo={
           portoes
-            ? `${verdes} de 4 verdes — QAs bloqueantes, não avisos (vermelho bloqueia a materialização)`
-            : "Certificado LGPD · experimento · custo/alçada · Contact Governor"
+            ? `${verdes} de ${Object.keys(portoes).length} verdes — QAs bloqueantes, não avisos (vermelho bloqueia a materialização)`
+            : "Certificado LGPD · experimento · custo/alçada · Contact Governor · Ensaio"
         }
       />
 
@@ -347,6 +348,21 @@ export function Portoes() {
                 <span className="mchip-n ml-1">árbitro pleno no M10</span>
               )}
             </CardPortao>
+
+            {/* ------------------------------------------- Ensaio (§8-M8-A8 · D09) */}
+            <CardPortao icone="🎲" titulo="Ensaio Geral (§6)" portao={portoes.simulacao}>
+              {portoes.simulacao.estado === "vermelho" ? (
+                <>
+                  Simulação <b>vermelha</b> — o §6 bloqueia T9/T11 e o servidor recusa o
+                  snapshot (409). Corrija o grafo e re-simule. Motivo:{" "}
+                  {String(portoes.simulacao.motivo)}
+                </>
+              ) : portoes.simulacao.estado === "pendente" ? (
+                <>Rode o Ensaio Geral (T8) — sem simulação não há o que aprovar.</>
+              ) : (
+                <>{String(portoes.simulacao.motivo)}</>
+              )}
+            </CardPortao>
           </div>
 
           {/* ------------------------------------------ aprovação (snapshot) */}
@@ -361,8 +377,14 @@ export function Portoes() {
                   <button
                     type="button"
                     className="mbtn-gh !px-2.5 !py-1 !text-[11px]"
-                    disabled={criarSnapshot.isPending}
-                    title="Hash composto sha256 de JGC+SQL+criativos+política+custo+experimento (§4.1)"
+                    disabled={
+                      criarSnapshot.isPending || portoes.simulacao.estado === "vermelho"
+                    }
+                    title={
+                      portoes.simulacao.estado === "vermelho"
+                        ? `Ensaio VERMELHO — o §6 bloqueia T9 (o servidor recusa com 409): ${String(portoes.simulacao.motivo)}`
+                        : "Hash composto sha256 de JGC+SQL+criativos+política+custo+experimento (§4.1)"
+                    }
                     onClick={() => criarSnapshot.mutate()}
                   >
                     {criarSnapshot.isPending ? "Montando…" : "Montar snapshot"}

@@ -426,7 +426,7 @@ Padrões que a auditoria caça, porque se repetem:
 | Termo | Significado |
 |---|---|
 | **Twin / JGC** | O grafo canônico da jornada (JSON versionado, hash content-addressable) — a fonte da verdade que compila para o SFMC |
-| **QA** | Checkpoint bloqueante entre fases (certificado LGPD, experimento pré-registrado, custo/alçada, Governor). *Nome de UI do conceito "portão/gate"* |
+| **QA** | Checkpoint bloqueante entre fases — cinco portões: certificado LGPD, experimento pré-registrado, custo/alçada, Governor e **Ensaio** (o vermelho do §6 recusa o snapshot, D09). *Nome de UI do conceito "portão/gate"* |
 | **Pendência** | Item bloqueante herdado do Hike (resolução ou aceite formal do Accountable destravam) — *não existe "RAID" aqui* |
 | **Previsto** | Baseline congelado pela simulação — a régua imutável do pós-disparo |
 | **`via_ai`** | Ledger de toda ação de agente (prompt, evidências, tokens, humano que aceitou) — reconstruível para a LGPD Art. 20 |

@@ -76,11 +76,26 @@ def _simular(grafo: dict[str, Any], *, seed: int = 42, runs: int = 20) -> dict[s
     )
 
 
-def test_D08_cond_fora_do_mix_vira_aviso_e_semaforo_amarelo() -> None:
+def test_D08_cond_fora_do_mix_vira_aviso_e_semaforo_vermelho() -> None:
     """O grafo v5 real: classes na forma D05 ('baixa'/'alta'), save aprova, motor zera.
 
-    Vermelho sem o bloco D08 de motor.py: sem ele, `avisos == []` e semáforo VERDE
-    com 100% do volume sumindo no split."""
+    HISTÓRIA EM DUAS ONDAS, e ela importa para não afrouxar nada por engano:
+
+    · **D08 (onda anterior)** tirou este caso do VERDE. Antes, `avisos == []` e a
+      simulação saía verde com 100% do volume sumindo no split — zero mudo.
+    · **D09 (§8-M8-A8, onda 7)** o tirou do AMARELO. Amarelo é a cor de "olhe isto";
+      aqui não há o que ponderar: NENHUMA cond casa com o mix, então todo o volume que
+      chega ao nó evapora e a jornada não entrega nada. Esta linha afirmava `amarelo` e
+      passou a afirmar `vermelho` — deliberadamente, junto da emenda ao §6.
+
+    A perda PARCIAL continua amarela: é o outro teste deste arquivo, e existe justamente
+    para impedir que uma onda futura alargue a regra e a T9 comece a recusar jornada
+    saudável.
+
+    Inversão: comentar o `bloqueantes.append(...)` do D09 devolve este caso a `amarelo`;
+    mover o `motivos.extend(bloqueantes)` para depois do `return "vermelho"` também —
+    e essa segunda inversão é a que prova a PRECEDÊNCIA, não apenas a mensagem.
+    """
     grafo = _grafo_fq(
         [{"id": "baixa", "max": 2}, {"id": "alta", "min": 3}],
         [("baixa", "a"), ("alta", "b")],
@@ -96,7 +111,20 @@ def test_D08_cond_fora_do_mix_vira_aviso_e_semaforo_amarelo() -> None:
     # o aviso descreve um sumiço REAL: nenhum braço recebe volume, custo zera
     assert resultado["funil"]["a"]["p50"] == 0 and resultado["funil"]["b"]["p50"] == 0
     assert resultado["custo"]["p50"] == 0 and resultado["roas"] is None
-    assert resultado["semaforo"] == "amarelo", "era VERDE com o funil inteiro zerado"
+
+    # D09: o extremo é BLOQUEANTE, em canal próprio e nomeando o nó
+    bloqueantes = resultado["bloqueantes"]
+    assert len(bloqueantes) == 1 and "fq" in bloqueantes[0] and "100%" in bloqueantes[0], (
+        f"o caso extremo precisa de um bloqueante próprio — veio {bloqueantes!r}"
+    )
+    assert resultado["semaforo"] == "vermelho", (
+        "era VERDE antes do D08 e AMARELO antes do D09, com o funil inteiro zerado"
+    )
+    # âncora anti-falso-positivo: o vermelho NÃO veio da regra do ROAS (que é None aqui)
+    assert resultado["roas"] is None
+    assert any("100%" in m for m in resultado["motivos_semaforo"]), (
+        "o motivo do vermelho tem de ser o bloqueante do D09, não outra causa"
+    )
 
 
 def test_D08_classe_do_mix_sem_aresta_vira_aviso() -> None:
@@ -116,6 +144,17 @@ def test_D08_classe_do_mix_sem_aresta_vira_aviso() -> None:
     # os braços que casam seguem recebendo volume; a fração 'sub' (~20%) evapora
     assert resultado["funil"]["a"]["p50"] > 0 and resultado["funil"]["b"]["p50"] > 0
     assert resultado["funil"]["a"]["p50"] + resultado["funil"]["b"]["p50"] < 1000
+
+    # D09 (§8-M8-A8): a perda PARCIAL segue AMARELA, por decisão declarada. Esta é a
+    # trava de calibragem do D09 — sem ela, alargar a regra bloqueante para `sem_aresta`
+    # passaria despercebido e a T9 começaria a recusar jornada saudável.
+    # Inversão: trocar a condição do D09 por `if sem_aresta:` deixa este teste vermelho.
+    assert resultado["bloqueantes"] == [], (
+        f"perda parcial não pode bloquear — veio {resultado['bloqueantes']!r}"
+    )
+    assert resultado["semaforo"] == "amarelo"
+    # e a fração perdida é MEDIDA, não adjetivada: o operador precisa do número
+    assert "%" in avisos_fq[0], f"o aviso não diz quanto do volume sai: {avisos_fq[0]!r}"
 
 
 def test_D08_grafo_que_casa_o_mix_segue_sem_aviso_e_reprodutivel() -> None:

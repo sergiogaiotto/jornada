@@ -283,8 +283,28 @@ class ServicoPortoes(_Base):
                 "experimento": self._portao_experimento(os_),
                 "custo_alcada": self._portao_custo(os_),
                 "governor": self._portao_governor(os_),
+                "simulacao": self._portao_simulacao(os_),
             },
             "aprovacao": self._estado_aprovacao(os_),
+        }
+
+    def _portao_simulacao(self, os_: OS) -> dict[str, Any]:
+        """§8-M8-A8 (D09): a cor do Ensaio vira portão VISÍVEL no painel da T9.
+
+        Exigência de doutrina, não enfeite. `criar_snapshot` passou a recusar simulação
+        vermelha; sem este portão o operador veria o painel inteiro verde e levaria a
+        recusa na cara ao clicar — limite escondido é passivo. O portão lê a simulação
+        CORRENTE da última versão, que é a mesma fonte da recusa.
+        """
+        jornadas = self._repo.listar_jornadas(os_.id)
+        simulacao = jornadas[-1].simulacao if jornadas else None
+        if not simulacao:
+            return {"estado": PENDENTE, "motivo": "Sem Ensaio Geral na versão corrente (§6)."}
+        cor = str(simulacao.get("semaforo") or PENDENTE)
+        motivos = [str(m) for m in (simulacao.get("motivos_semaforo") or [])]
+        return {
+            "estado": cor,
+            "motivo": " · ".join(motivos) if motivos else "Simulação sem ressalvas (§6).",
         }
 
     def _portao_certificado(self, os_: OS) -> dict[str, Any]:
@@ -586,6 +606,19 @@ class ServicoAprovacao(_Base):
         if not jornada.simulacao:
             raise PreRequisitoAusente(
                 "Versão corrente sem simulação — o Ensaio Geral é portão obrigatório (§6)."
+            )
+        # §8-M8-A8 (D09): o vermelho do §6 passa a RECUSAR, não só pintar. Até aqui o
+        # Ensaio era portão de EXISTÊNCIA — bastava ter simulado, qualquer que fosse a
+        # cor —, então uma jornada com 100% do volume evaporando seguia para aprovação e
+        # para o SFMC.
+        #
+        # Lê `simulacao` (a corrente) e NÃO `previsto`: `simular` não limpa `previsto`,
+        # então congelar verde e re-simular vermelho passaria batido — buraco silencioso
+        # que só apareceria em produção.
+        if str(jornada.simulacao.get("semaforo")) == "vermelho":
+            motivos = "; ".join(str(m) for m in (jornada.simulacao.get("motivos_semaforo") or []))
+            raise PreRequisitoAusente(
+                f"Simulação VERMELHA na versão corrente — o §6 bloqueia T9/T11: {motivos}"
             )
         if not jornada.previsto:
             raise PreRequisitoAusente(

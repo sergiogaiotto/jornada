@@ -150,6 +150,10 @@ def simular(
         }
     )
     avisos: list[str] = []
+    # Canal SEPARADO de `avisos`, e não um aviso "mais grave": `avisos` é list[str] sem
+    # severidade, então enquanto os dois compartilharem a lista nenhum deles consegue
+    # bloquear. A distinção existe para o §6 poder ter precedência (ver `_semaforo`).
+    bloqueantes: list[str] = []
     for canal in canais_grafo:
         if canal not in tarifas:
             avisos.append(f"Canal {canal!r} sem tarifa vigente — custo 0 na simulação (§1.3.5).")
@@ -164,6 +168,7 @@ def simular(
     # governor NÃO pode zerar mudo — vira aviso (⇒ amarelo). Fora do loop de runs e
     # sem draw de RNG: a mesma seed segue reproduzindo os mesmos percentis (M8-A1).
     classes_mix = sorted(classe for classe, _ in pesos_classe)
+    peso_da_classe = {classe: peso for classe, peso in pesos_classe}
     for no_id, no in nos.items():
         if str(no.get("type", "")) != "frequencySplit":
             continue
@@ -177,10 +182,29 @@ def simular(
                 "(§6/D08: o que não casa vira aviso, nunca zero mudo)."
             )
         if sem_aresta:
+            # A fração é MEDIDA, não adjetivada: "sai parte do volume" não permite ao
+            # operador decidir nada. Com o número, amarelo vira informação.
+            perdido = sum(peso_da_classe.get(c, 0.0) for c in sem_aresta)
+            total = sum(peso_da_classe.values()) or 1.0
             avisos.append(
                 f"frequencySplit {no_id}: classe {', '.join(map(repr, sem_aresta))} do mix do "
                 "governor sem aresta correspondente — essa fração do volume sai do funil "
-                "neste nó (§6/D08)."
+                f"neste nó ({perdido / total:.1%} do que chega, §6/D08)."
+            )
+        # D09 (§8-M8-A8): o caso EXTREMO do D08. Quando NENHUMA cond do nó casa com
+        # NENHUMA classe do mix, não é "parte do volume": é 100% do que chega ao nó
+        # evaporando em silêncio, e a jornada segue verde até o SFMC. Perda PARCIAL
+        # continua amarela por decisão declarada (ver test_D09_perda_parcial).
+        #
+        # A condição é CAUSAL (interseção vazia entre conds e classes), nunca o sintoma
+        # da saída: detectar por "funil todo zerado" daria falso positivo em holdout 100%
+        # e falso NEGATIVO no instante em que 1 pessoa cair em 1 braço — 99,9% sumiria e
+        # voltaria a amarelo, que é exatamente o buraco a tapar.
+        if pesos_classe and conds and not (set(conds) & set(classes_mix)):
+            bloqueantes.append(
+                f"frequencySplit {no_id}: NENHUMA cond {conds} casa com o mix do governor "
+                f"{classes_mix} — 100% do volume que chega a este nó sai do funil. "
+                "A jornada não entrega nada (§6/D09)."
             )
 
     grau_base: dict[str, int] = dict.fromkeys(nos, 0)
@@ -380,6 +404,7 @@ def simular(
         colisao_critica=colisao_critica,
         poder=poder,
         avisos=avisos,
+        bloqueantes=bloqueantes,
     )
 
     return {
@@ -401,6 +426,7 @@ def simular(
         "motivos_semaforo": motivos,
         "portoes": {"experimento": poder["portao"]},
         "avisos": avisos,
+        "bloqueantes": bloqueantes,
         "premissas": [
             "decisionSplit divide igual entre regras (esperança neutra, como o taxímetro M7)",
             "conversão atribuída no nó de canal (binomial sobre entregues; priors v1)",
@@ -458,15 +484,23 @@ def _semaforo(
     colisao_critica: bool,
     poder: dict[str, Any],
     avisos: list[str],
+    bloqueantes: list[str],
 ) -> tuple[str, list[str]]:
-    """Regra §6 (emendada pelo aceite §8-M8-A2 — CHANGELOG-SDD.md): vermelho bloqueia
-    T9/T11; poder insuficiente pinta o PORTÃO de experimento de vermelho e a simulação
-    de amarelo."""
+    """Regra §6 (emendada pelos aceites §8-M8-A2 e §8-M8-A8 — CHANGELOG-SDD.md): vermelho
+    bloqueia T9/T11; poder insuficiente pinta o PORTÃO de experimento de vermelho e a
+    simulação de amarelo.
+
+    A ORDEM aqui é o contrato, não estilo: `bloqueantes` entra em `motivos` ANTES do
+    `return "vermelho"`. Anexá-los depois (junto de `avisos`) faria a mensagem aparecer
+    sem que a cor mudasse — o modo de falha exato que o D08 tinha, em que nenhum aviso
+    conseguia bloquear porque `avisos` é list[str] sem campo de severidade.
+    """
     motivos: list[str] = []
     if roas_p50 is not None and roas_p50 < 1.0:
         motivos.append(f"ROAS P50 = {roas_p50:.2f} < 1 (§6).")
     if colisao_critica:
         motivos.append("Colisão crítica do governor: pressão de contato acima do cap (§6).")
+    motivos.extend(bloqueantes)
     if motivos:
         return "vermelho", motivos
     if poder.get("aplicavel") and not poder.get("suficiente"):
